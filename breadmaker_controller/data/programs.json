@@ -1,0 +1,22 @@
+{
+  "programs": {
+    "default": {
+      "autolyseTime": 30,
+      "mixTime": 15,
+      "bulkTemp": 25,
+      "bulkTime": 720,
+      "knockDownTime": 15,
+      "riseTemp": 25,
+      "riseTime": 720,
+      "bake1Temp": 170,
+      "bake1Time": 15,
+      "bake2Temp": 210,
+      "bake2Time": 25,
+      "coolTime": 10
+    }
+  },
+  "calibration": {
+    "slope": 1.0,
+    "offset": 0.0
+  }
+}

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WiFi Setup</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body {
+      background: #232323;
+      color: #f1f1f1;
+    }
+    .wifi-setup-container {
+      max-width: 400px;
+      margin: 2em auto;
+      background: #222;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+      padding: 2em 2em 1em 2em;
+      color: #f1f1f1;
+    }
+    .wifi-setup-container h2 {
+      margin-top: 0;
+      color: #ff9933;
+      text-align: center;
+    }
+    .wifi-setup-container label {
+      display: block;
+      margin: 1em 0 0.5em 0;
+      color: #f1f1f1;
+    }
+    .wifi-setup-container input, .wifi-setup-container select {
+      width: 100%;
+      padding: 0.5em;
+      margin-bottom: 1em;
+      border: 1px solid #444;
+      border-radius: 4px;
+      font-size: 1em;
+      background: #333;
+      color: #fff;
+    }
+    .wifi-setup-container button {
+      width: 100%;
+      padding: 0.7em;
+      background: #ff9933;
+      color: #232323;
+      border: none;
+      border-radius: 4px;
+      font-size: 1.1em;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .wifi-setup-container button:hover {
+      background: #ffb366;
+    }
+    #feedback {
+      margin-top: 1em;
+      color: #27ae60;
+      text-align: center;
+      font-weight: bold;
+    }
+    #spinner {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      border: 3px solid #eee;
+      border-top: 3px solid #ff9933;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wifi-setup-container">
+    <h2>WiFi Setup</h2>
+    <form id='wifiForm'>
+      <label>SSID:</label>
+      <select name='ssid'>{{options}}</select>
+      <label>Password:</label>
+      <input name='pass' type='password' placeholder='Password'>
+      <button type='submit'>Save</button>
+    </form>
+    <div id="feedback"></div>
+  </div>
+  <script>
+    const form = document.getElementById('wifiForm');
+    const feedback = document.getElementById('feedback');
+    form.onsubmit = function(e) {
+      e.preventDefault();
+      feedback.innerHTML = 'Saving... <span id="spinner"></span>';
+      const data = new FormData(form);
+      fetch('/save', {
+        method: 'POST',
+        body: data
+      })
+      .then(r => r.text())
+      .then(txt => {
+        feedback.innerHTML = txt.replace(/\n/g, '<br>') + '<br><span id="spinner"></span>';
+        // Optionally, add a countdown
+        let secs = 5;
+        const update = () => {
+          if (secs > 0) {
+            feedback.innerHTML = txt.replace(/\n/g, '<br>') + `<br><span id=\"spinner\"></span><br>Rebooting in ${secs}...`;
+            setTimeout(() => { secs--; update(); }, 1000);
+          }
+        };
+        update();
+      })
+      .catch(() => {
+        feedback.innerHTML = 'Error saving WiFi settings.';
+      });
+    };
+  </script>
+</body>
+</html>

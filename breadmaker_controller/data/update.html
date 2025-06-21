@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Firmware Update</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h2>Firmware Update</h2>
+    <form method="POST" action="/update" enctype="multipart/form-data">
+      <input type="file" name="firmware">
+      <button type="submit">Upload & Flash</button>
+    </form>
+    <p>Upload a compiled .bin file from Arduino IDE. The device will reboot after successful update.</p>
+    <button onclick="window.location.href='/'">Back</button>
+  </div>
+</body>
+</html>

@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Breadmaker Controller</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .start-at-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5em;
+      margin-bottom: 0.4em;
+      margin-top: 0.2em;
+      font-size: 1em;
+    }
+    .button-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3em;
+      justify-content: center;
+      margin-bottom: 1em;
+    }
+    .button-row button {
+      min-width: 60px;
+      max-width: 110px;
+      padding: 0.33em 0.6em;
+      font-size: 1em;
+      border-radius: 6px;
+      margin: 0.12em;
+    }
+    .breadmaker-pic {
+      display: block;
+      max-width: 160px;
+      width: 100%;
+      height: auto;
+      margin: 0.7em auto 0.6em auto;
+      border-radius: 16px;
+      box-shadow: 0 2px 16px #1118;
+    }
+    .config-cog {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 100;
+      width: 36px;
+      height: 36px;
+      opacity: 0.78;
+      transition: opacity 0.2s;
+    }
+    .config-cog:hover {
+      opacity: 1.0;
+      filter: drop-shadow(0 0 3px #fff8);
+    }
+    @media (max-width: 700px) {
+      .config-cog { top: 8px; right: 8px; width: 32px; height: 32px; }
+      .breadmaker-pic { max-width: 120px; }
+    }
+    .stage-progress {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      justify-content: center;
+      margin: 1em 0 0.4em 0;
+      gap: 0.16em;
+    }
+    .stage-step {
+      min-width: 34px;
+      padding: 0.33em 0.1em;
+      font-size: 0.86em;
+      text-align: center;
+      white-space: pre-line;
+      background: #333;
+      color: #bbb;
+      border-radius: 10px;
+      border: 2px solid #333;
+      font-weight: 500;
+      transition: background 0.3s, color 0.3s, border 0.3s;
+    }
+    .stage-step.active {
+      background: #ff9933;
+      color: #232323;
+      border: 2px solid #ffb366;
+    }
+    .stage-step.done {
+      background: #4caf50;
+      color: #fff;
+      border: 2px solid #a5d6a7;
+    }
+    .icon-row-devices {
+      display: flex;
+      flex-direction: row;
+      justify-content: center;
+      gap: 2.2em;
+      margin: 1em 0 1.4em 0;
+    }
+    .dev-icon-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 60px;
+    }
+    .icon {
+      width: 40px; height: 40px; display: block;
+      cursor: pointer;
+      margin-bottom: 0.12em;
+      transition: filter 0.18s, box-shadow 0.18s;
+    }
+    .icon:active { filter: brightness(1.3); }
+    .spin svg #mixGroup { animation: spin 0.8s linear infinite; }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    .heat-on #flamePath { fill: #ff3333; }
+    .heat-off #flamePath { fill: #888; }
+    .light-on #bulb { fill: #ffe066; filter: drop-shadow(0 0 4px #fff960); }
+    .light-off #bulb { fill: #888; }
+    .buzz-on #buzzBody, .buzz-on #buzzWave { fill: #ffe066; stroke: #ffe066; filter: drop-shadow(0 0 4px #fff960); }
+    .buzz-off #buzzBody, .buzz-off #buzzWave { fill: #888; stroke: #888; }
+    .dev-label {
+      font-size: 0.69em;
+      color: #aaa;
+      margin-top: 0.01em;
+      margin-bottom: 0.13em;
+      text-align: center;
+      line-height: 1.1;
+      letter-spacing: 0.01em;
+    }
+    .dev-status {
+      font-size: 0.93em;
+      font-weight: bold;
+      color: #fff;
+      margin-top: 0.11em;
+    }
+    .program-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.7em;
+      margin-bottom: 0.7em;
+      margin-top: 0.2em;
+    }
+    .program-label {
+      font-size: 1em;
+      color: #ccc;
+    }
+    .program-name {
+      font-size: 0.96em;
+      color: #eee;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <a href="/config" class="config-cog" title="Configuration">
+    <!-- Classic gear/cog SVG -->
+    <svg width="36px" height="36px" viewBox="0 0 24 24" id="settings_cog" xmlns="http://www.w3.org/2000/svg">
+      <rect width="24" height="24" fill="none"/>
+      <g transform="translate(2 3)">
+        <circle cx="2.5" cy="2.5" r="2.5" transform="translate(7.5 6.5)" fill="none" stroke="#bbb" stroke-miterlimit="10" stroke-width="1.5"/>
+        <path d="M4.452,16.794l.087-3.249-3.249.087A9.078,9.078,0,0,1,.276,11.185l2.36-2.236L.276,6.712A9.078,9.078,0,0,1,1.29,4.265l3.249.087L4.452,1.1A9.078,9.078,0,0,1,6.9.089l2.236,2.36L11.372.089A9.078,9.078,0,0,1,13.82,1.1l-.087,3.249,3.249-.087A9.081,9.081,0,0,1,18,6.712l-2.36,2.237L18,11.185a9.081,9.081,0,0,1-1.015,2.447l-3.249-.087.087,3.249a9.078,9.078,0,0,1-2.448,1.015l-2.236-2.36L6.9,17.809A9.078,9.078,0,0,1,4.452,16.794Z"
+          transform="translate(0.864 0.051)" fill="none" stroke="#bbb" stroke-miterlimit="10" stroke-width="1.5"/>
+      </g>
+    </svg>
+  </a>
+  <a href="/sourdough" class="config-cog" style="right:56px;top:10px;" title="Sourdough Starter Management">
+    <!-- Sourdough SVG Icon -->
+    <svg width="36px" height="36px" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+      <g>
+        <!-- Jar -->
+        <rect x="10" y="12" width="16" height="16" rx="5" fill="#ffe0b2" stroke="#b8860b" stroke-width="2"/>
+        <!-- Bubbles -->
+        <circle cx="18" cy="22" r="2.2" fill="#fffde4" stroke="#e0c080" stroke-width="0.7"/>
+        <circle cx="14.5" cy="18.5" r="1.1" fill="#fffde4" stroke="#e0c080" stroke-width="0.5"/>
+        <circle cx="21.5" cy="18.5" r="1.1" fill="#fffde4" stroke="#e0c080" stroke-width="0.5"/>
+        <!-- Bread top -->
+        <ellipse cx="18" cy="13.5" rx="7" ry="3.2" fill="#f5e6b5" stroke="#e5c99a" stroke-width="1.2"/>
+        <!-- Bread scoring -->
+        <path d="M14 14 Q18 12.5 22 14" stroke="#d2b48c" stroke-width="0.7" fill="none"/>
+      </g>
+    </svg>
+  </a>
+
+  <div class="container">
+    <div id="stageProgress" class="stage-progress"></div>
+
+    <!-- Breadmaker stage SVGs (all stages, only one visible) -->
+<div id="breadmakerSvgs" style="text-align:center;">
+  <div id="svg-delay"   class="bm-stage-svg" style="display:none">
+    <!-- DELAY SVG -->
+    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
+      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
+      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
+      <text x="29" y="34" font-size="8" fill="#bbb" font-family=íí"Arial">Zzz</text>
+    </svg>
+  </div>
+  <div id="svg-mix"   class="bm-stage-svg" style="display:none">
+    <!-- MIX SVG -->
+    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
+      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
+      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
+      <ellipse cx="35" cy="30" rx="11" ry="7" fill="#f5e6b5" stroke="#e5c99a" stroke-width="1.5"/>
+      <path d="M29 30 Q34 32 36 30 Q38 27 42 30" fill="none" stroke="#bbad7b" stroke-width="1.2"/>
+    </svg>
+  </div>
+  <div id="svg-bulk"   class="bm-stage-svg" style="display:none">
+    <!-- BULK/Rise SVG -->
+    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
+      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
+      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
+      <ellipse cx="35" cy="32" rx="12" ry="10" fill="#f5e6b5" stroke="#e5c99a" stroke-width="1.5"/>
+    </svg>
+  </div>
+  <div id="svg-knockdown"   class="bm-stage-svg" style="display:none">
+    <!-- Knockdown SVG -->
+    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
+      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
+      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
+      <ellipse cx="35" cy="35" rx="13" ry="5.5" fill="#f5e6b5" stroke="#e5c99a" stroke-width="1.5"/>
+    </svg>
+  </div>
+  <div id="svg-bake"   class="bm-stage-svg" style="display:none">
+    <!-- Bake SVG -->
+    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
+      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
+      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
+      <ellipse cx="35" cy="33" rx="13" ry="9" fill="#bb8640" stroke="#7c5a29" stroke-width="1.5"/>
+      <ellipse cx="35" cy="31" rx="9" ry="6.5" fill="#f5e6b5" stroke="none"/>
+      <path d="M29 20 Q31 18 33 20" stroke="#dca" stroke-width="1" fill="none"/>
+      <path d="M38 20 Q40 18 42 20" stroke="#dca" stroke-width="1" fill="none"/>
+    </svg>
+  </div>
+  <div id="svg-cool"   class="bm-stage-svg" style="display:none">
+    <!-- Cool SVG -->
+    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
+      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
+      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
+      <ellipse cx="35" cy="35" rx="13" ry="8" fill="#bb8640" stroke="#7c5a29" stroke-width="1.5"/>
+      <path d="M28 23 Q29 20 31 23" stroke="#fff2" stroke-width="1.3" fill="none"/>
+      <path d="M40 24 Q41 21 43 24" stroke="#fff2" stroke-width="1.3" fill="none"/>
+    </svg>
+  </div>
+  <div id="svg-autolyse"   class="bm-stage-svg" style="display:none">
+    <!-- Autolyse SVG (reuse delay SVG for now) -->
+    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
+      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
+      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
+      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
+      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
+      <text x="29" y="34" font-size="8" fill="#bbb" font-family="Arial">Autolyse</text>
+    </svg>
+  </div>
+</div>
+
+
+    <div class="start-at-row">
+      <label for="startAt">Start At:</label>
+      <input type="time" id="startAt" value="">
+      <button id="btnSetStartAt">Set</button>
+      <span id="startAtStatus" style="margin-left:1em; color:#ffb;"></span>
+    </div>
+
+    <div class="program-row">
+      <label for="progSelect" class="program-label">Program:</label>
+      <select id="progSelect"></select>
+      <span id="currentProg" class="program-name"></span>
+    </div>
+
+    <div class="button-row">
+      <button id="btnStart">Start</button>
+      <button id="btnPauseResume">Pause</button>
+      <button id="btnStop">Stop</button>
+      <button id="btnBack">Prev</button>
+      <button id="btnAdvance">Next</button>
+    </div>
+
+    <div class="icon-row-devices">
+      <div class="dev-icon-box">
+        <span id="mixIcon" class="icon" title="Motor">
+          <svg viewBox="0 0 32 32" width="32" height="32">
+            <g id="mixGroup" style="transform-origin: 16px 16px;">
+              <circle cx="16" cy="16" r="13" stroke="#888" stroke-width="3" fill="none"/>
+              <rect x="15" y="4" width="2" height="10" rx="1" fill="#888"/>
+            </g>
+          </svg>
+        </span>
+        <div class="dev-label">Motor</div>
+        <div class="dev-status" id="motor">OFF</div>
+      </div>
+      <div class="dev-icon-box">
+        <span id="heaterIcon" class="icon" title="Heater">
+          <svg viewBox="0 0 32 32" width="32" height="32">
+            <path id="flamePath" d="M16 29C8 22 12 14 16 3C20 14 24 22 16 29Z" fill="#888"/>
+          </svg>
+        </span>
+        <div class="dev-label">Heater</div>
+        <div class="dev-status" id="heater">OFF</div>
+      </div>
+      <div class="dev-icon-box">
+        <span id="lightIcon" class="icon" title="Light">
+          <svg viewBox="0 0 32 32" width="32" height="32">
+            <ellipse id="bulb" cx="16" cy="17" rx="8" ry="10" fill="#888" />
+            <rect x="13" y="26" width="6" height="4" rx="2" fill="#444"/>
+          </svg>
+        </span>
+        <div class="dev-label">Light</div>
+        <div class="dev-status" id="light">OFF</div>
+      </div>
+      <div class="dev-icon-box">
+        <span id="buzzerIcon" class="icon" title="Buzzer">
+          <svg viewBox="0 0 32 32" width="32" height="32">
+            <polygon id="buzzBody" points="8,20 16,20 22,27 22,5 16,12 8,12" fill="#888"/>
+            <path id="buzzWave" d="M25 12 Q29 16 25 20" stroke="#888" stroke-width="2" fill="none"/>
+          </svg>
+        </span>
+        <div class="dev-label">Buzzer</div>
+        <div class="dev-status" id="buzzer">OFF</div>
+      </div>
+    </div>
+
+    <div id="statusBlock">
+      <p><strong>Stage:</strong> <span id="stage">Idle</span></p>
+      <p><strong>Time Left:</strong> <span id="timeLeft">--</span></p>
+      <p id="stageReadyAt" style="margin-top:0.1em; color:#ffb;"> </p>
+      <p id="programReadyAt" style="margin:0.2em 0 0.3em 0; color:#ffb;"> </p>
+      <p><strong>Temperature:</strong> <span id="temp">--&deg;C</span></p>
+    </div>
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>

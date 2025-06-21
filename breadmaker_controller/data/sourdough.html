@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sourdough Starter Management</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .sourdough-container {
+      max-width: 420px;
+      margin: 2em auto;
+      background: #222;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+      padding: 2em 2em 1em 2em;
+      color: #f1f1f1;
+    }
+    .sourdough-container h2 {
+      margin-top: 0;
+      color: #ff9933;
+      text-align: center;
+    }
+    .sourdough-container label {
+      display: block;
+      margin: 1em 0 0.5em 0;
+      color: #f1f1f1;
+    }
+    .sourdough-container input, .sourdough-container select {
+      width: 100%;
+      padding: 0.5em;
+      margin-bottom: 1em;
+      border: 1px solid #444;
+      border-radius: 4px;
+      font-size: 1em;
+      background: #333;
+      color: #fff;
+    }
+    .sourdough-container button {
+      width: 100%;
+      padding: 0.7em;
+      background: #ff9933;
+      color: #232323;
+      border: none;
+      border-radius: 4px;
+      font-size: 1.1em;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .sourdough-container button:hover {
+      background: #ffb366;
+    }
+    #sd-feedback {
+      margin-top: 1em;
+      color: #27ae60;
+      text-align: center;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="sourdough-container">
+    <h2>Sourdough Starter Management</h2>
+    <form id="sdForm">
+      <label>Starter Name:
+        <input name="name" type="text" placeholder="e.g. Rye, White, etc." required>
+      </label>
+      <label>Flour (g):
+        <input name="flour" type="number" min="1" step="1" required>
+      </label>
+      <label>Water (g):
+        <input name="water" type="number" min="1" step="1" required>
+      </label>
+      <label>Starter to Keep (g):
+        <input name="keep" type="number" min="1" step="1" required>
+      </label>
+      <label>Feeding Interval (hours):
+        <input name="interval" type="number" min="1" step="1" required>
+      </label>
+      <label>Fermentation Temp (°C):
+        <input name="temp" type="number" min="15" max="35" step="0.1" value="25" required>
+      </label>
+      <button type="submit">Save Starter Plan</button>
+    </form>
+    <button id="sd-start" style="width:100%;margin-top:1em;">Start Starter Prep</button>
+    <div id="sd-timer" style="margin-top:1em;text-align:center;"></div>
+    <div id="sd-feedback"></div>
+    <hr>
+    <h3>Instructions</h3>
+    <ul>
+      <li>Enter your starter's details and feeding plan above.</li>
+      <li>Click <b>Start Starter Prep</b> to let the breadmaker manage mixing, temperature, and reminders.</li>
+      <li>Stop at any time to return to normal operation.</li>
+      <li>This mode uses the breadmaker's mixer, heater, buzzer, and light for optimal starter care.</li>
+    </ul>
+  </div>
+  <script src="/sourdough.js"></script>
+  <script>
+    const form = document.getElementById('sdForm');
+    const feedback = document.getElementById('sd-feedback');
+    form.onsubmit = function(e) {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form).entries());
+      localStorage.setItem('sourdoughPlan', JSON.stringify(data));
+      feedback.textContent = 'Starter plan saved locally!';
+    };
+    // Load existing plan if present
+    window.onload = function() {
+      const plan = localStorage.getItem('sourdoughPlan');
+      if (plan) {
+        const d = JSON.parse(plan);
+        for (const k in d) {
+          if (form.elements[k]) form.elements[k].value = d[k];
+        }
+        feedback.textContent = 'Loaded saved starter plan.';
+      }
+    };
+  </script>
+</body>
+</html>
