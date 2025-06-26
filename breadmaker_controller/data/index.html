@@ -3,6 +3,7 @@
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Breadmaker Controller</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="stylesheet" href="style.css">
   <style>
     .start-at-row {
@@ -148,10 +149,44 @@
       color: #eee;
       font-style: italic;
     }
+    .sourdough-fab {
+      position: fixed !important;
+      right: 18px !important;
+      bottom: 18px !important;
+      top: auto !important;
+      z-index: 200;
+      box-shadow: 0 2px 12px #0006;
+      background: #232323cc;
+      border-radius: 50%;
+      padding: 4px;
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+    .sourdough-fab:hover {
+      background: #ffe0b2;
+      box-shadow: 0 4px 18px #ffb36699;
+    }
+    @media (max-width: 700px) {
+      .sourdough-fab { right: 10px !important; bottom: 10px !important; }
+    }
+    .plan-summary table tr.done {
+      background: #4caf50;
+      color: #fff;
+      border: 2px solid #a5d6a7;
+    }
+    .plan-summary table tr.active {
+      background: #ff9933;
+      color: #232323;
+      border: 2px solid #ffb366;
+    }
+    .plan-summary table tr.inactive {
+      background: #333;
+      color: #bbb;
+      border: 2px solid #333;
+    }
   </style>
 </head>
 <body>
-  <a href="/config" class="config-cog" title="Configuration">
+  <a href="/config.html" class="config-cog" title="Configuration">
     <!-- Classic gear/cog SVG -->
     <svg width="36px" height="36px" viewBox="0 0 24 24" id="settings_cog" xmlns="http://www.w3.org/2000/svg">
       <rect width="24" height="24" fill="none"/>
@@ -162,7 +197,7 @@
       </g>
     </svg>
   </a>
-  <a href="/sourdough" class="config-cog" style="right:56px;top:10px;" title="Sourdough Starter Management">
+  <a href="/sourdough.html" class="config-cog sourdough-fab" title="Sourdough Starter Management">
     <!-- Sourdough SVG Icon -->
     <svg width="36px" height="36px" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
       <g>
@@ -181,8 +216,6 @@
   </a>
 
   <div class="container">
-    <div id="stageProgress" class="stage-progress"></div>
-
     <!-- Breadmaker stage SVGs (all stages, only one visible) -->
 <div id="breadmakerSvgs" style="text-align:center;">
   <div id="svg-delay"   class="bm-stage-svg" style="display:none">
@@ -284,6 +317,8 @@
       <span id="currentProg" class="program-name"></span>
     </div>
 
+    <div id="planSummary" style="margin:1em auto 1.2em auto; max-width:420px; background:#232323; color:#ffe; border-radius:8px; box-shadow:0 2px 8px #1116; padding:1em 1.2em; font-size:1em; text-align:left;"></div>
+
     <div class="button-row">
       <button id="btnStart">Start</button>
       <button id="btnPauseResume">Pause</button>
@@ -338,12 +373,55 @@
 
     <div id="statusBlock">
       <p><strong>Stage:</strong> <span id="stage">Idle</span></p>
-      <p><strong>Time Left:</strong> <span id="timeLeft">--</span></p>
+      <p><strong>Time Left (this stage):</strong> <span id="timeLeft">--</span></p>
+      <div id="programProgressBar" style="margin:0.5em 0 0.2em 0;"></div>
+      <div id="progressBarKey" style="margin-bottom:0.7em;"></div>
       <p id="stageReadyAt" style="margin-top:0.1em; color:#ffb;"> </p>
       <p id="programReadyAt" style="margin:0.2em 0 0.3em 0; color:#ffb;"> </p>
-      <p><strong>Temperature:</strong> <span id="temp">--&deg;C</span></p>
+      <p><strong>Temperature:</strong> <span id="temp" style="cursor:pointer;">--&deg;C</span> <span id="setTemp" style="color:#ffd600;font-size:0.98em;margin-left:0.7em;"></span></p>
+    </div>
+
+    <div id="recipeModal" style="display:none;position:fixed;z-index:1000;left:0;top:0;width:100vw;height:100vh;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;">
+      <div style="background:#232323;color:#ffe;padding:1.5em 2em;border-radius:12px;max-width:90vw;max-height:80vh;overflow:auto;box-shadow:0 4px 32px #000b;">
+        <h2 id="recipeTitle">Recipe</h2>
+        <pre id="recipeText" style="white-space:pre-wrap;font-size:1.1em;"></pre>
+        <button onclick="document.getElementById('recipeModal').style.display='none'">Close</button>
+      </div>
+    </div>
+
+    <div id="tempChartModal" style="display:none;position:fixed;z-index:1000;left:0;top:0;width:100vw;height:100vh;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;">
+      <div style="background:#232323;color:#ffe;padding:1.5em 2em;border-radius:12px;max-width:90vw;max-height:80vh;overflow:auto;box-shadow:0 4px 32px #000b;">
+        <h2>Temperature (Last 5 Minutes)</h2>
+        <canvas id="tempChart" width="500" height="220" style="background:#222;border-radius:8px;"></canvas>
+        <button onclick="document.getElementById('tempChartModal').style.display='none'">Close</button>
+      </div>
     </div>
   </div>
+  <script src="common.js"></script>
   <script src="script.js"></script>
-</body>
+  <script>
+      // Robust to missing/invalid program selection on initial load
+      document.addEventListener('DOMContentLoaded', function() {
+        // Hide planSummary and statusBlock if no program is selected
+        function safeUpdateUI() {
+          var progSelect = document.getElementById('progSelect');
+          var planSummary = document.getElementById('planSummary');
+          var statusBlock = document.getElementById('statusBlock');
+          if (progSelect && (!progSelect.value || progSelect.selectedIndex === -1)) {
+            if (planSummary) planSummary.innerHTML = '<i>No bread program selected.</i>';
+            if (statusBlock) statusBlock.style.display = 'none';
+          } else {
+            if (statusBlock) statusBlock.style.display = '';
+          }
+        }
+        // Run once on load
+        safeUpdateUI();
+        // Also run when program selection changes
+        var progSelect = document.getElementById('progSelect');
+        if (progSelect) {
+          progSelect.addEventListener('change', safeUpdateUI);
+        }
+      });
+    </script>
+  </body>
 </html>

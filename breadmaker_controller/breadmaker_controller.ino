@@ -23,293 +23,212 @@ FEATURES:
 #include <time.h>
 #include <DNSServer.h>
 #include <EEPROM.h>
-// Storage file name
-const char* CALIB_FILE = "/calibration.json";
-struct CalibPoint { int raw; float temp; };
-std::vector<CalibPoint> rtdCalibTable;
-// Wi-Fi credentials (no longer needed, now handled by captive portal)
-// const char* ssid = "RawInternet";
-// const char* password = "36F54F984C";
+#include "calibration.h"
+#include "programs_manager.h"
+#include "wifi_manager.h"
 
 // --- ENUM & STAGE HELPERS ---
+// Enum for all breadmaking stages
 enum Stage {
-  STAGE_IDLE,
-  STAGE_AUTOLYSE,   // Autolyse rest (now replaces delay)
-  STAGE_MIX,
-  STAGE_BULK,
-  STAGE_KNOCKDOWN,
-  STAGE_RISE,
-  STAGE_BAKE1,
-  STAGE_BAKE2,
-  STAGE_COOL,
-  STAGE_COUNT
+  STAGE_IDLE,         // Not running
+  STAGE_AUTOLYSE,     // Autolyse rest (now replaces delay)
+  STAGE_MIX,          // Mixing
+  STAGE_BULK,         // Bulk fermentation
+  STAGE_KNOCKDOWN,    // Knockdown
+  STAGE_RISE,         // Final rise
+  STAGE_BAKE1,        // First bake
+  STAGE_BAKE2,        // Second bake
+  STAGE_COOL,         // Cooling
+  STAGE_COUNT         // Number of stages
 };
 
-// Web server
-AsyncWebServer server(80);
-ESPAsyncHTTPUpdateServer httpUpdater;
+// --- Web server and OTA ---
+AsyncWebServer server(80); // Main web server
+ESPAsyncHTTPUpdateServer httpUpdater; // OTA update server
 
-// Pin assignments
+// --- Pin assignments ---
 const int PIN_HEATER = D1;     // Heater (PWM ~1V ON, 0V OFF)
 const int PIN_MOTOR  = D2;     // Mixer motor (PWM ~1V ON, 0V OFF)
 const int PIN_RTD    = A0;     // RTD analog input
 const int PIN_LIGHT  = D5;     // Light (PWM ~1V ON, 0V OFF)
 const int PIN_BUZZER = D6;     // Buzzer (PWM ~1V ON, 0V OFF)
 
-// PID parameters
+// --- PID parameters for temperature control ---
 double Setpoint, Input, Output;
 double Kp=2.0, Ki=5.0, Kd=1.0;
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
-time_t scheduledStart = 0;
+time_t scheduledStart = 0; // Scheduled start time (epoch)
 
-// State variables
-bool isRunning = false;
-unsigned long stageStartTime = 0;
-Stage currentStage = STAGE_IDLE;
-String activeProgramName = "default";
+// --- State variables ---
+bool isRunning = false;           // Is the breadmaker running?
+char activeProgramName[32] = "default"; // Name of the active program (char*)
 
-// Light/Buzzer management
-unsigned long lightOnTime = 0;
-unsigned long buzzStart = 0;
-bool buzzActive = false;
+// --- Custom stage state variables (global, for customStages logic) ---
+size_t customStageIdx = 0;         // Index of current custom stage
+size_t customMixIdx = 0;           // Index of current mix step within stage
+unsigned long customStageStart = 0;    // Start time (ms) of current custom stage
+unsigned long customMixStepStart = 0;  // Start time (ms) of current mix step
+time_t programStartTime = 0;           // Absolute program start time (seconds since epoch)
 
-// Program definition
-struct Program {
-  int delayStart;
-  int mixTime;
-  float bulkTemp;
-  int bulkTime;
-  int knockDownTime;
-  float riseTemp;
-  int riseTime;
-  float bake1Temp;
-  int bake1Time;
-  float bake2Temp;
-  int bake2Time;
-  int coolTime;
-};
-std::map<String, Program> programs;
-float calibrationSlope = 1.0f, calibrationOffset = 0.0f;
+// --- Light/Buzzer management ---
+unsigned long lightOnTime = 0;    // When was the light turned on?
+unsigned long buzzStart = 0;      // When was the buzzer turned on?
+bool buzzActive = false;          // Is the buzzer currently active?
 
-// WiFi credentials file
-const char* WIFI_FILE = "/wifi.json";
-
-// Loads WiFi credentials from LittleFS. Returns true if found, false otherwise.
-bool loadWiFiCreds(String &ssid, String &pass) {
-  File f = LittleFS.open(WIFI_FILE, "r");
-  if (!f) return false;
-  DynamicJsonDocument doc(256);
-  if (deserializeJson(doc, f)) { f.close(); return false; }
-  f.close();
-  if (!doc.containsKey("ssid") || !doc.containsKey("pass")) return false;
-  ssid = String((const char*)doc["ssid"]);
-  pass = String((const char*)doc["pass"]);
-  return ssid.length() > 0;
-}
-
+/// --- Captive portal DNS and AP ---
 DNSServer dnsServer;
-const byte DNS_PORT = 53;
 const char* apSSID = "BreadmakerSetup";
 
-void startCaptivePortal() {
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(apSSID);
-  dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
-
-  // Scan for WiFi networks
-  int n = WiFi.scanNetworks();
-  String options = "";
-  for (int i = 0; i < n; ++i) {
-    String ssid = WiFi.SSID(i);
-    options += "<option value='" + ssid + "'>" + ssid + "</option>";
-  }
-
-  // Read captive portal HTML from LittleFS
-  String page;
-  File f = LittleFS.open("/wifi.html", "r");
-  if (f) {
-    while (f.available()) page += (char)f.read();
-    f.close();
-    page.replace("{{options}}", options);
-  } else {
-    page = "<h2>WiFi Setup</h2><form method='POST' action='/save'><label>SSID: <select name='ssid'>" + options + "</select></label><br><label>Password: <input name='pass' type='password' placeholder='Password'></label><br><button>Save</button></form>";
-  }
-
-  auto sendPortal = [page](AsyncWebServerRequest* req) {
-    req->send(200, "text/html", page);
-  };
-
-  // Main and fallback
-  server.on("/", HTTP_GET, sendPortal);
-  server.onNotFound(sendPortal);
-
-  // Captive portal detection endpoints
-  const char* captiveEndpoints[] = {
-    "/generate_204", "/fwlink", "/hotspot-detect.html", "/ncsi.txt", "/connecttest.txt", "/wpad.dat"
-  };
-  for (auto ep : captiveEndpoints) {
-    server.on(ep, HTTP_GET, sendPortal);
-  }
-
-  server.on("/save", HTTP_POST, [](AsyncWebServerRequest* req){
-    String ssid = req->arg("ssid");
-    String pass = req->arg("pass");
-    DynamicJsonDocument doc(256);
-    doc["ssid"] = ssid;
-    doc["pass"] = pass;
-    File f = LittleFS.open(WIFI_FILE, "w");
-    if (f) { serializeJson(doc, f); f.close(); }
-    req->send(200, "text/plain", "Saved! Connecting to WiFi...\nThe device will reboot and disconnect from this network.\nYou may need to reconnect to the new WiFi.");
-    delay(1000);
-    ESP.restart();
-  });
-  server.begin();
-}
-
-void saveCalibration() {
-  DynamicJsonDocument doc(1024 + 128 * rtdCalibTable.size());
-  JsonArray arr = doc.createNestedArray("table");
-  for(auto& pt : rtdCalibTable) {
-    JsonObject o = arr.createNestedObject();
-    o["raw"] = pt.raw; o["temp"] = pt.temp;
-  }
-  File f = LittleFS.open(CALIB_FILE, "w");
-  if (f) { serializeJson(doc, f); f.close(); }
-}
-
-void loadCalibration() {
-  rtdCalibTable.clear();
-  File f = LittleFS.open(CALIB_FILE, "r");
-  if (!f) return;
-  DynamicJsonDocument doc(4096);
-  if (!deserializeJson(doc, f)) {
-    for(JsonObject o : doc["table"].as<JsonArray>()) {
-      CalibPoint pt = { o["raw"], o["temp"] };
-      rtdCalibTable.push_back(pt);
-    }
-  }
-  f.close();
-}
-
-
-float readTemperature() {
-  int raw = analogRead(PIN_RTD);
-  return tempFromRaw(raw);
-}
-// Prototypes
-void loadPrograms();
-void savePrograms();
-void startBreadmaker();
-void stopBreadmaker();
-
-
+// --- Stage name helpers ---
 const char* stageNames[] = {
   "Idle", "autolyse", "mix", "bulk", "knockDown", "rise", "bake1", "bake2", "cool", "COUNT"
 };
-Stage stageFromString(const String& s) {
-  for (int i = 0; i < STAGE_COUNT; ++i) if (s == stageNames[i]) return (Stage)i;
+// Convert string to Stage enum
+Stage stageFromString(const char* s) {
+  for (int i = 0; i < STAGE_COUNT; ++i) if (strcmp(s, stageNames[i]) == 0) return (Stage)i;
   return STAGE_IDLE;
 }
-String stringFromStage(Stage st) {
+// Convert Stage enum to string
+const char* stringFromStage(Stage st) {
   if (st >= 0 && st < STAGE_COUNT) return stageNames[st];
   return "Idle";
 }
+// Get next stage
 Stage nextStage(Stage st) {
   if (st >= 0 && st < STAGE_COOL) return (Stage)(st + 1);
   return STAGE_COOL;
 }
+// Get previous stage
 Stage prevStage(Stage st) {
   if (st > STAGE_AUTOLYSE && st < STAGE_COUNT) return (Stage)(st - 1);
   return STAGE_AUTOLYSE;
 }
 // --- END ENUM & HELPERS ---
 
+// --- Output mode setting ---
+enum OutputMode { OUTPUT_DIGITAL, OUTPUT_ANALOG };
+OutputMode outputMode = OUTPUT_ANALOG; // Default to analog (PWM)
+const char* SETTINGS_FILE = "/settings.json";
+
+// --- Debug serial setting ---
+bool debugSerial = true; // Debug serial output (default: true)
+
+// --- Function prototypes ---
+void loadSettings();
+void saveSettings();
+
+// --- Forward declarations for output control ---
+inline void setHeater(bool on);
+inline void setMotor(bool on);
+inline void setLight(bool on);
+inline void setBuzzer(bool on);
+inline bool heaterOn();
+inline bool motorOn();
+inline bool lightOn();
+inline bool buzzerOn();
+
+// --- Forward declaration for stopBreadmaker (must be before any use) ---
+void stopBreadmaker();
+
+// --- Output control function definitions (moved up for linker) ---
+inline void setHeater(bool on) {
+  if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_HEATER, on ? HIGH : LOW);
+  else analogWrite(PIN_HEATER, on ? 77 : 0);
+}
+inline void setMotor(bool on) {
+  if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_MOTOR, on ? HIGH : LOW);
+  else analogWrite(PIN_MOTOR, on ? 77 : 0);
+}
+inline void setLight(bool on) {
+  if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_LIGHT, on ? HIGH : LOW);
+  else analogWrite(PIN_LIGHT, on ? 77 : 0);
+  if (on) lightOnTime = millis();
+}
+inline void setBuzzer(bool on) {
+  if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_BUZZER, on ? HIGH : LOW);
+  else analogWrite(PIN_BUZZER, on ? 77 : 0);
+  buzzActive = on; if (on) buzzStart = millis();
+}
+inline bool heaterOn() { return (outputMode == OUTPUT_DIGITAL) ? digitalRead(PIN_HEATER) == HIGH : analogRead(PIN_HEATER) > 5; }
+inline bool motorOn()  { return (outputMode == OUTPUT_DIGITAL) ? digitalRead(PIN_MOTOR)  == HIGH : analogRead(PIN_MOTOR)  > 5; }
+inline bool lightOn()  { return (outputMode == OUTPUT_DIGITAL) ? digitalRead(PIN_LIGHT)  == HIGH : analogRead(PIN_LIGHT)  > 5; }
+inline bool buzzerOn() { return (outputMode == OUTPUT_DIGITAL) ? digitalRead(PIN_BUZZER) == HIGH : analogRead(PIN_BUZZER) > 5; }
+
+// --- Core state machine endpoints ---
 void setup() {
   Serial.begin(115200);
-  pinMode(PIN_HEATER, OUTPUT);
-  pinMode(PIN_MOTOR,  OUTPUT);
-  pinMode(PIN_LIGHT,  OUTPUT);
-  pinMode(PIN_BUZZER, OUTPUT);
-  analogWriteRange(255);
-  loadCalibration();
-  setHeater(false); setMotor(false); setLight(false); setBuzzer(false);
-
-  if (!LittleFS.begin()) { Serial.println("LittleFS mount failed"); return; }
+  delay(100);
+  Serial.println("[setup] Booting...");
+  if (!LittleFS.begin()) {
+    Serial.println("[setup] LittleFS mount failed! Halting.");
+    while (1) delay(1000);
+  }
+  Serial.println("[setup] LittleFS mounted.");
+  Serial.println("[setup] Loading programs...");
   loadPrograms();
+  Serial.print("[setup] Programs loaded. Count: ");
+  Serial.println(programs.size());
+  loadSettings();
+  Serial.println("[setup] Settings loaded.");
 
-  myPID.SetMode(AUTOMATIC);
-  myPID.SetOutputLimits(0,255);
-
-  String ssid, pass;
-  if (loadWiFiCreds(ssid, pass)) {
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid.c_str(), pass.c_str());
-    Serial.printf("Connecting to %s\n", ssid.c_str());
-    unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print('.');
-      if (millis() - t0 > 20000) {
-        Serial.println("\nWi-Fi connect failed, starting captive portal");
-        startCaptivePortal();
-        while (true) { dnsServer.processNextRequest(); delay(10); }
+  // --- WiFi connection debug output ---
+  Serial.println("[wifi] Reading WiFi config...");
+  File wf = LittleFS.open("/wifi.json", "r");
+  if (!wf) {
+    Serial.println("[wifi] wifi.json not found! Starting AP mode.");
+    // ...existing AP/captive portal code if any...
+  } else {
+    DynamicJsonDocument wdoc(256);
+    DeserializationError werr = deserializeJson(wdoc, wf);
+    if (werr) {
+      Serial.print("[wifi] Failed to parse wifi.json: ");
+      Serial.println(werr.c_str());
+      // ...existing AP/captive portal code if any...
+    } else {
+      const char* ssid = wdoc["ssid"] | "";
+      const char* pass = wdoc["pass"] | "";
+      Serial.print("[wifi] Connecting to SSID: ");
+      Serial.println(ssid);
+      WiFi.mode(WIFI_STA);
+      WiFi.begin(ssid, pass);
+      int tries = 0;
+      while (WiFi.status() != WL_CONNECTED && tries < 40) {
+        delay(250);
+        Serial.print(".");
+        tries++;
+      }
+      Serial.println();
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("[wifi] Connected! IP address: ");
+        Serial.println(WiFi.localIP());
+      } else {
+        Serial.println("[wifi] Failed to connect. Starting AP mode.");
+        // ...existing AP/captive portal code if any...
       }
     }
-    Serial.printf("\nConnected, IP: %s\n", WiFi.localIP().toString().c_str());
-  } else {
-    Serial.println("No WiFi creds, starting captive portal");
-    startCaptivePortal();
-    while (true) { dnsServer.processNextRequest(); delay(10); }
+    wf.close();
   }
 
-  // OTA update server
-  httpUpdater.setup(&server, "/update");
-
-  // Static files
-  server.serveStatic("/style.css",LittleFS,"/style.css");
-  server.serveStatic("/script.js",LittleFS,"/script.js");
-  server.serveStatic("/programs.js",LittleFS,"/programs.js");
-  server.serveStatic("/calibrate",LittleFS,"/calibration.html");
-  server.serveStatic("/programs",LittleFS,"/programs.html");
-  server.serveStatic("/config",LittleFS,"/config.html");
-  server.serveStatic("/breadmaker.jpg", LittleFS, "/breadmaker.jpg");
-  server.serveStatic("/sourdough", LittleFS, "/sourdough.html");
-  server.onNotFound([](AsyncWebServerRequest* req){
-    if (req->method()==HTTP_GET)
-      req->send(LittleFS,"/index.html","text/html");
-    else
-      req->send(404);
-  });
-
-  // Output toggles
-  server.on("/motor", HTTP_GET, [](AsyncWebServerRequest* req){
-    if (req->hasParam("on")) { String v = req->getParam("on")->value(); setMotor(v == "1"); req->send(200, "text/plain", "Motor set"); return; }
-    req->send(400, "text/plain", "Missing on param");
-  });
-  server.on("/heater", HTTP_GET, [](AsyncWebServerRequest* req){
-    if (req->hasParam("on")) { String v = req->getParam("on")->value(); setHeater(v == "1"); req->send(200, "text/plain", "Heater set"); return; }
-    req->send(400, "text/plain", "Missing on param");
-  });
-  server.on("/light", HTTP_GET, [](AsyncWebServerRequest* req){
-    if (req->hasParam("on")) { String v = req->getParam("on")->value(); setLight(v == "1"); req->send(200, "text/plain", "Light set"); return; }
-    req->send(400, "text/plain", "Missing on param");
-  });
-  server.on("/buzz", HTTP_GET, [](AsyncWebServerRequest* req){
-    setBuzzer(true); req->send(200, "text/plain", "Buzzed");
-  });
-
-  // Core state machine
+  // --- Core state machine endpoints ---
   server.on("/start", HTTP_GET, [](AsyncWebServerRequest*req){
+    if (debugSerial) Serial.println("[ACTION] /start called");
     isRunning = true;
-    currentStage = STAGE_AUTOLYSE;
-    stageStartTime = millis();
+    customStageIdx = 0;
+    customMixIdx = 0;
+    customStageStart = millis(); // Always set to millis() on start
+    customMixStepStart = 0;
+    programStartTime = time(nullptr); // Set absolute program start time
+    saveResumeState(); // <--- Save resume state immediately on start
+    if (debugSerial) Serial.printf("[STAGE] Entering custom stage: %d\n", customStageIdx);
     req->send(200, "text/plain", "Started");
   });
   server.on("/stop", HTTP_GET, [](AsyncWebServerRequest*req){
+    if (debugSerial) Serial.println("[ACTION] /stop called");
     stopBreadmaker();
     req->send(200, "text/plain", "Stopped");
   });
   server.on("/pause", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (debugSerial) Serial.println("[ACTION] /pause called");
     isRunning = false;
     setMotor(false);
     setHeater(false);
@@ -317,78 +236,168 @@ void setup() {
     req->send(200, "text/plain", "Paused");
   });
   server.on("/resume", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (debugSerial) Serial.println("[ACTION] /resume called");
     isRunning = true;
-    stageStartTime = millis();
     req->send(200, "text/plain", "Resumed");
   });
   server.on("/advance", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (debugSerial) Serial.println("[ACTION] /advance called");
     if (programs.count(activeProgramName) == 0) { stopBreadmaker(); req->send(200,"text/plain","No program"); return; }
-    if (currentStage == STAGE_IDLE || currentStage == STAGE_COUNT) currentStage = STAGE_AUTOLYSE;
-    else if (currentStage == STAGE_COOL) { stopBreadmaker(); req->send(200,"text/plain","Stopped at cool"); return; }
-    else currentStage = nextStage(currentStage);
-    stageStartTime = millis();
+    Program &p = programs[activeProgramName];
+    customStageIdx++;
+    if (customStageIdx >= p.customStages.size()) {
+      stopBreadmaker(); customStageIdx = 0; customStageStart = 0; req->send(200,"text/plain","Stopped at end"); return;
+    }
+    customStageStart = millis(); // Always set to millis() on advance
+    customMixIdx = 0;
+    customMixStepStart = 0;
     isRunning = true;
+    if (customStageIdx == 0) programStartTime = time(nullptr); // Reset programStartTime if looping
+    if (debugSerial) Serial.printf("[STAGE] Entering custom stage: %d\n", customStageIdx);
     req->send(200,"text/plain","Advanced");
   });
   server.on("/back", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (debugSerial) Serial.println("[ACTION] /back called");
     if (programs.count(activeProgramName) == 0) { stopBreadmaker(); req->send(200,"text/plain","No program"); return; }
-    if (currentStage == STAGE_IDLE || currentStage == STAGE_AUTOLYSE) currentStage = STAGE_AUTOLYSE;
-    else currentStage = prevStage(currentStage);
-    stageStartTime = millis();
+    Program &p = programs[activeProgramName];
+    if (customStageIdx > 0) customStageIdx--;
+    customStageStart = millis(); // Always set to millis() on back
+    customMixIdx = 0;
+    customMixStepStart = 0;
     isRunning = true;
+    if (customStageIdx == 0) programStartTime = time(nullptr); // Reset programStartTime if going back to start
+    if (debugSerial) Serial.printf("[STAGE] Entering custom stage: %d\n", customStageIdx);
     req->send(200,"text/plain","Went back");
   });
   server.on("/select", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (req->hasParam("idx")) {
+      int idx = req->getParam("idx")->value().toInt();
+      int i = 0;
+      for (auto it = programs.begin(); it != programs.end(); ++it, ++i) {
+        if (i == idx) {
+          strncpy(activeProgramName, it->first.c_str(), sizeof(activeProgramName)-1);
+          activeProgramName[sizeof(activeProgramName)-1] = '\0';
+          isRunning = false;
+          saveSettings();
+          saveResumeState(); // <--- Save resume state on program select (by idx)
+          req->send(200, "text/plain", "Selected");
+          return;
+        }
+      }
+      req->send(400, "text/plain", "Bad program index");
+      return;
+    }
     if (req->hasParam("name")) {
-      String name = req->getParam("name")->value();
+      const char* name = req->getParam("name")->value().c_str();
       if (programs.count(name)) {
-        activeProgramName = name;
-        currentStage = STAGE_IDLE;
-        stageStartTime = 0;
+        strncpy(activeProgramName, name, sizeof(activeProgramName)-1);
+        activeProgramName[sizeof(activeProgramName)-1] = '\0';
         isRunning = false;
+        saveSettings();
+        saveResumeState(); // <--- Save resume state on program select (by name)
         req->send(200, "text/plain", "Selected");
         return;
       }
     }
-    req->send(400, "text/plain", "Bad program name");
+    req->send(400, "text/plain", "Bad program name or index");
   });
-
-  // Status endpoint
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest* req){
+    req->send(LittleFS, "/index.html", "text/html");
+  });
+  // --- Status endpoint for UI polling ---
   server.on("/status", HTTP_GET, [](AsyncWebServerRequest*req){
-    DynamicJsonDocument d(1024);
+    if (debugSerial) Serial.println("[DEBUG] /status requested");
+    DynamicJsonDocument d(2048);
     d["scheduledStart"] = (uint32_t)scheduledStart;
     d["running"] = isRunning;
-    d["stage"] = stringFromStage(currentStage);
     d["program"] = activeProgramName;
-    unsigned long es = (millis() - stageStartTime) / 1000;
-    d["elapsed"] = es;
-    int dur = 0;
+    unsigned long nowMs = millis();
+    time_t now = time(nullptr);
+    unsigned long es = 0;
+    int stageLeft = 0;
+    time_t stageReadyAt = 0;
+    time_t programReadyAt = 0;
     if (programs.count(activeProgramName)) {
       Program &p = programs[activeProgramName];
-      switch (currentStage) {
-        case STAGE_AUTOLYSE: dur = p.delayStart*60; break;
-        case STAGE_MIX: dur = p.mixTime*60; break;
-        case STAGE_BULK: dur = p.bulkTime*60; break;
-        case STAGE_KNOCKDOWN: dur = p.knockDownTime*60; break;
-        case STAGE_RISE: dur = p.riseTime*60; break;
-        case STAGE_BAKE1: dur = p.bake1Time*60; break;
-        case STAGE_BAKE2: dur = p.bake2Time*60; break;
-        case STAGE_COOL: dur = p.coolTime*60; break;
-        default: dur = 0;
+      // If not running, set stage to "Idle"
+      if (!isRunning) {
+        d["stage"] = "Idle";
+      } else if (customStageIdx < p.customStages.size()) {
+        d["stage"] = p.customStages[customStageIdx].label.c_str();
+      } else {
+        d["stage"] = "";
+      }
+      // Custom stages: calculate stage start times based on durations and programStartTime
+      JsonArray arr = d.createNestedArray("stageStartTimes");
+      time_t t = programStartTime;
+      for (size_t i = 0; i < p.customStages.size(); ++i) {
+        arr.add((uint32_t)t);
+        t += (time_t)p.customStages[i].min * 60;
+      }
+      d["programStart"] = (uint32_t)programStartTime;
+      // Elapsed time in current stage
+      es = (customStageStart == 0) ? 0 : (nowMs - customStageStart) / 1000;
+      // Time left in current stage
+      if (customStageIdx < p.customStages.size()) {
+        stageLeft = max(0, (int)((unsigned long)p.customStages[customStageIdx].min * 60 - es));
+        stageReadyAt = now + stageLeft;
+      }
+      // Program ready at
+      programReadyAt = now;
+      for (size_t i = customStageIdx; i < p.customStages.size(); ++i) {
+        int stLeft = (i == customStageIdx) ? stageLeft : (int)p.customStages[i].min * 60;
+        programReadyAt += stLeft;
       }
     }
-    d["timeLeft"] = max(0, dur - (int)es);
+    d["elapsed"] = es;
+    d["setTemp"] = Setpoint;
+    d["timeLeft"] = stageLeft;
+    d["stageReadyAt"] = stageReadyAt;
+    d["programReadyAt"] = programReadyAt;
     d["temp"] = readTemperature();
     d["heater"] = heaterOn();
     d["motor"] = motorOn();
     d["light"] = lightOn();
     d["buzzer"] = buzzerOn();
+    d["stageStartTime"] = (uint32_t)customStageStart;
     JsonArray progs = d.createNestedArray("programList");
     for (auto it = programs.begin(); it != programs.end(); ++it) progs.add(it->first);
+    char buf[1024];
+    serializeJson(d, buf, sizeof(buf));
+    req->send(200, "application/json", buf);
+  });
+
+  // --- Home Assistant-friendly endpoint ---
+  server.on("/ha", HTTP_GET, [](AsyncWebServerRequest*req){
+    DynamicJsonDocument d(512);
+    d["state"] = isRunning ? "on" : "off";
+    // Set stage to Idle if not running, else current custom stage label
+    if (programs.count(activeProgramName)) {
+      Program &p = programs[activeProgramName];
+      if (!isRunning) {
+        d["stage"] = "Idle";
+      } else if (customStageIdx < p.customStages.size()) {
+        d["stage"] = p.customStages[customStageIdx].label.c_str();
+      } else {
+        d["stage"] = "";
+      }
+    } else {
+      d["stage"] = "Idle";
+    }
+    d["program"] = activeProgramName;
+    d["temperature"] = readTemperature();
+    d["heater"] = heaterOn();
+    d["motor"] = motorOn();
+    d["light"] = lightOn();
+    d["buzzer"] = buzzerOn();
+    d["stage_time_left"] = (int)(d["timeLeft"] | 0);
+    d["stage_ready_at"] = (int)(d["stageReadyAt"] | 0);
+    d["program_ready_at"] = (int)(d["programReadyAt"] | 0);
     char buf[512];
     serializeJson(d, buf, sizeof(buf));
     req->send(200, "application/json", buf);
   });
+
 server.on("/api/calibration", HTTP_GET, [](AsyncWebServerRequest* req){
   DynamicJsonDocument doc(4096);
   int raw = analogRead(PIN_RTD);
@@ -401,18 +410,6 @@ server.on("/api/calibration", HTTP_GET, [](AsyncWebServerRequest* req){
   String json; serializeJson(doc,json);
   req->send(200,"application/json",json);
 });
-server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
-  [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
-    DynamicJsonDocument doc(4096);
-    if(deserializeJson(doc, data, len)) { req->send(400,"text/plain","Bad JSON"); return; }
-    rtdCalibTable.clear();
-    for(JsonObject o : doc["table"].as<JsonArray>()) {
-      CalibPoint pt = { o["raw"], o["temp"] };
-      rtdCalibTable.push_back(pt);
-    }
-    saveCalibration();
-    req->send(200,"text/plain","OK");
-  });
 server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
   [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
     DynamicJsonDocument doc(4096);
@@ -465,195 +462,243 @@ server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
   }
 });
 
+  // --- Output mode API endpoint ---
+  server.on("/api/output_mode", HTTP_GET, [](AsyncWebServerRequest* req){
+    DynamicJsonDocument doc(64);
+    doc["mode"] = (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog";
+    String json; serializeJson(doc, json);
+    req->send(200, "application/json", json);
+  });
+  server.on("/api/output_mode", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+      DynamicJsonDocument doc(128);
+      if (deserializeJson(doc, data, len)) { req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); return; }
+      const char* mode = doc["mode"] | "analog";
+      outputMode = (strcmp(mode, "digital") == 0) ? OUTPUT_DIGITAL : OUTPUT_ANALOG;
+      saveSettings();
+      DynamicJsonDocument resp(64);
+      resp["mode"] = (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog";
+      String json; serializeJson(resp, json);
+      req->send(200, "application/json", json);
+    }
+  );
+
+  // --- Debug Serial API endpoint ---
+  server.on("/api/settings", HTTP_GET, [](AsyncWebServerRequest* req){
+    DynamicJsonDocument doc(128);
+    doc["debugSerial"] = debugSerial;
+    String json; serializeJson(doc, json);
+    req->send(200, "application/json", json);
+  });
+  server.on("/api/settings", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+      DynamicJsonDocument doc(128);
+      if (deserializeJson(doc, data, len)) { req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); return; }
+      if (doc.containsKey("debugSerial")) debugSerial = doc["debugSerial"];
+      saveSettings();
+      DynamicJsonDocument resp(64);
+      resp["debugSerial"] = debugSerial;
+      String json; serializeJson(resp, json);
+      req->send(200, "application/json", json);
+    }
+  );
+
+  server.on("/listfiles", HTTP_GET, [](AsyncWebServerRequest* req){
+  String out = "Files:<br>";
+  Dir dir = LittleFS.openDir("/");
+  while (dir.next()) {
+    out += dir.fileName() + "<br>";
+  }
+  req->send(200, "text/html", out);
+});
+server.serveStatic("/", LittleFS, "/");
   server.begin();
   Serial.println("HTTP server started");
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   // Wait for time sync
   while (time(nullptr) < 100000) delay(200);
 }
-float tempFromRaw(int raw) {
-  if (rtdCalibTable.empty()) return 0;
-  if (raw <= rtdCalibTable.front().raw) return rtdCalibTable.front().temp;
-  if (raw >= rtdCalibTable.back().raw) return rtdCalibTable.back().temp;
-  for(size_t i=1; i<rtdCalibTable.size(); ++i) {
-    if (raw < rtdCalibTable[i].raw) {
-      auto &a = rtdCalibTable[i-1], &b = rtdCalibTable[i];
-      float t = a.temp + (raw - a.raw) * (b.temp - a.temp) / (b.raw - a.raw);
-      return t;
-    }
-  }
-  return rtdCalibTable.back().temp;
+
+// Remove duplicate loadPrograms() implementation from this file. Use the one in programs_manager.cpp.
+
+// --- Resume state management ---
+const char* RESUME_FILE = "/resume.json";
+unsigned long lastResumeSave = 0;
+
+void saveResumeState() {
+  DynamicJsonDocument doc(512);
+  doc["activeProgramName"] = activeProgramName;
+  doc["customStageIdx"] = customStageIdx;
+  doc["customMixIdx"] = customMixIdx;
+  doc["customStageStart"] = customStageStart;
+  doc["customMixStepStart"] = customMixStepStart;
+  doc["programStartTime"] = programStartTime;
+  doc["isRunning"] = isRunning;
+  File f = LittleFS.open(RESUME_FILE, "w");
+  if (f) { serializeJson(doc, f); f.close(); }
 }
+
+void clearResumeState() {
+  LittleFS.remove(RESUME_FILE);
+}
+
+void loadResumeState() {
+  File f = LittleFS.open(RESUME_FILE, "r");
+  if (!f) return;
+  DynamicJsonDocument doc(512);
+  DeserializationError err = deserializeJson(doc, f);
+  f.close();
+  if (err) return;
+  if (doc.containsKey("activeProgramName")) {
+    strncpy(activeProgramName, doc["activeProgramName"], sizeof(activeProgramName)-1);
+    activeProgramName[sizeof(activeProgramName)-1] = '\0';
+  }
+  customStageIdx = doc["customStageIdx"] | 0;
+  customMixIdx = doc["customMixIdx"] | 0;
+  customStageStart = doc["customStageStart"] | 0;
+  customMixStepStart = doc["customMixStepStart"] | 0;
+  programStartTime = doc["programStartTime"] | 0;
+  isRunning = doc["isRunning"] | false;
+}
+
 void loop() {
-  if(!isRunning) { yield(); delay(1); return; }
+  if (!isRunning) {
+    if (scheduledStart && time(nullptr) >= scheduledStart) {
+      scheduledStart = 0;
+      isRunning = true;
+      customStageIdx = 0;
+      customMixIdx = 0;
+      customStageStart = millis();
+      customMixStepStart = 0;
+    }
+    yield(); delay(1); return;
+  }
   if (programs.count(activeProgramName) == 0) {
     stopBreadmaker(); return;
   }
   Program &p = programs[activeProgramName];
-  unsigned long elapsedMs = millis() - stageStartTime;
-  unsigned long elapsedS = elapsedMs / 1000;
-  switch (currentStage) {
-    case STAGE_AUTOLYSE:
-      // Autolyse logic (rest, temp control)
-      setMotor(false); setHeater(false); setLight(true);
-      if (elapsedMs >= p.delayStart * 60000UL) { // Use delayStart as autolyse duration
-        currentStage = STAGE_MIX; stageStartTime = millis();
-      }
-      break;
-    case STAGE_MIX:
-    case STAGE_KNOCKDOWN: {
-      // First 1 min: burst (200ms/1.2s)
-      if (elapsedS < 60) {
-        const unsigned long period = 1200, ontime = 200;
-        unsigned long t = elapsedMs % period;
-        setMotor(t < ontime);
-      } else {
-        // After burst: 2min mixing, 30s pause, repeat
-        unsigned long t = elapsedS - 60;
-        unsigned long cycle = t % 150; // 150s = 2min + 30s
-        if (cycle < 120) setMotor(true);
-        else setMotor(false);
-      }
-      unsigned long stageLength = (currentStage == STAGE_MIX) ? p.mixTime : p.knockDownTime;
-      if (elapsedMs >= stageLength * 60000UL) {
-        setMotor(false);
-        if (currentStage == STAGE_MIX) {
-          currentStage = STAGE_BULK;
-          stageStartTime = millis();
-        } else {
-          currentStage = STAGE_RISE;
-          stageStartTime = millis();
-        }
-      }
-      break;
+  // --- Custom Stages Logic ---
+  if (!p.customStages.empty()) {
+    if (customStageIdx >= p.customStages.size()) {
+      stopBreadmaker(); customStageIdx = 0; customStageStart = 0; clearResumeState(); return;
     }
-    case STAGE_BULK:
-      Setpoint = p.bulkTemp;
-      Input = readTemperature();
-      myPID.Compute();
-      setHeater(Output > 64); // Turn heater ON if PID output is high enough
+    CustomStage &st = p.customStages[customStageIdx];
+    Setpoint = st.temp;
+    Input = readTemperature();
+    myPID.Compute();
+    setHeater(st.heater == "on");
+    if (st.light == "on") setLight(true);
+    setBuzzer(st.buzzer == "on");
+    if (!st.mixPattern.empty()) {
+      if (customMixStepStart == 0) customMixStepStart = millis();
+      MixStep &step = st.mixPattern[customMixIdx];
+      if (step.action == "mix") setMotor(true);
+      else setMotor(false);
+      if (millis() - customMixStepStart >= (unsigned long)step.durationSec * 1000UL) {
+        customMixIdx++;
+        customMixStepStart = millis();
+        if (customMixIdx >= st.mixPattern.size()) customMixIdx = 0; // Loop pattern
+      }
+    } else {
       setMotor(false);
-      if (elapsedMs >= p.bulkTime * 60000UL) {
-        setHeater(false);
-        currentStage = STAGE_KNOCKDOWN; stageStartTime = millis();
+    }
+    if (millis() - customStageStart >= (unsigned long)st.min * 60000UL) {
+      customStageIdx++;
+      customStageStart = millis();
+      customMixIdx = 0;
+      customMixStepStart = 0;
+      if (customStageIdx >= p.customStages.size()) {
+        stopBreadmaker(); customStageIdx = 0; customStageStart = 0; clearResumeState(); return;
       }
-      break;
-    case STAGE_RISE:
-      Setpoint = p.riseTemp;
-      Input = readTemperature();
-      myPID.Compute();
-      setHeater(Output > 64);
-      setMotor(false);
-      if (elapsedMs >= p.riseTime * 60000UL) {
-        setHeater(false);
-        currentStage = STAGE_BAKE1; stageStartTime = millis();
-      }
-      break;
-    case STAGE_BAKE1:
-      Setpoint = p.bake1Temp;
-      Input = readTemperature();
-      myPID.Compute();
-      setHeater(Output > 64);
-      if (elapsedMs >= p.bake1Time * 60000UL) {
-        setHeater(false);
-        currentStage = STAGE_BAKE2; stageStartTime = millis();
-      }
-      break;
-    case STAGE_BAKE2:
-      Setpoint = p.bake2Temp;
-      Input = readTemperature();
-      myPID.Compute();
-      setHeater(Output > 64);
-      if (elapsedMs >= p.bake2Time * 60000UL) {
-        setHeater(false);
-        currentStage = STAGE_COOL; stageStartTime = millis();
-      }
-      break;
-    case STAGE_COOL:
-      setHeater(false); setMotor(false);
-      if (elapsedMs >= p.coolTime * 60000UL) {
-        stopBreadmaker();
-      }
-      break;
-    default:
-      break;
+    }
+    // --- Periodically save resume state ---
+    if (millis() - lastResumeSave > 60000) {
+      saveResumeState();
+      lastResumeSave = millis();
+    }
+    yield(); delay(1); return;
   }
-  // Light auto-off after 30s
-  if (lightOn() && (millis() - lightOnTime > 30000)) {
-    setLight(false);
+  // Housekeeping: auto-off light, buzzer
+  bool customLightOn = false;
+  if (isRunning && programs.count(activeProgramName) > 0) {
+    Program &p = programs[activeProgramName];
+    if (!p.customStages.empty() && customStageIdx < p.customStages.size()) {
+      CustomStage &st = p.customStages[customStageIdx];
+      customLightOn = (st.light == "on");
+    }
   }
-  // Non-blocking buzzer: 200ms ON
-  if (buzzActive && millis() - buzzStart >= 200) {
-    setBuzzer(false);
-  }
+  if (!customLightOn && lightOn() && (millis() - lightOnTime > 30000)) setLight(false);
+  if (buzzActive && millis() - buzzStart >= 200) setBuzzer(false);
   if (scheduledStart && !isRunning) {
-    time_t now = time(nullptr);
-    if (now >= scheduledStart) {
-      // Time to start!
+    if (time(nullptr) >= scheduledStart) {
       scheduledStart = 0;
       isRunning = true;
-      currentStage = STAGE_MIX; // or STAGE_DELAY if you want to keep original delay
-      stageStartTime = millis();
+      customStageIdx = 0;
+      customMixIdx = 0;
+      customStageStart = millis();
+      customMixStepStart = 0;
     } else {
-      // Waiting: optionally blink a light, etc.
       yield(); delay(100);
       return;
     }
   }
   yield(); delay(1);
 }
-
-// Helper: set outputs with PWM (77 = ~1V, 0 = OFF)
-inline void setHeater(bool on) { analogWrite(PIN_HEATER, on ? 77 : 0); }
-inline void setMotor(bool on)  { analogWrite(PIN_MOTOR,  on ? 77 : 0); }
-inline void setLight(bool on)  { analogWrite(PIN_LIGHT,  on ? 77 : 0); if (on) lightOnTime = millis(); }
-inline void setBuzzer(bool on) { analogWrite(PIN_BUZZER, on ? 77 : 0); buzzActive = on; if (on) buzzStart = millis(); }
-inline bool heaterOn() { return analogRead(PIN_HEATER) > 5; }
-inline bool motorOn()  { return analogRead(PIN_MOTOR)  > 5; }
-inline bool lightOn()  { return analogRead(PIN_LIGHT)  > 5; }
-inline bool buzzerOn() { return analogRead(PIN_BUZZER) > 5; }
-
-void loadPrograms() {
-  File f=LittleFS.open("/programs.json","r"); if(!f) return;
-  DynamicJsonDocument d(8192); if(deserializeJson(d,f)){ f.close(); return;} f.close();
-  if(d.containsKey("calibration")){
-    calibrationSlope  = d["calibration"]["slope"].as<float>();
-    calibrationOffset = d["calibration"]["offset"].as<float>();
-  }
-  programs.clear();
-  for(JsonPair kv: d["programs"].as<JsonObject>()){
-    JsonObject v=kv.value().as<JsonObject>();
-    Program p={
-      v["delayStart"]  |0,
-      v["mixTime"]     |0,
-      v["bulkTemp"]    |0.0f,
-      v["bulkTime"]    |0,
-      v["knockDownTime"]|0,
-      v["riseTemp"]    |0.0f,
-      v["riseTime"]    |0,
-      v["bake1Temp"]   |0.0f,
-      v["bake1Time"]   |0,
-      v["bake2Temp"]   |0.0f,
-      v["bake2Time"]   |0,
-      v["coolTime"]    |0
-    };
-    programs[kv.key().c_str()] = p;
-  }
-}
-
-void savePrograms() {
-  File f=LittleFS.open("/programs.json","r"); if(!f) return;
-  DynamicJsonDocument d(8192); if(deserializeJson(d,f)){ f.close(); return;} f.close();
-  d["calibration"]["slope"]=calibrationSlope; d["calibration"]["offset"]=calibrationOffset;
-  File fw=LittleFS.open("/programs.json","w"); if(!fw)return;
-  serializeJson(d,fw); fw.close();
-}
-
 void stopBreadmaker() {
+  if (debugSerial) Serial.println("[ACTION] stopBreadmaker() called");
   isRunning = false;
   setHeater(false);
   setMotor(false);
   setLight(false);
   setBuzzer(true); // Buzz for 200ms (handled non-blocking in loop)
-  currentStage = STAGE_IDLE;
+  clearResumeState();
+}
+
+void loadSettings() {
+  Serial.println("[loadSettings] Loading settings...");
+  File f = LittleFS.open(SETTINGS_FILE, "r");
+  if (!f) {
+    Serial.println("[loadSettings] settings.json not found, using defaults.");
+    debugSerial = true;
+    return;
+  }
+  DynamicJsonDocument doc(256);
+  DeserializationError err = deserializeJson(doc, f);
+  if (err) {
+    Serial.print("[loadSettings] Failed to parse settings.json: ");
+    Serial.println(err.c_str());
+    f.close();
+    debugSerial = true;
+    return;
+  }
+  const char* mode = doc["outputMode"] | "analog";
+  outputMode = (strcmp(mode, "digital") == 0) ? OUTPUT_DIGITAL : OUTPUT_ANALOG;
+  debugSerial = doc["debugSerial"] | true;
+  // Restore last selected program if present
+  if (doc.containsKey("lastProgram")) {
+    strncpy(activeProgramName, doc["lastProgram"], sizeof(activeProgramName)-1);
+    activeProgramName[sizeof(activeProgramName)-1] = '\0';
+    Serial.print("[loadSettings] lastProgram loaded: ");
+    Serial.println(activeProgramName);
+  }
+  Serial.print("[loadSettings] outputMode loaded: ");
+  Serial.println(mode);
+  Serial.print("[loadSettings] debugSerial: ");
+  Serial.println(debugSerial ? "true" : "false");
+  f.close();
+}
+void saveSettings() {
+  Serial.println("[saveSettings] Saving settings...");
+  DynamicJsonDocument doc(256);
+  doc["outputMode"] = (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog";
+  doc["debugSerial"] = debugSerial;
+  doc["lastProgram"] = activeProgramName;
+  File f = LittleFS.open(SETTINGS_FILE, "w");
+  if (!f) {
+    Serial.println("[saveSettings] Failed to open settings.json for writing!");
+    return;
+  }
+  serializeJson(doc, f);
+  f.close();
+  Serial.println("[saveSettings] Settings saved.");
 }

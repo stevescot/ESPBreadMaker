@@ -7,11 +7,78 @@
 <body>
   <div class="container">
     <h1>Edit Programs</h1>
+    <div style="margin-bottom:1em;">
+      <label for="programSelect"><strong>Select Program:</strong></label>
+      <!-- The dropdown will be rendered by JS -->
+      <span id="programSelectContainer"></span>
+      <button id="genaiShowBtn" style="margin-left:1em;background:#ffd600;color:#232323;font-size:1em;padding:0.2em 1.2em;border-radius:6px;border:none;cursor:pointer;">Generate Program</button>
+    </div>
     <div id="progList"></div>
     <button id="addProg">+ Add Program</button>
     <button id="saveAll">Save All</button>
     <button onclick="window.location.href='/'">Back</button>
+    <div id="genaiSection" style="display:none;margin-top:2em;padding:1em;background:#232323;color:#ffe;border-radius:8px;max-width:600px;">
+      <h2>Generate a Breadmaker Program with AI</h2>
+      <p>You can use an AI like ChatGPT to generate a valid breadmaker program JSON.<br>
+      <a href="https://chat.openai.com/" target="_blank" style="color:#ffd600;">Open ChatGPT</a></p>
+      <p><strong>Prompt template:</strong>
+        <button id="copyPromptBtn" title="Copy prompt to clipboard" style="margin-left:0.7em;padding:0.2em 0.7em;font-size:1em;border-radius:5px;background:#ffd600;color:#232323;border:none;cursor:pointer;vertical-align:middle;">
+          <svg width="18" height="18" viewBox="0 0 20 20" style="vertical-align:middle;position:relative;top:2px;"><rect x="4" y="4" width="12" height="12" rx="2" fill="#fff" stroke="#232323" stroke-width="1.2"/><rect x="7" y="7" width="9" height="9" rx="1.5" fill="#ffd600" stroke="#232323" stroke-width="1.2"/></svg> Copy
+        </button>
+      </p>
+      <div style="font-size:0.98em;color:#ffd600;margin-bottom:0.3em;">Click to copy the prompt, then paste it into ChatGPT.</div>
+      <pre id="promptTemplate" style="background:#181818;color:#ffd600;padding:0.7em 1em;border-radius:6px;white-space:pre-wrap;font-size:1em;">
+Generate a JSON object for a custom breadmaker program. Each program must have:
+- A unique "name" (max 31 chars)
+- A "customStages" array, each with:
+    - "label": short stage name (e.g. "Mix", "Rise")
+    - "min": duration in minutes (integer)
+    - "temp": target temperature in °C (number)
+    - "heater": "on" or "off"
+    - "light": "on" or "off"
+    - "buzzer": "on" or "off"
+    - "mixPattern": array of steps, each with "action" ("mix" or "off") and "durationSec" (integer)
+    - "instructions": (string, what the user should do at this stage, or "No action needed.")
+- Do not include any steps that would smash eggs with the mixer.
+- Only use safe, realistic breadmaking steps.
+- Example:
+{
+  "name": "Brioche",
+  "customStages": [
+    { "label": "Mix", "min": 8, "temp": 28, "heater": "on", "light": "off", "buzzer": "off", "mixPattern": [ {"action":"mix","durationSec":60},{"action":"off","durationSec":30} ], "instructions": "Add flour and yeast, start mixing." },
+    { "label": "Rise", "min": 60, "temp": 28, "heater": "on", "light": "off", "buzzer": "off", "mixPattern": [], "instructions": "No action needed." },
+    { "label": "Bake", "min": 35, "temp": 180, "heater": "on", "light": "on", "buzzer": "on", "mixPattern": [], "instructions": "Remove bread after baking." }
+  ]
+}
+</pre>
+      <p>Paste the generated JSON below and click <b>Validate & Add</b> to add it as a new program.</p>
+      <textarea id="jsonPaste" rows="10" style="width:100%;margin-top:0.7em;font-size:1em;background:#181818;color:#ffd600;border-radius:6px;padding:0.7em 1em;"></textarea>
+      <div style="margin-top:0.5em;">
+        <button id="validateAddBtn" style="background:#ffd600;color:#232323;font-size:1em;padding:0.3em 1.2em;border-radius:6px;border:none;cursor:pointer;">Validate & Add</button>
+        <span id="jsonError" style="color:#ff6666;margin-left:1em;"></span>
+        <button id="genaiHideBtn" style="margin-left:2em;background:#232323;color:#ffd600;font-size:0.95em;padding:0.2em 1em;border-radius:6px;border:1px solid #ffd600;cursor:pointer;">Close</button>
+      </div>
+    </div>
   </div>
+  <script>
+    // Show/hide genai section
+    document.addEventListener('DOMContentLoaded', function() {
+      var showBtn = document.getElementById('genaiShowBtn');
+      var genai = document.getElementById('genaiSection');
+      var hideBtn = document.getElementById('genaiHideBtn');
+      if (showBtn && genai) {
+        showBtn.onclick = function() { genai.style.display = 'block'; window.scrollTo(0,document.body.scrollHeight); };
+      }
+      if (hideBtn && genai) {
+        hideBtn.onclick = function() { genai.style.display = 'none'; };
+      }
+    });
+  </script>
   <script src="programs.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.loadProgramsEditor) loadProgramsEditor();
+    });
+  </script>
 </body>
 </html>

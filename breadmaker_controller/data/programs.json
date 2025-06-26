@@ -1,22 +1,68 @@
-{
-  "programs": {
-    "default": {
-      "autolyseTime": 30,
-      "mixTime": 15,
-      "bulkTemp": 25,
-      "bulkTime": 720,
-      "knockDownTime": 15,
-      "riseTemp": 25,
-      "riseTime": 720,
-      "bake1Temp": 170,
-      "bake1Time": 15,
-      "bake2Temp": 210,
-      "bake2Time": 25,
-      "coolTime": 10
-    }
+[
+  {
+    "name": "Sourdough Bread",
+    "customStages": [
+      { "label": "Autolyse", "min": 30, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 1800 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Mix", "min": 15, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 }, { "action": "mix", "durationSec": 120 }, { "action": "wait", "durationSec": 30 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Bulk Ferment", "min": 240, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 14400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Perform stretch and folds if desired." },
+      { "label": "Shape & Proof", "min": 120, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 7200 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Shape dough and proof outside the machine. Bake after this stage." }
+    ]
   },
-  "calibration": {
-    "slope": 1.0,
-    "offset": 0.0
+  {
+    "name": "Sourdough Pizza Dough",
+    "customStages": [
+      { "label": "Autolyse", "min": 20, "temp": 24, "mixPattern": [ { "action": "wait", "durationSec": 1200 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Mix", "min": 10, "temp": 24, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 }, { "action": "mix", "durationSec": 60 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Bulk Ferment", "min": 180, "temp": 24, "mixPattern": [ { "action": "wait", "durationSec": 10800 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Perform stretch and folds if desired." },
+      { "label": "Cold Proof", "min": 720, "temp": 5, "mixPattern": [ { "action": "wait", "durationSec": 43200 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Refrigerate dough. Use as needed after this stage." }
+    ]
+  },
+  {
+    "name": "Yogurt/Kefir/Cultured Dairy",
+    "customStages": [
+      { "label": "Incubate", "min": 480, "temp": 40, "mixPattern": [ { "action": "mix", "durationSec": 10 }, { "action": "wait", "durationSec": 1790 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add milk and starter at the beginning. Remove product when finished." }
+    ]
+  },
+  {
+    "name": "Soft Cheese Making",
+    "customStages": [
+      { "label": "Heat Milk", "min": 30, "temp": 85, "mixPattern": [ { "action": "mix", "durationSec": 20 }, { "action": "wait", "durationSec": 280 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add milk at the beginning. Remove curds when formed." }
+    ]
+  },
+  {
+    "name": "Chocolate Tempering",
+    "customStages": [
+      { "label": "Melt", "min": 10, "temp": 50, "mixPattern": [ { "action": "mix", "durationSec": 12 }, { "action": "wait", "durationSec": 48 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add chocolate at the beginning." },
+      { "label": "Cool", "min": 15, "temp": 28, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 120 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Remove chocolate when finished." }
+    ]
+  },
+  {
+    "name": "Sous Vide Cooking",
+    "customStages": [
+      { "label": "Sous Vide", "min": 120, "temp": 60, "mixPattern": [ { "action": "wait", "durationSec": 7200 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Seal food in bag at the beginning. Remove when done. For eggs or fragile items, do not use mixing." }
+    ]
+  },
+  {
+    "name": "Sourdough Bread - In-Machine",
+    "customStages": [
+      { "label": "Autolyse", "min": 30, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 1800 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Mix", "min": 15, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 }, { "action": "mix", "durationSec": 120 }, { "action": "wait", "durationSec": 30 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Bulk Ferment", "min": 240, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 14400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Perform stretch and folds if desired." },
+      { "label": "Proof", "min": 120, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 7200 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Score dough now, then close lid to bake." },
+      { "label": "Bake 1", "min": 15, "temp": 230, "mixPattern": [ { "action": "wait", "durationSec": 900 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Bake 2", "min": 25, "temp": 200, "mixPattern": [ { "action": "wait", "durationSec": 1500 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Cool", "min": 10, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 600 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Remove bread when cool." }
+    ]
+  },
+  {
+    "name": "Classic White Bread",
+    "customStages": [
+      { "label": "Mix", "min": 10, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 300 }, { "action": "wait", "durationSec": 300 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Bulk Ferment", "min": 60, "temp": 27, "mixPattern": [ { "action": "wait", "durationSec": 3600 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Knockdown", "min": 2, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Proof", "min": 40, "temp": 27, "mixPattern": [ { "action": "wait", "durationSec": 2400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Bake", "min": 40, "temp": 190, "mixPattern": [ { "action": "wait", "durationSec": 2400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Cool", "min": 10, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 600 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Remove bread when cool." }
+    ]
   }
-}
+]

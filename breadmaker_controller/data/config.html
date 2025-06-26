@@ -41,11 +41,54 @@
   <div class="container">
     <h2>Configuration</h2>
     <div class="config-links">
-      <button class="config-link-btn" onclick="location.href='/programs'">Edit Programs</button>
-      <button class="config-link-btn" onclick="location.href='/calibrate'">Calibrate Temperature</button>
-      <button class="config-link-btn" onclick="location.href='/update'">Firmware Update</button>
+      <button class="config-link-btn" onclick="location.href='/programs.html'">Edit Programs</button>
+      <button class="config-link-btn" onclick="location.href='/calibration.html'">Calibrate Temperature</button>
+      <button class="config-link-btn" onclick="location.href='/update.html'">Firmware Update</button>
+    </div>
+    <div style="margin:2em 0 1em 0; text-align:center;">
+      <label style="font-size:1.1em;">
+        Output Mode:
+        <select id="outputModeSelect" style="margin-left:0.7em; font-size:1em; padding:0.3em 1em; border-radius:6px;">
+          <option value="digital">Digital (ON/OFF)</option>
+          <option value="analog">Analog (PWM)</option>
+        </select>
+      </label>
+      <span id="outputModeStatus" style="margin-left:1em; color:#ff9933;"></span>
+    </div>
+    <div style="margin:1.5em 0 1em 0; text-align:center;">
+      <label style="font-size:1.1em;">
+        Debug Serial:
+        <input type="checkbox" id="debugSerialCheckbox" style="transform:scale(1.3);margin-left:0.7em;vertical-align:middle;">
+      </label>
+      <span id="debugSerialStatus" style="margin-left:1em; color:#ffd600;"></span>
     </div>
     <button class="back-btn" onclick="location.href='/'">Back</button>
   </div>
+  <script src="debug_serial.js"></script>
+  <script>
+    // Output mode switch logic
+    const outputModeSelect = document.getElementById('outputModeSelect');
+    const outputModeStatus = document.getElementById('outputModeStatus');
+    function fetchOutputMode() {
+      fetch('/api/output_mode')
+        .then(r => r.json())
+        .then(d => {
+          outputModeSelect.value = d.mode;
+          outputModeStatus.textContent = d.mode === 'digital' ? 'Digital (ON/OFF)' : 'Analog (PWM)';
+        });
+    }
+    outputModeSelect.onchange = function() {
+      fetch('/api/output_mode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mode: outputModeSelect.value})
+      })
+      .then(r => r.json())
+      .then(d => {
+        outputModeStatus.textContent = d.mode === 'digital' ? 'Digital (ON/OFF)' : 'Analog (PWM)';
+      });
+    };
+    fetchOutputMode();
+  </script>
 </body>
 </html>
