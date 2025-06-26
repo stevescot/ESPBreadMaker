@@ -191,20 +191,26 @@ function updateStatus(s) {
 
   // ---- Status labels ----
   if (document.getElementById('stage')) {
-    let stageText = s.stage;
-    // Show custom stage label if customStages present and running
-    if (s.programs && s.program && s.programs[s.program] && Array.isArray(s.programs[s.program].customStages) && s.stage !== 'Idle') {
-      const prog = s.programs[s.program];
-      // Try to find current stage index by s.stageIdx, else by matching s.stage to label (case-insensitive)
-      let idx = (typeof s.stageIdx === 'number') ? s.stageIdx : -1;
-      if (idx < 0 && typeof s.stage === 'string') {
-        idx = prog.customStages.findIndex(st => (st.label||'').toLowerCase() === s.stage.toLowerCase());
-      }
-      if (idx >= 0 && prog.customStages[idx] && prog.customStages[idx].label) {
-        stageText = prog.customStages[idx].label;
+    let stageText = 'Idle';
+    if (s && s.stage && s.stage !== 'Idle' && s.running) {
+      // Show custom stage label if customStages present and running
+      if (s.programs && s.program && s.programs[s.program] && Array.isArray(s.programs[s.program].customStages)) {
+        const prog = s.programs[s.program];
+        // Try to find current stage index by s.stageIdx, else by matching s.stage to label (case-insensitive)
+        let idx = (typeof s.stageIdx === 'number') ? s.stageIdx : -1;
+        if (idx < 0 && typeof s.stage === 'string') {
+          idx = prog.customStages.findIndex(st => (st.label||'').toLowerCase() === s.stage.toLowerCase());
+        }
+        if (idx >= 0 && prog.customStages[idx] && prog.customStages[idx].label) {
+          stageText = prog.customStages[idx].label;
+        } else if (typeof s.stage === 'string') {
+          stageText = s.stage;
+        }
+      } else if (typeof s.stage === 'string') {
+        stageText = s.stage;
       }
     }
-    document.getElementById('stage').textContent = stageText;
+    document.getElementById('stage').textContent = stageText || 'Idle';
   }
   if (document.getElementById('temp')) document.getElementById('temp').innerHTML = (typeof s.temp === 'number' ? s.temp.toFixed(1) : '--') + '&deg;C';
   if (document.getElementById('setTemp')) document.getElementById('setTemp').innerHTML = (typeof s.setTemp === 'number' ? 'Set: ' + s.setTemp.toFixed(1) + '&deg;C' : '');

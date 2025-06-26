@@ -1,68 +1,159 @@
 [
   {
-    "name": "Sourdough Bread",
+    "name": "Bread - Sourdough Basic",
     "customStages": [
-      { "label": "Autolyse", "min": 30, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 1800 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Mix", "min": 15, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 }, { "action": "mix", "durationSec": 120 }, { "action": "wait", "durationSec": 30 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Bulk Ferment", "min": 240, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 14400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Perform stretch and folds if desired." },
+      { "label": "Autolyse", "min": 30, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 1800 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 500g bread flour and 350g water at the beginning of this stage." },
+      { "label": "Mix", "min": 15, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 }, { "action": "mix", "durationSec": 120 }, { "action": "wait", "durationSec": 30 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 150g active sourdough starter and 10g salt at the beginning of this stage." },
+      { "label": "Bulk Ferment", "min": 240, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 14400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Perform stretch and folds every 30 minutes for the first 2 hours if desired." },
+      { "label": "Knockdown", "min": 2, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Degas dough gently, then rest." },
       { "label": "Shape & Proof", "min": 120, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 7200 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Shape dough and proof outside the machine. Bake after this stage." }
     ]
   },
   {
-    "name": "Sourdough Pizza Dough",
+    "name": "Bread - Sourdough In-Machine",
     "customStages": [
-      { "label": "Autolyse", "min": 20, "temp": 24, "mixPattern": [ { "action": "wait", "durationSec": 1200 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Mix", "min": 10, "temp": 24, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 }, { "action": "mix", "durationSec": 60 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Bulk Ferment", "min": 180, "temp": 24, "mixPattern": [ { "action": "wait", "durationSec": 10800 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Perform stretch and folds if desired." },
+      { "label": "Autolyse", "min": 30, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 1800 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 400g bread flour and 280g water at the beginning of this stage." },
+      { "label": "Mix", "min": 15, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 }, { "action": "mix", "durationSec": 120 }, { "action": "wait", "durationSec": 30 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 120g active sourdough starter and 8g salt at the beginning of this stage." },
+      { "label": "Bulk Ferment", "min": 240, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 14400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Perform stretch and folds every 30 minutes for the first 2 hours if desired." },
+      { "label": "Knockdown", "min": 2, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Degas dough gently, then rest." },
+      { "label": "Proof", "min": 120, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 7200 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Score dough now, then close lid to bake." },
+      { "label": "Bake 1", "min": 15, "temp": 230, "mixPattern": [ { "action": "wait", "durationSec": 900 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Bake 2", "min": 25, "temp": 200, "mixPattern": [ { "action": "wait", "durationSec": 1500 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Cool", "min": 10, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 600 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Remove bread when cool." }
+    ]
+  },
+  {
+    "name": "Bread - Sourdough Pizza Dough",
+    "customStages": [
+      { "label": "Autolyse", "min": 20, "temp": 24, "mixPattern": [ { "action": "wait", "durationSec": 1200 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 500g bread flour and 325g water at the beginning of this stage." },
+      { "label": "Mix", "min": 10, "temp": 24, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 }, { "action": "mix", "durationSec": 60 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 100g sourdough starter, 10g salt, and 30g olive oil at the beginning of this stage." },
+      { "label": "Bulk Ferment", "min": 180, "temp": 24, "mixPattern": [ { "action": "wait", "durationSec": 10800 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Perform stretch and folds every 30 minutes for the first 2 hours if desired." },
+      { "label": "Knockdown", "min": 2, "temp": 24, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Degas dough gently, then rest." },
       { "label": "Cold Proof", "min": 720, "temp": 5, "mixPattern": [ { "action": "wait", "durationSec": 43200 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Refrigerate dough. Use as needed after this stage." }
     ]
   },
   {
-    "name": "Yogurt/Kefir/Cultured Dairy",
+    "name": "Bread - White Basic",
     "customStages": [
-      { "label": "Incubate", "min": 480, "temp": 40, "mixPattern": [ { "action": "mix", "durationSec": 10 }, { "action": "wait", "durationSec": 1790 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add milk and starter at the beginning. Remove product when finished." }
-    ]
-  },
-  {
-    "name": "Soft Cheese Making",
-    "customStages": [
-      { "label": "Heat Milk", "min": 30, "temp": 85, "mixPattern": [ { "action": "mix", "durationSec": 20 }, { "action": "wait", "durationSec": 280 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add milk at the beginning. Remove curds when formed." }
-    ]
-  },
-  {
-    "name": "Chocolate Tempering",
-    "customStages": [
-      { "label": "Melt", "min": 10, "temp": 50, "mixPattern": [ { "action": "mix", "durationSec": 12 }, { "action": "wait", "durationSec": 48 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add chocolate at the beginning." },
-      { "label": "Cool", "min": 15, "temp": 28, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 120 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Remove chocolate when finished." }
-    ]
-  },
-  {
-    "name": "Sous Vide Cooking",
-    "customStages": [
-      { "label": "Sous Vide", "min": 120, "temp": 60, "mixPattern": [ { "action": "wait", "durationSec": 7200 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Seal food in bag at the beginning. Remove when done. For eggs or fragile items, do not use mixing." }
-    ]
-  },
-  {
-    "name": "Sourdough Bread - In-Machine",
-    "customStages": [
-      { "label": "Autolyse", "min": 30, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 1800 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Mix", "min": 15, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 }, { "action": "mix", "durationSec": 120 }, { "action": "wait", "durationSec": 30 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Bulk Ferment", "min": 240, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 14400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Perform stretch and folds if desired." },
-      { "label": "Proof", "min": 120, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 7200 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Score dough now, then close lid to bake." },
-      { "label": "Bake 1", "min": 15, "temp": 230, "mixPattern": [ { "action": "wait", "durationSec": 900 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Bake 2", "min": 25, "temp": 200, "mixPattern": [ { "action": "wait", "durationSec": 1500 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Mix", "min": 10, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 300 }, { "action": "wait", "durationSec": 300 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 500g bread flour, 300g water, 7g instant yeast, 10g salt, 30g butter at the beginning of this stage." },
+      { "label": "Bulk Ferment", "min": 60, "temp": 27, "mixPattern": [ { "action": "wait", "durationSec": 3600 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Knockdown", "min": 2, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 } ], "heater": "off", "light": "off", "buzzer": "off" },
+      { "label": "Proof", "min": 40, "temp": 27, "mixPattern": [ { "action": "wait", "durationSec": 2400 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Bake", "min": 40, "temp": 190, "mixPattern": [ { "action": "wait", "durationSec": 2400 } ], "heater": "on", "light": "off", "buzzer": "off" },
       { "label": "Cool", "min": 10, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 600 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Remove bread when cool." }
     ]
   },
   {
-    "name": "Classic White Bread",
+    "name": "Bread - Whole Wheat",
     "customStages": [
-      { "label": "Mix", "min": 10, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 300 }, { "action": "wait", "durationSec": 300 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Bulk Ferment", "min": 60, "temp": 27, "mixPattern": [ { "action": "wait", "durationSec": 3600 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Knockdown", "min": 2, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Proof", "min": 40, "temp": 27, "mixPattern": [ { "action": "wait", "durationSec": 2400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
-      { "label": "Bake", "min": 40, "temp": 190, "mixPattern": [ { "action": "wait", "durationSec": 2400 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "No action needed." },
+      { "label": "Mix", "min": 12, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 360 }, { "action": "wait", "durationSec": 360 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 300g whole wheat flour, 200g bread flour, 350g water, 8g instant yeast, 10g salt, 30g honey at the beginning of this stage." },
+      { "label": "Bulk Ferment", "min": 70, "temp": 27, "mixPattern": [ { "action": "wait", "durationSec": 4200 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Knockdown", "min": 2, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 } ], "heater": "off", "light": "off", "buzzer": "off" },
+      { "label": "Proof", "min": 45, "temp": 27, "mixPattern": [ { "action": "wait", "durationSec": 2700 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Bake", "min": 45, "temp": 180, "mixPattern": [ { "action": "wait", "durationSec": 2700 } ], "heater": "on", "light": "off", "buzzer": "off" },
       { "label": "Cool", "min": 10, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 600 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Remove bread when cool." }
+    ]
+  },
+  {
+    "name": "Bread - Enriched Sweet",
+    "customStages": [
+      { "label": "Mix", "min": 15, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 360 }, { "action": "wait", "durationSec": 240 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 500g bread flour, 200g milk, 100g water, 2 eggs, 10g instant yeast, 10g salt, 60g sugar, 60g butter at the beginning of this stage." },
+      { "label": "Bulk Ferment", "min": 90, "temp": 28, "mixPattern": [ { "action": "wait", "durationSec": 5400 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Knockdown", "min": 2, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 } ], "heater": "off", "light": "off", "buzzer": "off" },
+      { "label": "Proof", "min": 60, "temp": 28, "mixPattern": [ { "action": "wait", "durationSec": 3600 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Bake", "min": 35, "temp": 175, "mixPattern": [ { "action": "wait", "durationSec": 2100 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Cool", "min": 10, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 600 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Remove bread when cool." }
+    ]
+  },
+  {
+    "name": "Bread - Rye",
+    "customStages": [
+      { "label": "Mix", "min": 15, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 360 }, { "action": "wait", "durationSec": 240 } ], "heater": "off", "light": "on", "buzzer": "off", "instructions": "Add 300g rye flour, 200g bread flour, 350g water, 10g instant yeast, 10g salt, 20g molasses at the beginning of this stage." },
+      { "label": "Bulk Ferment", "min": 75, "temp": 28, "mixPattern": [ { "action": "wait", "durationSec": 4500 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Knockdown", "min": 2, "temp": 25, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 60 } ], "heater": "off", "light": "off", "buzzer": "off" },
+      { "label": "Proof", "min": 50, "temp": 28, "mixPattern": [ { "action": "wait", "durationSec": 3000 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Bake", "min": 50, "temp": 185, "mixPattern": [ { "action": "wait", "durationSec": 3000 } ], "heater": "on", "light": "off", "buzzer": "off" },
+      { "label": "Cool", "min": 10, "temp": 25, "mixPattern": [ { "action": "wait", "durationSec": 600 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Remove bread when cool." }
+    ]
+  },
+  {
+    "name": "Dairy - Yogurt Making",
+    "customStages": [
+      { "label": "Incubate", "min": 480, "temp": 40, "mixPattern": [ { "action": "mix", "durationSec": 10 }, { "action": "wait", "durationSec": 1790 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add 1L milk and 2 tbsp yogurt starter at the beginning of this stage." }
+    ]
+  },
+  {
+    "name": "Dairy - Soft Cheese",
+    "customStages": [
+      { "label": "Heat Milk", "min": 30, "temp": 85, "mixPattern": [ { "action": "mix", "durationSec": 20 }, { "action": "wait", "durationSec": 280 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add 2L milk and starter culture at the beginning of this stage. Add 1/4 tsp rennet if required. Remove curds when formed." }
+    ]
+  },
+  {
+    "name": "Dessert - Chocolate Tempering",
+    "customStages": [
+      { "label": "Melt", "min": 10, "temp": 50, "mixPattern": [ { "action": "mix", "durationSec": 12 }, { "action": "wait", "durationSec": 48 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add 300g chocolate (chopped) at the beginning of this stage." },
+      { "label": "Cool", "min": 15, "temp": 28, "mixPattern": [ { "action": "mix", "durationSec": 60 }, { "action": "wait", "durationSec": 120 } ], "heater": "off", "light": "off", "buzzer": "off" }
+    ]
+  },
+  {
+    "name": "Dessert - Soft Caramel",
+    "customStages": [
+      { "label": "Sugar Melt", "min": 5, "temp": 160, "mixPattern": [ { "action": "mix", "durationSec": 5 }, { "action": "wait", "durationSec": 25 } ], "heater": "on", "light": "on", "buzzer": "off", "instructions": "Add 200g granulated sugar and 60ml water. Mix until sugar dissolves." },
+      { "label": "Heat & Stir", "min": 8, "temp": 118, "mixPattern": [ { "action": "mix", "durationSec": 15 }, { "action": "wait", "durationSec": 45 } ], "heater": "on", "light": "on", "buzzer": "off", "instructions": "Once sugar is amber, carefully add 120ml warm heavy cream, 56g butter, 1/4 tsp salt. Mixture will bubble vigorously." },
+      { "label": "Cook", "min": 12, "temp": 118, "mixPattern": [ { "action": "mix", "durationSec": 10 }, { "action": "wait", "durationSec": 50 } ], "heater": "on", "light": "on", "buzzer": "off", "instructions": "Cook until mixture reaches soft-ball stage (116-118°C). Add 1 tsp vanilla extract at end." },
+      { "label": "Cool", "min": 30, "temp": 20, "mixPattern": [ { "action": "mix", "durationSec": 30 }, { "action": "wait", "durationSec": 270 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Let caramel cool and thicken. Pour into prepared container when done." }
+    ]
+  },
+  {
+    "name": "Utility - Sous Vide",
+    "customStages": [
+      { "label": "Sous Vide", "min": 120, "temp": 60, "mixPattern": [ { "action": "wait", "durationSec": 7200 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Fill with water, set desired temperature. Seal food in bag and submerge. For eggs or fragile items, do not use mixing." }
+    ]
+  },
+  {
+    "name": "Utility - Herb Drying",
+    "customStages": [
+      { "label": "Dry", "min": 180, "temp": 35, "mixPattern": [ { "action": "wait", "durationSec": 10800 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Place clean herbs in a single layer. Leave lid slightly open for ventilation." }
+    ]
+  },
+  {
+    "name": "Utility - Butter Melting",
+    "customStages": [
+      { "label": "Gentle Melt", "min": 5, "temp": 45, "mixPattern": [ { "action": "mix", "durationSec": 5 }, { "action": "wait", "durationSec": 55 } ], "heater": "on", "light": "on", "buzzer": "off", "instructions": "Add cold butter (up to 250g). Watch carefully to avoid browning." },
+      { "label": "Hold Warm", "min": 30, "temp": 40, "mixPattern": [ { "action": "mix", "durationSec": 5 }, { "action": "wait", "durationSec": 295 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Butter will stay liquid but won't brown. Use as needed." }
+    ]
+  },
+  {
+    "name": "Utility - Sanitize Container",
+    "customStages": [
+      { "label": "Heat", "min": 10, "temp": 85, "mixPattern": [ { "action": "wait", "durationSec": 600 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Fill with water. Place clean jars or containers to be sanitized." },
+      { "label": "Hold", "min": 10, "temp": 85, "mixPattern": [ { "action": "wait", "durationSec": 600 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Keep containers submerged. Remove carefully when done." }
+    ]
+  },
+  {
+    "name": "Utility - Proof Box",
+    "customStages": [
+      { "label": "Maintain Warm", "min": 180, "temp": 28, "mixPattern": [ { "action": "wait", "durationSec": 10800 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add a small dish of warm water for humidity. Place covered dough inside to proof." }
+    ]
+  },
+  {
+    "name": "Utility - Melt Beeswax",
+    "customStages": [
+      { "label": "Melt", "min": 15, "temp": 65, "mixPattern": [ { "action": "mix", "durationSec": 10 }, { "action": "wait", "durationSec": 290 } ], "heater": "on", "light": "on", "buzzer": "off", "instructions": "Add beeswax pieces. For candle or cosmetic making. Use container you can dispose of or dedicate to wax." },
+      { "label": "Hold", "min": 30, "temp": 65, "mixPattern": [ { "action": "mix", "durationSec": 5 }, { "action": "wait", "durationSec": 295 } ], "heater": "on", "light": "on", "buzzer": "off", "instructions": "Keeps wax liquid for pouring. Add oils or scents if desired." }
+    ]
+  },
+  {
+    "name": "Utility - Hot Towel Warmer",
+    "customStages": [
+      { "label": "Warm", "min": 20, "temp": 50, "mixPattern": [ { "action": "wait", "durationSec": 1200 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add rolled damp towels. Keep lid closed until ready to use." }
+    ]
+  },
+  {
+    "name": "Utility - DIY Lotions",
+    "customStages": [
+      { "label": "Heat Oil Phase", "min": 20, "temp": 70, "mixPattern": [ { "action": "mix", "durationSec": 5 }, { "action": "wait", "durationSec": 115 } ], "heater": "on", "light": "off", "buzzer": "off", "instructions": "Add oils, butters, emulsifier, and oil-soluble ingredients." },
+      { "label": "Cool & Mix", "min": 15, "temp": 40, "mixPattern": [ { "action": "mix", "durationSec": 30 }, { "action": "wait", "durationSec": 30 } ], "heater": "off", "light": "off", "buzzer": "off", "instructions": "Add water phase ingredients. Mix until emulsified and cooled." }
     ]
   }
 ]

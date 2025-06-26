@@ -402,11 +402,17 @@
   <script>
       // Robust to missing/invalid program selection on initial load
       document.addEventListener('DOMContentLoaded', function() {
-        // Hide planSummary and statusBlock if no program is selected
+        // Hide planSummary and statusBlock if no program is selected, unless running
+        window._lastStatus = window._lastStatus || {};
         function safeUpdateUI() {
           var progSelect = document.getElementById('progSelect');
           var planSummary = document.getElementById('planSummary');
           var statusBlock = document.getElementById('statusBlock');
+          // If running, always show statusBlock
+          if (window._lastStatus.running) {
+            if (statusBlock) statusBlock.style.display = '';
+            return;
+          }
           if (progSelect && (!progSelect.value || progSelect.selectedIndex === -1)) {
             if (planSummary) planSummary.innerHTML = '<i>No bread program selected.</i>';
             if (statusBlock) statusBlock.style.display = 'none';
@@ -414,14 +420,54 @@
             if (statusBlock) statusBlock.style.display = '';
           }
         }
-        // Run once on load
-        safeUpdateUI();
-        // Also run when program selection changes
-        var progSelect = document.getElementById('progSelect');
-        if (progSelect) {
-          progSelect.addEventListener('change', safeUpdateUI);
+        // --- Smooth time left countdown ---
+        var stageEndTime = null; // seconds since epoch
+        var stageActive = false;
+        var timeLeftElem = document.getElementById('timeLeft');
+        var lastTimeLeftStr = null;
+        function updateTimeLeftDisplay() {
+          if (!stageActive || !stageEndTime) {
+            if (timeLeftElem && lastTimeLeftStr !== '--') {
+              timeLeftElem.textContent = '--';
+              lastTimeLeftStr = '--';
+            }
+            return;
+          }
+          var now = Date.now() / 1000;
+          var timeLeft = Math.max(0, Math.round(stageEndTime - now));
+          var h = Math.floor(timeLeft / 3600);
+          var m = Math.floor((timeLeft % 3600) / 60);
+          var sec = timeLeft % 60;
+          var str = h > 0 ? (h+":"+(m<10?"0":"")+m+":"+(sec<10?"0":"")+sec) : (m+":"+(sec<10?"0":"")+sec);
+          if (timeLeftElem && lastTimeLeftStr !== str) {
+            timeLeftElem.textContent = str;
+            lastTimeLeftStr = str;
+          }
         }
-      });
+        setInterval(updateTimeLeftDisplay, 1000);
+        // Patch updateStatus to update _lastStatus and call safeUpdateUI
+        if (window.updateStatus) {
+          const origUpdateStatus = window.updateStatus;
+          window.updateStatus = function() {
+            fetch('/status')
+              .then(r => r.json())
+              .then(s => {
+                window._lastStatus = s;
+                origUpdateStatus && origUpdateStatus(s);
+                safeUpdateUI();
+                // --- Set stage end time for smooth countdown ---
+                if (s && s.stageStart && s.stageDuration && s.running) {
+                  stageEndTime = s.stageStart + s.stageDuration;
+                  stageActive = true;
+                } else {
+                  stageEndTime = null;
+                  stageActive = false;
+                }
+                updateTimeLeftDisplay(); // update immediately if needed
+              });
+      }
+    }
+      // ...existing code...
     </script>
   </body>
 </html>

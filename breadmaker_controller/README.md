@@ -74,6 +74,12 @@ See the test/README.md for test plan and details.
 - All configuration and program data is stored in LittleFS.
 - **Program selection:** If you have issues selecting a program with a long or special-character name, use the index-based selection (now default in the UI).
 - **Google Calendar links:** Calendar links in the plan summary are only shown for stages that require user interaction. The event time matches the required action, and the event links back to the breadmaker's web UI (e.g., `http://breadmaker.local/`).
+- **Custom Stages:** All programs now use only `customStages` with programmable steps, labels, and device control. Classic/legacy stage logic is fully removed from firmware and UI.
+- **Resume and Power Loss:** The system saves and restores the full program state (including current stage, timers, and indices) on every transition, and fast-forwards on boot to the correct point. This ensures robust resume after power loss.
+- **Knockdown Stage:** The "Sourdough Bread - In-Machine" program now includes a "Knockdown" stage after "Bulk Ferment" and before "Proof" for proper degassing.
+- **Light Output:** The light output is now always controlled with digital (on/off) logic to prevent flicker or interference with the motor or heater.
+- **UI Countdown:** The "Time Left (this stage)" countdown is now smooth and flicker-free, updating every second based on the backend's absolute stage timing.
+- **Mobile UI:** The UI is robust to mobile usage, with status polling paused while dropdowns are open to prevent flicker.
 
 ## License
 MIT

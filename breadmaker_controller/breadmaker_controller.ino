@@ -140,8 +140,8 @@ inline void setMotor(bool on) {
   else analogWrite(PIN_MOTOR, on ? 77 : 0);
 }
 inline void setLight(bool on) {
-  if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_LIGHT, on ? HIGH : LOW);
-  else analogWrite(PIN_LIGHT, on ? 77 : 0);
+  // Always use digitalWrite for light to avoid PWM timer conflicts
+  digitalWrite(PIN_LIGHT, on ? HIGH : LOW);
   if (on) lightOnTime = millis();
 }
 inline void setBuzzer(bool on) {
@@ -170,6 +170,8 @@ void setup() {
   Serial.println(programs.size());
   loadSettings();
   Serial.println("[setup] Settings loaded.");
+  loadResumeState();
+  Serial.println("[setup] Resume state loaded.");
 
   // --- WiFi connection debug output ---
   Serial.println("[wifi] Reading WiFi config...");
@@ -233,11 +235,13 @@ void setup() {
     setMotor(false);
     setHeater(false);
     setLight(false);
+    saveResumeState(); // Save on pause
     req->send(200, "text/plain", "Paused");
   });
   server.on("/resume", HTTP_GET, [](AsyncWebServerRequest* req){
     if (debugSerial) Serial.println("[ACTION] /resume called");
     isRunning = true;
+    saveResumeState(); // Save on resume
     req->send(200, "text/plain", "Resumed");
   });
   server.on("/advance", HTTP_GET, [](AsyncWebServerRequest* req){
@@ -253,6 +257,7 @@ void setup() {
     customMixStepStart = 0;
     isRunning = true;
     if (customStageIdx == 0) programStartTime = time(nullptr); // Reset programStartTime if looping
+    saveResumeState(); // Save on advance
     if (debugSerial) Serial.printf("[STAGE] Entering custom stage: %d\n", customStageIdx);
     req->send(200,"text/plain","Advanced");
   });
@@ -266,6 +271,7 @@ void setup() {
     customMixStepStart = 0;
     isRunning = true;
     if (customStageIdx == 0) programStartTime = time(nullptr); // Reset programStartTime if going back to start
+    saveResumeState(); // Save on back
     if (debugSerial) Serial.printf("[STAGE] Entering custom stage: %d\n", customStageIdx);
     req->send(200,"text/plain","Went back");
   });
@@ -337,17 +343,22 @@ void setup() {
       d["programStart"] = (uint32_t)programStartTime;
       // Elapsed time in current stage
       es = (customStageStart == 0) ? 0 : (nowMs - customStageStart) / 1000;
+      // --- FIX: Use programStartTime for absolute ready times ---
+      // Calculate stageReadyAt and programReadyAt based on programStartTime and stage durations
+      stageReadyAt = programStartTime;
+      for (size_t i = 0; i <= customStageIdx && i < p.customStages.size(); ++i) {
+        stageReadyAt += (time_t)p.customStages[i].min * 60;
+      }
+      programReadyAt = programStartTime;
+      for (size_t i = 0; i < p.customStages.size(); ++i) {
+        programReadyAt += (time_t)p.customStages[i].min * 60;
+      }
       // Time left in current stage
       if (customStageIdx < p.customStages.size()) {
-        stageLeft = max(0, (int)((unsigned long)p.customStages[customStageIdx].min * 60 - es));
-        stageReadyAt = now + stageLeft;
+        stageLeft = max(0, (int)(stageReadyAt - now));
       }
-      // Program ready at
-      programReadyAt = now;
-      for (size_t i = customStageIdx; i < p.customStages.size(); ++i) {
-        int stLeft = (i == customStageIdx) ? stageLeft : (int)p.customStages[i].min * 60;
-        programReadyAt += stLeft;
-      }
+      // Program left
+      // (programReadyAt - now) can be used if needed
     }
     d["elapsed"] = es;
     d["setTemp"] = Setpoint;
@@ -530,8 +541,9 @@ void saveResumeState() {
   doc["activeProgramName"] = activeProgramName;
   doc["customStageIdx"] = customStageIdx;
   doc["customMixIdx"] = customMixIdx;
-  doc["customStageStart"] = customStageStart;
-  doc["customMixStepStart"] = customMixStepStart;
+  // Save elapsed time in current stage and mix step (in seconds)
+  doc["elapsedStageSec"] = (customStageStart > 0) ? (millis() - customStageStart) / 1000UL : 0;
+  doc["elapsedMixSec"] = (customMixStepStart > 0) ? (millis() - customMixStepStart) / 1000UL : 0;
   doc["programStartTime"] = programStartTime;
   doc["isRunning"] = isRunning;
   File f = LittleFS.open(RESUME_FILE, "w");
@@ -555,13 +567,69 @@ void loadResumeState() {
   }
   customStageIdx = doc["customStageIdx"] | 0;
   customMixIdx = doc["customMixIdx"] | 0;
-  customStageStart = doc["customStageStart"] | 0;
-  customMixStepStart = doc["customMixStepStart"] | 0;
+  unsigned long elapsedStageSec = doc["elapsedStageSec"] | 0;
+  unsigned long elapsedMixSec = doc["elapsedMixSec"] | 0;
   programStartTime = doc["programStartTime"] | 0;
   isRunning = doc["isRunning"] | false;
+  // Fast-forward logic: if elapsed time > stage/mix durations, advance indices
+  if (isRunning && programs.count(activeProgramName)) {
+    Program &p = programs[activeProgramName];
+    // Fast-forward stages
+    size_t stageIdx = customStageIdx;
+    unsigned long remainStageSec = elapsedStageSec;
+    while (stageIdx < p.customStages.size()) {
+      unsigned long stageDurSec = p.customStages[stageIdx].min * 60UL;
+      if (remainStageSec < stageDurSec) break;
+      remainStageSec -= stageDurSec;
+      stageIdx++;
+    }
+    if (stageIdx >= p.customStages.size()) {
+      // Program finished
+      customStageIdx = 0;
+      customMixIdx = 0;
+      customStageStart = 0;
+      customMixStepStart = 0;
+      isRunning = false;
+      clearResumeState();
+      return;
+    }
+    customStageIdx = stageIdx;
+    customStageStart = millis() - remainStageSec * 1000UL;
+    if (customStageStart == 0) customStageStart = millis(); // Ensure nonzero for UI
+    // Fast-forward mix steps if mixPattern exists
+    CustomStage &st = p.customStages[customStageIdx];
+    if (!st.mixPattern.empty()) {
+      size_t mixIdx = 0;
+      unsigned long remainMixSec = elapsedMixSec;
+      while (mixIdx < st.mixPattern.size()) {
+        unsigned long mixDurSec = st.mixPattern[mixIdx].durationSec;
+        if (remainMixSec < mixDurSec) break;
+        remainMixSec -= mixDurSec;
+        mixIdx++;
+      }
+      if (mixIdx >= st.mixPattern.size()) mixIdx = 0;
+      customMixIdx = mixIdx;
+      customMixStepStart = millis() - remainMixSec * 1000UL;
+      if (customMixStepStart == 0) customMixStepStart = millis(); // Ensure nonzero for UI
+    } else {
+      customMixIdx = 0;
+      customMixStepStart = millis(); // Ensure nonzero for UI
+    }
+  } else {
+    // Not running or invalid program
+    customStageStart = millis() - elapsedStageSec * 1000UL;
+    customMixStepStart = millis() - elapsedMixSec * 1000UL;
+  }
 }
 
 void loop() {
+  static unsigned long lastDebugPrint = 0;
+  if (debugSerial && millis() - lastDebugPrint > 10000) { // Every 10 seconds
+    Serial.printf("[DEBUG] Heap: %lu bytes, isRunning: %d, activeProgram: %s, customStageIdx: %u, customMixIdx: %u\n",
+      ESP.getFreeHeap(), isRunning, activeProgramName, (unsigned)customStageIdx, (unsigned)customMixIdx);
+    lastDebugPrint = millis();
+  }
+  yield(); delay(1); // <--- Extra yield/delay at top
   if (!isRunning) {
     if (scheduledStart && time(nullptr) >= scheduledStart) {
       scheduledStart = 0;
@@ -570,37 +638,44 @@ void loop() {
       customMixIdx = 0;
       customStageStart = millis();
       customMixStepStart = 0;
+      saveResumeState(); // Save on scheduled start
     }
     yield(); delay(1); return;
   }
   if (programs.count(activeProgramName) == 0) {
-    stopBreadmaker(); return;
+    stopBreadmaker(); yield(); delay(1); return;
   }
   Program &p = programs[activeProgramName];
   // --- Custom Stages Logic ---
   if (!p.customStages.empty()) {
     if (customStageIdx >= p.customStages.size()) {
-      stopBreadmaker(); customStageIdx = 0; customStageStart = 0; clearResumeState(); return;
+      stopBreadmaker(); customStageIdx = 0; customStageStart = 0; clearResumeState(); yield(); delay(1); return;
     }
     CustomStage &st = p.customStages[customStageIdx];
     Setpoint = st.temp;
     Input = readTemperature();
     myPID.Compute();
     setHeater(st.heater == "on");
+    // --- Always set light every loop if stage requests it ---
     if (st.light == "on") setLight(true);
+    else setLight(false);
     setBuzzer(st.buzzer == "on");
+    yield(); delay(1); // <--- Extra yield/delay after output control
     if (!st.mixPattern.empty()) {
       if (customMixStepStart == 0) customMixStepStart = millis();
       MixStep &step = st.mixPattern[customMixIdx];
       if (step.action == "mix") setMotor(true);
       else setMotor(false);
+      yield(); delay(1); // <--- Extra yield/delay in mix pattern
       if (millis() - customMixStepStart >= (unsigned long)step.durationSec * 1000UL) {
         customMixIdx++;
         customMixStepStart = millis();
         if (customMixIdx >= st.mixPattern.size()) customMixIdx = 0; // Loop pattern
       }
+      yield(); delay(1); // <--- Extra yield/delay after mix step
     } else {
       setMotor(false);
+      yield(); delay(1);
     }
     if (millis() - customStageStart >= (unsigned long)st.min * 60000UL) {
       customStageIdx++;
@@ -608,13 +683,8 @@ void loop() {
       customMixIdx = 0;
       customMixStepStart = 0;
       if (customStageIdx >= p.customStages.size()) {
-        stopBreadmaker(); customStageIdx = 0; customStageStart = 0; clearResumeState(); return;
+        stopBreadmaker(); customStageIdx = 0; customStageStart = 0; clearResumeState(); yield(); delay(1); return;
       }
-    }
-    // --- Periodically save resume state ---
-    if (millis() - lastResumeSave > 60000) {
-      saveResumeState();
-      lastResumeSave = millis();
     }
     yield(); delay(1); return;
   }
@@ -627,8 +697,11 @@ void loop() {
       customLightOn = (st.light == "on");
     }
   }
+  yield(); delay(1);
   if (!customLightOn && lightOn() && (millis() - lightOnTime > 30000)) setLight(false);
+  yield(); delay(1);
   if (buzzActive && millis() - buzzStart >= 200) setBuzzer(false);
+  yield(); delay(1);
   if (scheduledStart && !isRunning) {
     if (time(nullptr) >= scheduledStart) {
       scheduledStart = 0;
@@ -637,6 +710,7 @@ void loop() {
       customMixIdx = 0;
       customStageStart = millis();
       customMixStepStart = 0;
+      saveResumeState(); // Save on scheduled start
     } else {
       yield(); delay(100);
       return;
@@ -686,6 +760,7 @@ void loadSettings() {
   Serial.print("[loadSettings] debugSerial: ");
   Serial.println(debugSerial ? "true" : "false");
   f.close();
+  Serial.println("[loadSettings] Settings loaded.");
 }
 void saveSettings() {
   Serial.println("[saveSettings] Saving settings...");
