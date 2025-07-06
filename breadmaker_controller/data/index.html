@@ -139,15 +139,39 @@
       gap: 0.7em;
       margin-bottom: 0.7em;
       margin-top: 0.2em;
+      /* Prevent layout shifts */
+      min-height: 2.5em;
+      contain: layout;
     }
     .program-label {
       font-size: 1em;
       color: #ccc;
+      /* Prevent width changes */
+      flex: 0 0 auto;
     }
     .program-name {
       font-size: 0.96em;
       color: #eee;
       font-style: italic;
+      /* Prevent text flicker */
+      transform: translateZ(0);
+      -webkit-font-smoothing: antialiased;
+    }
+    /* Style for program select dropdown */
+    #progSelect {
+      /* Prevent width changes but allow height to fit content */
+      min-width: 12em;
+      padding: 0.4em;
+      /* Ensure text is fully visible */
+      line-height: 1.2;
+      border-radius: 4px;
+    }
+    @media (max-width: 700px) {
+      #progSelect {
+        /* Ensure good tap target size and readable text on mobile */
+        padding: 0.5em;
+        font-size: 16px;
+      }
     }
     .sourdough-fab {
       position: fixed !important;
@@ -183,6 +207,37 @@
       color: #bbb;
       border: 2px solid #333;
     }
+    /* Manual temperature control styling */
+    #manualTempRow {
+      flex-wrap: wrap;
+    }
+    #manualTempInput {
+      text-align: center;
+    }
+    #btnSetTemp, #btnTempOff {
+      background: #4caf50;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #btnTempOff {
+      background: #f44336;
+    }
+    #btnSetTemp:hover {
+      background: #45a049;
+    }
+    #btnTempOff:hover {
+      background: #da190b;
+    }
+    @media (max-width: 700px) {
+      #manualTempRow {
+        font-size: 0.9em;
+      }
+      #manualTempInput {
+        width: 4em;
+      }
+    }
   </style>
 </head>
 <body>
@@ -197,113 +252,7 @@
       </g>
     </svg>
   </a>
-  <a href="/sourdough.html" class="config-cog sourdough-fab" title="Sourdough Starter Management">
-    <!-- Sourdough SVG Icon -->
-    <svg width="36px" height="36px" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
-      <g>
-        <!-- Jar -->
-        <rect x="10" y="12" width="16" height="16" rx="5" fill="#ffe0b2" stroke="#b8860b" stroke-width="2"/>
-        <!-- Bubbles -->
-        <circle cx="18" cy="22" r="2.2" fill="#fffde4" stroke="#e0c080" stroke-width="0.7"/>
-        <circle cx="14.5" cy="18.5" r="1.1" fill="#fffde4" stroke="#e0c080" stroke-width="0.5"/>
-        <circle cx="21.5" cy="18.5" r="1.1" fill="#fffde4" stroke="#e0c080" stroke-width="0.5"/>
-        <!-- Bread top -->
-        <ellipse cx="18" cy="13.5" rx="7" ry="3.2" fill="#f5e6b5" stroke="#e5c99a" stroke-width="1.2"/>
-        <!-- Bread scoring -->
-        <path d="M14 14 Q18 12.5 22 14" stroke="#d2b48c" stroke-width="0.7" fill="none"/>
-      </g>
-    </svg>
-  </a>
-
   <div class="container">
-    <!-- Breadmaker stage SVGs (all stages, only one visible) -->
-<div id="breadmakerSvgs" style="text-align:center;">
-  <div id="svg-delay"   class="bm-stage-svg" style="display:none">
-    <!-- DELAY SVG -->
-    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
-      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
-      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
-      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
-      <text x="29" y="34" font-size="8" fill="#bbb" font-family=íí"Arial">Zzz</text>
-    </svg>
-  </div>
-  <div id="svg-mix"   class="bm-stage-svg" style="display:none">
-    <!-- MIX SVG -->
-    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
-      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
-      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
-      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
-      <ellipse cx="35" cy="30" rx="11" ry="7" fill="#f5e6b5" stroke="#e5c99a" stroke-width="1.5"/>
-      <path d="M29 30 Q34 32 36 30 Q38 27 42 30" fill="none" stroke="#bbad7b" stroke-width="1.2"/>
-    </svg>
-  </div>
-  <div id="svg-bulk"   class="bm-stage-svg" style="display:none">
-    <!-- BULK/Rise SVG -->
-    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
-      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
-      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
-      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
-      <ellipse cx="35" cy="32" rx="12" ry="10" fill="#f5e6b5" stroke="#e5c99a" stroke-width="1.5"/>
-    </svg>
-  </div>
-  <div id="svg-knockdown"   class="bm-stage-svg" style="display:none">
-    <!-- Knockdown SVG -->
-    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
-      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
-      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
-      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
-      <ellipse cx="35" cy="35" rx="13" ry="5.5" fill="#f5e6b5" stroke="#e5c99a" stroke-width="1.5"/>
-    </svg>
-  </div>
-  <div id="svg-bake"   class="bm-stage-svg" style="display:none">
-    <!-- Bake SVG -->
-    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
-      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
-      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
-      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
-      <ellipse cx="35" cy="33" rx="13" ry="9" fill="#bb8640" stroke="#7c5a29" stroke-width="1.5"/>
-      <ellipse cx="35" cy="31" rx="9" ry="6.5" fill="#f5e6b5" stroke="none"/>
-      <path d="M29 20 Q31 18 33 20" stroke="#dca" stroke-width="1" fill="none"/>
-      <path d="M38 20 Q40 18 42 20" stroke="#dca" stroke-width="1" fill="none"/>
-    </svg>
-  </div>
-  <div id="svg-cool"   class="bm-stage-svg" style="display:none">
-    <!-- Cool SVG -->
-    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
-      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
-      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
-      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
-      <ellipse cx="35" cy="35" rx="13" ry="8" fill="#bb8640" stroke="#7c5a29" stroke-width="1.5"/>
-      <path d="M28 23 Q29 20 31 23" stroke="#fff2" stroke-width="1.3" fill="none"/>
-      <path d="M40 24 Q41 21 43 24" stroke="#fff2" stroke-width="1.3" fill="none"/>
-    </svg>
-  </div>
-  <div id="svg-autolyse"   class="bm-stage-svg" style="display:none">
-    <!-- Autolyse SVG (reuse delay SVG for now) -->
-    <svg width="120" height="80" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
-      <rect x="4" y="8" width="112" height="68" rx="10" fill="#ddd" stroke="#333" stroke-width="2"/>
-      <rect x="20" y="18" width="30" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="60" y="18" width="25" height="24" rx="3" fill="#fff" stroke="#999" stroke-width="1.5"/>
-      <rect x="90" y="12" width="22" height="16" rx="2.5" fill="#222" stroke="#888" stroke-width="1"/>
-      <rect x="102" y="16" width="7" height="6" rx="1.2" fill="#9cf" stroke="#333" stroke-width="0.5"/>
-      <text x="29" y="34" font-size="8" fill="#bbb" font-family="Arial">Autolyse</text>
-    </svg>
-  </div>
-</div>
-
-
     <div class="start-at-row">
       <label for="startAt">Start At:</label>
       <input type="time" id="startAt" value="">
@@ -317,7 +266,28 @@
       <span id="currentProg" class="program-name"></span>
     </div>
 
+    <!-- Manual Mode Toggle -->
+    <div id="manualModeRow" style="display:flex;align-items:center;justify-content:center;margin-bottom:0.7em;gap:0.7em;">
+      <label for="manualModeToggle" style="font-size:1em;color:#ffe;font-weight:bold;">Manual Mode:</label>
+      <input type="checkbox" id="manualModeToggle" style="width:1.3em;height:1.3em;">
+      <span id="manualModeStatus" style="color:#ffb;font-size:0.98em;"></span>
+    </div>
+
+    <!-- Manual Temperature Control -->
+    <div id="manualTempRow" style="display:none;align-items:center;justify-content:center;margin-bottom:0.7em;gap:0.7em;">
+      <label for="manualTempInput" style="font-size:1em;color:#ffe;font-weight:bold;">Target Temp:</label>
+      <input type="number" id="manualTempInput" min="0" max="250" step="1" placeholder="°C" style="width:5em;padding:0.3em;border-radius:4px;border:1px solid #666;background:#333;color:#fff;">
+      <button id="btnSetTemp" style="padding:0.3em 0.6em;border-radius:4px;">Set</button>
+      <button id="btnTempOff" style="padding:0.3em 0.6em;border-radius:4px;">Off</button>
+    </div>
+
     <div id="planSummary" style="margin:1em auto 1.2em auto; max-width:420px; background:#232323; color:#ffe; border-radius:8px; box-shadow:0 2px 8px #1116; padding:1em 1.2em; font-size:1em; text-align:left;"></div>
+
+    <!-- Stage Progress Bar -->
+    <div id="stageProgress" class="stage-progress"></div>
+
+    <!-- Startup Delay Message -->
+    <div id="startupDelayMessage" style="display:none; margin:0.5em auto; max-width:420px; background:#4a2c2a; color:#ffcccc; border-radius:6px; padding:0.8em 1em; font-size:1em; text-align:center; border:1px solid #8b4513;"></div>
 
     <div class="button-row">
       <button id="btnStart">Start</button>
@@ -329,7 +299,7 @@
 
     <div class="icon-row-devices">
       <div class="dev-icon-box">
-        <span id="mixIcon" class="icon" title="Motor">
+        <span id="mixIcon" class="icon" title="Motor" onclick="window.handleManualOutput('motor')">
           <svg viewBox="0 0 32 32" width="32" height="32">
             <g id="mixGroup" style="transform-origin: 16px 16px;">
               <circle cx="16" cy="16" r="13" stroke="#888" stroke-width="3" fill="none"/>
@@ -341,7 +311,7 @@
         <div class="dev-status" id="motor">OFF</div>
       </div>
       <div class="dev-icon-box">
-        <span id="heaterIcon" class="icon" title="Heater">
+        <span id="heaterIcon" class="icon" title="Heater" onclick="window.handleManualOutput('heater')">
           <svg viewBox="0 0 32 32" width="32" height="32">
             <path id="flamePath" d="M16 29C8 22 12 14 16 3C20 14 24 22 16 29Z" fill="#888"/>
           </svg>
@@ -350,7 +320,7 @@
         <div class="dev-status" id="heater">OFF</div>
       </div>
       <div class="dev-icon-box">
-        <span id="lightIcon" class="icon" title="Light">
+        <span id="lightIcon" class="icon" title="Light" onclick="window.handleManualOutput('light')">
           <svg viewBox="0 0 32 32" width="32" height="32">
             <ellipse id="bulb" cx="16" cy="17" rx="8" ry="10" fill="#888" />
             <rect x="13" y="26" width="6" height="4" rx="2" fill="#444"/>
@@ -360,7 +330,7 @@
         <div class="dev-status" id="light">OFF</div>
       </div>
       <div class="dev-icon-box">
-        <span id="buzzerIcon" class="icon" title="Buzzer">
+        <span id="buzzerIcon" class="icon" title="Buzzer" onclick="window.handleManualOutput('buzzer')">
           <svg viewBox="0 0 32 32" width="32" height="32">
             <polygon id="buzzBody" points="8,20 16,20 22,27 22,5 16,12 8,12" fill="#888"/>
             <path id="buzzWave" d="M25 12 Q29 16 25 20" stroke="#888" stroke-width="2" fill="none"/>
@@ -399,75 +369,5 @@
   </div>
   <script src="common.js"></script>
   <script src="script.js"></script>
-  <script>
-      // Robust to missing/invalid program selection on initial load
-      document.addEventListener('DOMContentLoaded', function() {
-        // Hide planSummary and statusBlock if no program is selected, unless running
-        window._lastStatus = window._lastStatus || {};
-        function safeUpdateUI() {
-          var progSelect = document.getElementById('progSelect');
-          var planSummary = document.getElementById('planSummary');
-          var statusBlock = document.getElementById('statusBlock');
-          // If running, always show statusBlock
-          if (window._lastStatus.running) {
-            if (statusBlock) statusBlock.style.display = '';
-            return;
-          }
-          if (progSelect && (!progSelect.value || progSelect.selectedIndex === -1)) {
-            if (planSummary) planSummary.innerHTML = '<i>No bread program selected.</i>';
-            if (statusBlock) statusBlock.style.display = 'none';
-          } else {
-            if (statusBlock) statusBlock.style.display = '';
-          }
-        }
-        // --- Smooth time left countdown ---
-        var stageEndTime = null; // seconds since epoch
-        var stageActive = false;
-        var timeLeftElem = document.getElementById('timeLeft');
-        var lastTimeLeftStr = null;
-        function updateTimeLeftDisplay() {
-          if (!stageActive || !stageEndTime) {
-            if (timeLeftElem && lastTimeLeftStr !== '--') {
-              timeLeftElem.textContent = '--';
-              lastTimeLeftStr = '--';
-            }
-            return;
-          }
-          var now = Date.now() / 1000;
-          var timeLeft = Math.max(0, Math.round(stageEndTime - now));
-          var h = Math.floor(timeLeft / 3600);
-          var m = Math.floor((timeLeft % 3600) / 60);
-          var sec = timeLeft % 60;
-          var str = h > 0 ? (h+":"+(m<10?"0":"")+m+":"+(sec<10?"0":"")+sec) : (m+":"+(sec<10?"0":"")+sec);
-          if (timeLeftElem && lastTimeLeftStr !== str) {
-            timeLeftElem.textContent = str;
-            lastTimeLeftStr = str;
-          }
-        }
-        setInterval(updateTimeLeftDisplay, 1000);
-        // Patch updateStatus to update _lastStatus and call safeUpdateUI
-        if (window.updateStatus) {
-          const origUpdateStatus = window.updateStatus;
-          window.updateStatus = function() {
-            fetch('/status')
-              .then(r => r.json())
-              .then(s => {
-                window._lastStatus = s;
-                origUpdateStatus && origUpdateStatus(s);
-                safeUpdateUI();
-                // --- Set stage end time for smooth countdown ---
-                if (s && s.stageStart && s.stageDuration && s.running) {
-                  stageEndTime = s.stageStart + s.stageDuration;
-                  stageActive = true;
-                } else {
-                  stageEndTime = null;
-                  stageActive = false;
-                }
-                updateTimeLeftDisplay(); // update immediately if needed
-              });
-      }
-    }
-      // ...existing code...
-    </script>
-  </body>
+</body>
 </html>

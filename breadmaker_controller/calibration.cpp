@@ -47,6 +47,6 @@ float tempFromRaw(int raw) {
 }
 
 float readTemperature() {
-  int raw = analogRead(A0); // PIN_RTD should be defined in main
+  int raw = analogRead(A0);  // RTD on analog pin A0
   return tempFromRaw(raw);
 }

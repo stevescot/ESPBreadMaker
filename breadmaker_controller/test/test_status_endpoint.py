@@ -65,6 +65,7 @@ class TestStatusEndpoint(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertIn("stageStartTimes", data)
+        self.assertIn("actualStageStartTimes", data)
         self.assertIn("stageReadyAt", data)
         self.assertIn("programReadyAt", data)
         self.assertIn("temp", data)
@@ -80,6 +81,7 @@ class TestStatusEndpoint(unittest.TestCase):
         data = resp.json()
         self.assertIn("stage", data)
         self.assertIn("stageStartTimes", data)
+        self.assertIn("actualStageStartTimes", data)
         self.assertIn("temp", data)
         self.assertIn("setTemp", data)
 

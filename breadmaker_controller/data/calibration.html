@@ -18,14 +18,35 @@
     <div>
       <b>Current RTD Reading:</b>
       <span id="rawReading">?</span>
+      <span style="margin-left: 1em; color: #ffd600;">
+        (<span id="calibPoints">0</span> points)
+      </span>
     </div>
     <div style="margin-top: 1em;">
-      <input type="number" id="newTemp" step="0.01" placeholder="Measured °C">
-      <button id="addPoint">Add Point</button>
+      <div style="margin-bottom: 1em;">
+        <h3 style="margin: 0.5em 0;">Add Current Reading</h3>
+        <input type="number" id="newTemp" step="0.01" placeholder="Measured °C">
+        <button id="addPoint">Add Current Reading</button>
+      </div>
+      <div style="margin-bottom: 1em; padding: 1em; border: 1px solid #555; border-radius: 4px; background: #2a2a2a;">
+        <h3 style="margin: 0.5em 0;">Add Manual Point</h3>
+        <input type="number" id="manualRaw" placeholder="Raw value" style="width: 80px; margin-right: 0.5em;">
+        <input type="number" id="manualTemp" step="0.01" placeholder="Temperature °C" style="width: 100px; margin-right: 0.5em;">
+        <button id="addManual">Add Manual Point</button>
+      </div>
+      <button id="clearAll" style="background: #f44336;">Clear All</button>
+    </div>
+    <div id="statusMessage" style="margin: 0.5em 0; padding: 0.5em; border-radius: 4px; min-height: 1.2em; display: none;"></div>
+    <div style="margin: 1em 0; padding: 0.5em; background: #333; border-radius: 4px; font-size: 0.9em;">
+      <b>Tips:</b> 
+      • <b>Current Reading:</b> Use current sensor reading with known temperature<br>
+      • <b>Manual Points:</b> Enter specific raw/temperature pairs for precise calibration<br>
+      • <b>Editing:</b> Click in the table cells to edit values, then click Save<br>
+      • More points across your temperature range = better accuracy
     </div>
     <table class="calib-table" id="calibTable">
       <thead>
-        <tr><th>Raw</th><th>Temp (°C)</th><th>Edit</th><th>Delete</th></tr>
+        <tr><th>Raw Value</th><th>Temp (°C)</th><th>Save</th><th>Delete</th></tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -34,11 +55,35 @@
   <script>
     let calibPoints = [];
 
+    function showStatus(message, type = 'info') {
+      const statusEl = document.getElementById('statusMessage');
+      statusEl.textContent = message;
+      statusEl.style.display = 'block';
+      
+      // Set color based on type
+      if (type === 'error') {
+        statusEl.style.background = '#f44336';
+        statusEl.style.color = '#fff';
+      } else if (type === 'success') {
+        statusEl.style.background = '#4CAF50';
+        statusEl.style.color = '#fff';
+      } else {
+        statusEl.style.background = '#2196F3';
+        statusEl.style.color = '#fff';
+      }
+      
+      // Auto-hide after 3 seconds
+      setTimeout(() => {
+        statusEl.style.display = 'none';
+      }, 3000);
+    }
+
     function loadCalib() {
       fetch('/api/calibration')
         .then(r => r.json())
         .then(d => {
           document.getElementById('rawReading').textContent = d.raw;
+          document.getElementById('calibPoints').textContent = d.table ? d.table.length : 0;
           calibPoints = d.table || [];
           renderTable();
         });
@@ -50,55 +95,237 @@
       calibPoints.sort((a,b) => a.raw-b.raw);
       calibPoints.forEach((pt, i) => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${pt.raw}</td>
-          <td><input type="number" step="0.01" value="${pt.temp}" data-i="${i}" class="edit-temp"></td>
-          <td><button data-i="${i}" class="edit-btn">Edit</button></td>
-          <td><button data-i="${i}" class="del-btn">Del</button></td>`;
+        tr.innerHTML = `<td><input type="number" value="${pt.raw}" data-i="${i}" class="edit-raw" style="width: 60px;"></td>
+          <td><input type="number" step="0.01" value="${pt.temp}" data-i="${i}" class="edit-temp" style="width: 60px;"></td>
+          <td><button data-i="${i}" class="save-btn" style="background: #4CAF50; color: white; border: none; padding: 0.2em 0.5em; border-radius: 3px; cursor: pointer;">Save</button></td>
+          <td><button data-i="${i}" class="del-btn" style="background: #f44336; color: white; border: none; padding: 0.2em 0.5em; border-radius: 3px; cursor: pointer;">Delete</button></td>`;
         tbody.appendChild(tr);
       });
-      document.querySelectorAll('.edit-temp').forEach(inp=>{
-        inp.onchange = function() {
+      
+      // Handle save button clicks
+      document.querySelectorAll('.save-btn').forEach(btn=>{
+        btn.onclick = function() {
           const i = +this.dataset.i;
-          calibPoints[i].temp = parseFloat(this.value);
-          saveCalib();
+          const rawInput = document.querySelector(`.edit-raw[data-i="${i}"]`);
+          const tempInput = document.querySelector(`.edit-temp[data-i="${i}"]`);
+          
+          const newRaw = parseInt(rawInput.value);
+          const newTemp = parseFloat(tempInput.value);
+          
+          if (isNaN(newRaw) || isNaN(newTemp)) {
+            showStatus('Invalid raw or temperature value', 'error');
+            return;
+          }
+          
+          // Check for duplicates (excluding current point)
+          const hasDuplicateRaw = calibPoints.some((pt, idx) => idx !== i && pt.raw === newRaw);
+          const hasDuplicateTemp = calibPoints.some((pt, idx) => idx !== i && Math.abs(pt.temp - newTemp) < 0.01);
+          
+          if (hasDuplicateRaw) {
+            showStatus('A point with this raw value already exists', 'error');
+            return;
+          }
+          if (hasDuplicateTemp) {
+            showStatus('A point with this temperature already exists', 'error');
+            return;
+          }
+          
+          showStatus('Updating calibration point...', 'info');
+          
+          // Use the new update endpoint
+          fetch('/api/calibration/update', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({index: i, raw: newRaw, temp: newTemp})
+          })
+          .then(response => {
+            if (!response.ok) {
+              return response.text().then(text => {
+                throw new Error(`${response.status}: ${text}`);
+              });
+            }
+            return response.text();
+          })
+          .then(result => {
+            console.log('Update point result:', result);
+            showStatus(`Updated calibration point (${newRaw}, ${newTemp}°C)`, 'success');
+            loadCalib(); // Refresh the table
+          })
+          .catch(error => {
+            console.error('Error updating calibration point:', error);
+            showStatus('Failed to update point: ' + error.message, 'error');
+          });
         };
       });
+      
       document.querySelectorAll('.del-btn').forEach(btn=>{
         btn.onclick = function() {
           const i = +this.dataset.i;
-          calibPoints.splice(i,1);
-          saveCalib();
+          if (confirm(`Delete calibration point (${calibPoints[i].raw}, ${calibPoints[i].temp}°C)?`)) {
+            showStatus('Deleting calibration point...', 'info');
+            
+            // Use the new delete endpoint
+            fetch('/api/calibration/delete', {
+              method: 'POST',
+              headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({index: i})
+            })
+            .then(response => {
+              if (!response.ok) {
+                return response.text().then(text => {
+                  throw new Error(`${response.status}: ${text}`);
+                });
+              }
+              return response.text();
+            })
+            .then(result => {
+              console.log('Delete point result:', result);
+              showStatus('Calibration point deleted', 'success');
+              loadCalib(); // Refresh the table
+            })
+            .catch(error => {
+              console.error('Error deleting calibration point:', error);
+              showStatus('Failed to delete point: ' + error.message, 'error');
+            });
+          }
         };
       });
     }
 
-    function saveCalib() {
+    document.getElementById('addPoint').onclick = function() {
+      let temp = parseFloat(document.getElementById('newTemp').value);
+      if (isNaN(temp)) {
+        showStatus("Enter a valid temperature!", 'error');
+        return;
+      }
+      
+      fetch('/api/calibration')
+        .then(r => r.json())
+        .then(d => {
+          const raw = d.raw;
+          
+          // Check for duplicates locally first
+          if (calibPoints.some(pt => pt.raw === raw)) {
+            showStatus("A point with this reading already exists!", 'error');
+            return;
+          }
+          if (calibPoints.some(pt => Math.abs(pt.temp - temp) < 0.01)) {
+            showStatus("A point with this temperature already exists!", 'error');
+            return;
+          }
+          
+          console.log('Adding calibration point:', {raw: raw, temp: temp});
+          showStatus('Adding calibration point...', 'info');
+          
+          // Send just the new point to the server
+          fetch('/api/calibration/add', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({raw: raw, temp: temp})
+          })
+          .then(response => {
+            if (!response.ok) {
+              return response.text().then(text => {
+                throw new Error(`${response.status}: ${text}`);
+              });
+            }
+            return response.text();
+          })
+          .then(result => {
+            console.log('Add point result:', result);
+            showStatus(`Added calibration point (${raw}, ${temp}°C)`, 'success');
+            document.getElementById('newTemp').value = '';
+            loadCalib(); // Refresh the table
+          })
+          .catch(error => {
+            console.error('Error adding calibration point:', error);
+            showStatus('Failed to add point: ' + error.message, 'error');
+          });
+        })
+        .catch(error => {
+          console.error('Error getting current reading:', error);
+          showStatus('Failed to get current reading: ' + error.message, 'error');
+        });
+    };
+
+    document.getElementById('addManual').onclick = function() {
+      const rawValue = parseInt(document.getElementById('manualRaw').value);
+      const tempValue = parseFloat(document.getElementById('manualTemp').value);
+      
+      if (isNaN(rawValue) || isNaN(tempValue)) {
+        showStatus("Enter valid raw and temperature values!", 'error');
+        return;
+      }
+      
+      // Check for duplicates
+      if (calibPoints.some(pt => pt.raw === rawValue)) {
+        showStatus("A point with this raw value already exists!", 'error');
+        return;
+      }
+      if (calibPoints.some(pt => Math.abs(pt.temp - tempValue) < 0.01)) {
+        showStatus("A point with this temperature already exists!", 'error');
+        return;
+      }
+      
+      console.log('Adding manual calibration point:', {raw: rawValue, temp: tempValue});
+      showStatus('Adding manual calibration point...', 'info');
+      
+      // Send the manual point to the server
+      fetch('/api/calibration/add', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({raw: rawValue, temp: tempValue})
+      })
+      .then(response => {
+        if (!response.ok) {
+          return response.text().then(text => {
+            throw new Error(`${response.status}: ${text}`);
+          });
+        }
+        return response.text();
+      })
+      .then(result => {
+        console.log('Add manual point result:', result);
+        showStatus(`Added manual point (${rawValue}, ${tempValue}°C)`, 'success');
+        document.getElementById('manualRaw').value = '';
+        document.getElementById('manualTemp').value = '';
+        loadCalib(); // Refresh the table
+      })
+      .catch(error => {
+        console.error('Error adding manual calibration point:', error);
+        showStatus('Failed to add manual point: ' + error.message, 'error');
+      });
+    };
+
+    document.getElementById('clearAll').onclick = function() {
+      if (!confirm('Are you sure you want to clear all calibration points?')) return;
+      
+      showStatus('Clearing all calibration points...', 'info');
+      
+      // Use the original bulk update endpoint to clear all points
       fetch('/api/calibration', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({table: calibPoints})
-      }).then(loadCalib);
-    }
+        body: JSON.stringify({table: []})
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response.text();
+      })
+      .then(result => {
+        console.log('Clear all result:', result);
+        showStatus('All calibration points cleared', 'success');
+        loadCalib(); // Refresh the table
+      })
+      .catch(error => {
+        console.error('Error clearing calibration points:', error);
+        showStatus('Failed to clear points: ' + error.message, 'error');
+      });
+    };
 
-    document.getElementById('addPoint').onclick = function() {
-  fetch('/api/calibration')
-    .then(r => r.json())
-    .then(d => {
-      let temp = parseFloat(document.getElementById('newTemp').value);
-      if (isNaN(temp)) return alert("Enter a valid temperature!");
-      // Prevent duplicates:
-      if (calibPoints.some(pt => pt.raw === d.raw))
-        return alert("A point with this reading already exists!");
-      if (calibPoints.some(pt => pt.temp === temp))
-        return alert("A point with this temperature already exists!");
-      calibPoints.push({raw: d.raw, temp: temp});
-      saveCalib();
-      document.getElementById('newTemp').value = '';
-    });
-};
-
-
-    setInterval(loadCalib, 2000);
+    setInterval(loadCalib, 60000); // Refresh every minute instead of every 2 seconds
     loadCalib();
   </script>
 </body>

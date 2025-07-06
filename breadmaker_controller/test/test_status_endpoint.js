@@ -12,6 +12,7 @@ describe('Live /status endpoint', () => {
         try {
           const json = JSON.parse(data);
           expect(json).toHaveProperty('stageStartTimes');
+          expect(json).toHaveProperty('actualStageStartTimes');
           expect(json).toHaveProperty('stageReadyAt');
           expect(json).toHaveProperty('programReadyAt');
           done();

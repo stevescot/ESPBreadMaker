@@ -90,7 +90,8 @@ This project is an ESP8266-based breadmaker controller with a web UI, stage-base
   - `label`: Name of the stage
   - `min`: Duration in minutes
   - `temp`: Target temperature (°C)
-  - `mixPattern`: Array of `{action, durationSec}` objects (e.g., `mix` or `wait`)
+  - `mixPattern`: Array of `{mixSec, waitSec}` objects (for stages with mixing cycles)
+  - `noMix`: `true` if the stage has no mixing at all (preferred over a mixPattern with only waiting)
   - `heater`, `light`, `buzzer`: "on" or "off"
   - `instructions`: Free text for UI display (only for user actions)
 - The backend and frontend must use only the `customStages` array to build and execute all programs. Classic fields like `autolyseTime`, `mixTime`, etc. are no longer supported.
@@ -235,10 +236,14 @@ Serial.println("[DEBUG] /status requested");
 
 ## Coding Order and Declarations
 - When editing `.ino` and `.h` files, always ensure that function and variable definitions (or forward declarations) appear before any use.
-- For example, if you call `stopBreadmaker()` in a lambda or function, make sure it is either defined or forward-declared above that point in the file.
+- For example, if you call `stopBreadmaker()` or `broadcastStatusWS()` in a lambda or function, make sure it is either defined or forward-declared above that point in the file.
+- **Always add a forward declaration for any new function (e.g., `void broadcastStatusWS();`) at the top of your `.ino` file, before any code that uses it.**
 - This prevents linker and scope errors, especially with C++ lambdas and Arduino sketches.
 - The same applies to struct and class definitions: define them before any variable or function that uses them.
 - If you add new types or functions, update the header (`.h`) first, then include and use them in the `.ino` or `.cpp` files.
+
+**Summary:**
+- Add forward declarations for all new functions at the top of `.ino` files, before any use (including in lambdas or inline functions), to prevent build errors and ensure maintainability.
 
 ## User Instructions vs. Automated Actions
 - **Instructions** (the `instructions` field in a custom stage, or any user-facing prompt) should only describe actions that require human intervention (e.g., "Add chocolate now", "Remove paddle", "Check dough consistency").
@@ -258,6 +263,12 @@ Serial.println("[DEBUG] /status requested");
 - **If unsure, consult your breadmaker’s manual** for safe temperature ranges for each function.
 - **Firmware and UI should validate user input** to prevent setting unsafe temperatures.
 - **If a program requests a temperature outside the safe range,** the system should warn the user or refuse to run.
+
+## Status JSON vs. Program Definitions
+- The `/status` endpoint (and all status JSON returned by control endpoints or WebSocket pushes) **must only include a `programList` field** (an array of available program names), **not the full program definitions**.
+- The full program definitions (all fields, stages, etc.) are only provided by the `/api/programs` endpoint.
+- This keeps status updates small and efficient, and prevents memory or JSON truncation issues on the ESP8266.
+- If you need to display or edit program details in the UI, fetch them from `/api/programs` and cache as needed.
 
 ---
 This file is for Copilot and future maintainers. Update as the project evolves.

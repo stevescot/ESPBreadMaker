@@ -14,6 +14,9 @@
       <button id="genaiShowBtn" style="margin-left:1em;background:#ffd600;color:#232323;font-size:1em;padding:0.2em 1.2em;border-radius:6px;border:none;cursor:pointer;">Generate Program</button>
     </div>
     <div id="progList"></div>
+    <div style="margin:1em 0 1.5em 0; background:#ffe7a0; color:#232323; border-radius:7px; padding:0.8em 1.2em; font-size:1.08em; max-width:600px;">
+      <b>Note:</b> If you define a <b>mixPattern</b> whose total time is less than the stage duration, the pattern will <b>repeat automatically</b> until the stage ends. If a stage has <b>no mixing</b>, set <code>"noMix": true</code> and omit <code>mixPattern</code>.<br>To avoid surprises, always check your pattern and stage duration!
+    </div>
     <button id="addProg">+ Add Program</button>
     <button id="saveAll">Save All</button>
     <button onclick="window.location.href='/'">Back</button>
@@ -34,10 +37,11 @@ Generate a JSON object for a custom breadmaker program. Each program must have:
     - "label": short stage name (e.g. "Mix", "Rise")
     - "min": duration in minutes (integer)
     - "temp": target temperature in °C (number)
-    - "heater": "on" or "off"
     - "light": "on" or "off"
     - "buzzer": "on" or "off"
-    - "mixPattern": array of steps, each with "action" ("mix" or "off") and "durationSec" (integer)
+    - Either:
+        - "mixPattern": array of steps, each with "mixSec" (int, seconds mixing) and "waitSec" (int, seconds waiting)
+        - or "noMix": true (for stages with no mixing)
     - "instructions": (string, what the user should do at this stage, or "No action needed.")
 - Do not include any steps that would smash eggs with the mixer.
 - Only use safe, realistic breadmaking steps.
@@ -45,9 +49,9 @@ Generate a JSON object for a custom breadmaker program. Each program must have:
 {
   "name": "Brioche",
   "customStages": [
-    { "label": "Mix", "min": 8, "temp": 28, "heater": "on", "light": "off", "buzzer": "off", "mixPattern": [ {"action":"mix","durationSec":60},{"action":"off","durationSec":30} ], "instructions": "Add flour and yeast, start mixing." },
-    { "label": "Rise", "min": 60, "temp": 28, "heater": "on", "light": "off", "buzzer": "off", "mixPattern": [], "instructions": "No action needed." },
-    { "label": "Bake", "min": 35, "temp": 180, "heater": "on", "light": "on", "buzzer": "on", "mixPattern": [], "instructions": "Remove bread after baking." }
+    { "label": "Mix", "min": 8, "temp": 28, "light": "off", "buzzer": "off", "mixPattern": [ {"mixSec":60,"waitSec":30} ], "instructions": "Add flour and yeast, start mixing." },
+    { "label": "Rise", "min": 60, "temp": 28, "light": "off", "buzzer": "off", "noMix": true, "instructions": "No action needed." },
+    { "label": "Bake", "min": 35, "temp": 180, "light": "on", "buzzer": "on", "noMix": true, "instructions": "Remove bread after baking." }
   ]
 }
 </pre>

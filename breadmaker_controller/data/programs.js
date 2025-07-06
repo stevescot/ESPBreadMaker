@@ -1,8 +1,17 @@
-function loadProgramsEditor() {
+// Global flag to prevent multiple simultaneous saves
+let isSaving = false;
+
+function loadProgramsEditor(forceRefresh) {
+  // Use shared cache if available, unless forceRefresh is true
+  if (window.cachedPrograms && !forceRefresh) {
+    window._programs = Array.isArray(window.cachedPrograms) ? window.cachedPrograms : (Array.isArray(window.cachedPrograms.programs) ? window.cachedPrograms.programs : []);
+    renderPrograms(window._programs);
+    return;
+  }
   fetch('/api/programs')
     .then(r => r.json())
     .then(data => {
-      // Expect array format
+      window.cachedPrograms = data;
       window._programs = Array.isArray(data) ? data : (Array.isArray(data.programs) ? data.programs : []);
       renderPrograms(window._programs);
     });
@@ -76,17 +85,22 @@ function renderPrograms(progs) {
           `<button type='button' data-delcustom='${idx},${cidx}'>Delete</button><br>` +
           `Duration (min): <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-cfield='min' value='${st.min||0}' style='width:4em;'> ` +
           `Temp (°C): <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-cfield='temp' value='${st.temp||0}' style='width:4em;'><br>` +
-          `Heater: <select data-idx='${idx}' data-cidx='${cidx}' data-cfield='heater'><option value='on'${st.heater==='on'?' selected':''}>On</option><option value='off'${st.heater==='off'?' selected':''}>Off</option></select> ` +
-          `Light: <select data-idx='${idx}' data-cidx='${cidx}' data-cfield='light'><option value='on'${st.light==='on'?' selected':''}>On</option><option value='off'${st.light==='off'?' selected':''}>Off</option></select> ` +
-          `Buzzer: <select data-idx='${idx}' data-cidx='${cidx}' data-cfield='buzzer'><option value='on'${st.buzzer==='on'?' selected':''}>On</option><option value='off'${st.buzzer==='off'?' selected':''}>Off</option></select><br>` +
-          `Instructions:<br><textarea data-idx='${idx}' data-cidx='${cidx}' data-cfield='instructions' rows='2' style='width:99%;'>${st.instructions||''}</textarea><br>` +
-          `<b>Mix Pattern:</b> <button type='button' data-addmix='${idx},${cidx}'>+ Add Step</button><br>`;
-        if (Array.isArray(st.mixPattern)) {
-          st.mixPattern.forEach((mp, midx) => {
-            html += `&nbsp; <select data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='action'><option value='mix'${mp.action==='mix'?' selected':''}>Mix</option><option value='off'${mp.action==='off'?' selected':''}>Off</option></select> ` +
-              `Duration (sec): <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='durationSec' value='${mp.durationSec||0}' style='width:5em;'> ` +
-              `<button type='button' data-delmix='${idx},${cidx},${midx}'>Delete</button><br>`;
-          });
+          `Instructions:<br><textarea data-idx='${idx}' data-cidx='${cidx}' data-cfield='instructions' rows='2' style='width:99%;'>${st.instructions||''}</textarea><br>`;
+        // --- Mix section ---
+        html += `<b>Mixing:</b> `;
+        html += `<label><input type='checkbox' data-idx='${idx}' data-cidx='${cidx}' data-cfield='noMix'${st.noMix?' checked':''}> No Mixing in this stage</label>`;
+        if (!st.noMix) {
+          html += ` <button type='button' data-addmix='${idx},${cidx}'>+ Add Step</button><br>`;
+          if (Array.isArray(st.mixPattern)) {
+            st.mixPattern.forEach((mp, midx) => {
+              html += `&nbsp; Mix: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='mixSec' value='${mp.mixSec||0}' style='width:4em;'> sec, ` +
+                `Wait: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='waitSec' value='${mp.waitSec||0}' style='width:4em;'> sec, ` +
+                `<span style='white-space:nowrap;'>Duration: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='durationSec' value='${mp.durationSec!=null?mp.durationSec:(mp.mixSec||0)+(mp.waitSec||0)}' style='width:4em;' min='0'> sec</span> ` +
+                `<button type='button' data-delmix='${idx},${cidx},${midx}'>Delete</button><br>`;
+            });
+          }
+        } else {
+          html += `<br>`;
         }
         html += `</div>`;
       });
@@ -122,7 +136,7 @@ function renderPrograms(progs) {
     card.querySelectorAll('[data-addcustom]').forEach(btn => {
       btn.onclick = () => {
         if (!progs[idx].customStages) progs[idx].customStages = [];
-        progs[idx].customStages.push({label:'',min:1,temp:25,heater:'off',light:'off',buzzer:'off',instructions:'',mixPattern:[]});
+        progs[idx].customStages.push({label:'',min:1,temp:25,instructions:'',mixPattern:[]});
         renderPrograms(progs);
       };
     });
@@ -133,7 +147,7 @@ function renderPrograms(progs) {
         renderPrograms(progs);
       };
     });
-    card.querySelectorAll('input[data-cfield],select[data-cfield],textarea[data-cfield]').forEach(inp => {
+    card.querySelectorAll('input[data-cfield],textarea[data-cfield]').forEach(inp => {
       if(inp.getAttribute('data-cfield')==='label') inp.maxLength = 24;
       if(inp.getAttribute('data-cfield')==='instructions') inp.maxLength = 200;
       inp.onchange = () => {
@@ -142,12 +156,12 @@ function renderPrograms(progs) {
         const fld = inp.getAttribute('data-cfield');
         let val = inp.value;
         if (inp.type === 'number') val = inp.valueAsNumber;
-        if(fld==='label' && val.length>24) {
+        if(fld==='label' && typeof val === 'string' && val.length>24) {
           alert('Stage label too long (max 24 chars)');
           inp.value = val.slice(0,24);
           val = inp.value;
         }
-        if(fld==='instructions' && val.length>200) {
+        if(fld==='instructions' && typeof val === 'string' && val.length>200) {
           alert('Instructions too long (max 200 chars)');
           inp.value = val.slice(0,200);
           val = inp.value;
@@ -155,11 +169,23 @@ function renderPrograms(progs) {
         progs[i].customStages[c][fld] = val;
       };
     });
+    // --- Mix/noMix toggle logic ---
+    card.querySelectorAll('input[data-cfield="noMix"]').forEach(inp => {
+      inp.onchange = () => {
+        const i = parseInt(inp.getAttribute('data-idx'));
+        const c = parseInt(inp.getAttribute('data-cidx'));
+        progs[i].customStages[c].noMix = inp.checked;
+        if (inp.checked) progs[i].customStages[c].mixPattern = [];
+        renderPrograms(progs);
+      };
+    });
+    // --- Mix pattern editing logic ---
     card.querySelectorAll('[data-addmix]').forEach(btn => {
       const [pidx, cidx] = btn.getAttribute('data-addmix').split(',').map(Number);
       btn.onclick = () => {
         progs[pidx].customStages[cidx].mixPattern = progs[pidx].customStages[cidx].mixPattern || [];
-        progs[pidx].customStages[cidx].mixPattern.push({action:'mix',durationSec:10});
+        progs[pidx].customStages[cidx].mixPattern.push({mixSec:10,waitSec:10});
+        progs[pidx].customStages[cidx].noMix = false;
         renderPrograms(progs);
       };
     });
@@ -170,14 +196,13 @@ function renderPrograms(progs) {
         renderPrograms(progs);
       };
     });
-    card.querySelectorAll('input[data-mfield],select[data-mfield]').forEach(inp => {
+    card.querySelectorAll('input[data-mfield]').forEach(inp => {
       inp.onchange = () => {
         const i = parseInt(inp.getAttribute('data-idx'));
         const c = parseInt(inp.getAttribute('data-cidx'));
         const m = parseInt(inp.getAttribute('data-midx'));
         const fld = inp.getAttribute('data-mfield');
-        let val = inp.value;
-        if (inp.type === 'number') val = inp.valueAsNumber;
+        let val = inp.valueAsNumber;
         progs[i].customStages[c].mixPattern[m][fld] = val;
       };
     });
@@ -213,20 +238,87 @@ function renderPrograms(progs) {
     };
   // Save all
   if(document.getElementById('saveAll'))
-    document.getElementById('saveAll').onclick = () => {
+    document.getElementById('saveAll').onclick = async () => {
+      if (isSaving) {
+        alert('Save in progress. Please wait.');
+        return;
+      }
+      isSaving = true;
+      
       const errors = validateProgramLengths(progs);
       if(errors.length) {
         alert('Cannot save. Fix these errors:\n'+errors.join('\n'));
+        isSaving = false;
         return;
       }
-      fetch('/api/programs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(progs)
-      }).then(r => r.json()).then(resp => {
-        if (resp.status === 'ok') alert('Programs saved');
-        else alert('Error saving');
-      });
+      
+      // Check payload size to prevent server overload
+      const jsonString = JSON.stringify(progs);
+      const sizeKB = Math.round(jsonString.length / 1024);
+      
+      if (sizeKB > 500) { // 500KB limit
+        if (!confirm(`Large program data (${sizeKB}KB). This may take a while to save. Continue?`)) {
+          isSaving = false;
+          return;
+        }
+      }
+      
+      const saveBtn = document.getElementById('saveAll');
+      const originalText = saveBtn.textContent;
+      
+      try {
+        // Show loading state
+        saveBtn.textContent = `Saving ${progs.length} programs...`;
+        saveBtn.disabled = true;
+        saveBtn.style.opacity = '0.6';
+        
+        // Add timeout and better error handling
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+        
+        console.log(`Saving ${progs.length} programs (${sizeKB}KB)...`);
+        
+        const response = await fetch('/api/programs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: jsonString,
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status} ${response.statusText}`);
+        }
+        
+        const resp = await response.json();
+        
+        if (resp.status === 'ok') {
+          console.log(`✅ Save successful: ${progs.length} programs (${sizeKB}KB)`);
+          alert(`Programs saved successfully! (${progs.length} programs, ${sizeKB}KB)`);
+          // Refresh shared cache after save
+          window.cachedPrograms = JSON.parse(JSON.stringify(progs));
+        } else {
+          throw new Error(resp.message || 'Unknown server error');
+        }
+        
+      } catch (error) {
+        console.error('❌ Save error:', error);
+        
+        if (error.name === 'AbortError') {
+          alert('Save operation timed out. The server may be overloaded. Please try again.');
+        } else if (error.message.includes('Failed to fetch')) {
+          alert('Network error: Unable to connect to the server. Check your connection and try again.');
+        } else {
+          alert('Error saving programs: ' + error.message);
+        }
+      } finally {
+        // Restore button state and clear flag
+        isSaving = false;
+        saveBtn.textContent = originalText;
+        saveBtn.disabled = false;
+        saveBtn.style.opacity = '1';
+      }
     };
 }
 

@@ -35,6 +35,21 @@
       border: none;
       cursor: pointer;
     }
+    #fileManager table {
+      color: #fff;
+      font-size: 0.9em;
+    }
+    #fileManager th {
+      background: #444;
+      color: #fff;
+      font-weight: bold;
+    }
+    #fileManager td {
+      color: #ccc;
+    }
+    #fileManager button:hover {
+      opacity: 0.8;
+    }
   </style>
 </head>
 <body>
@@ -43,7 +58,34 @@
     <div class="config-links">
       <button class="config-link-btn" onclick="location.href='/programs.html'">Edit Programs</button>
       <button class="config-link-btn" onclick="location.href='/calibration.html'">Calibrate Temperature</button>
+      <button class="config-link-btn" onclick="location.href='/controllertuning.html'">🎛️ PID Controller Tuning</button>
       <button class="config-link-btn" onclick="location.href='/update.html'">Firmware Update</button>
+      <button class="config-link-btn" onclick="toggleFileManager()">File Manager</button>
+    </div>
+    
+    <!-- File Manager Section -->
+    <div id="fileManager" style="display:none; margin-top:2em; padding:1.5em; border:1px solid #555; border-radius:8px; background:#333;">
+      <h3 style="margin-top:0;">File Manager</h3>
+      
+      <!-- File Upload -->
+      <div style="margin-bottom:2em;">
+        <h4>Upload File</h4>
+        <div style="margin-bottom:0.5em; color:#bbb; font-size:0.9em; font-style:italic;">
+          💡 Tip: Multiple files are uploaded sequentially to prevent corruption
+        </div>
+        <input type="file" id="fileInput" multiple style="margin:0.5em 0; padding:0.5em; border-radius:4px; background:#444; color:#fff; border:1px solid #666;">
+        <button onclick="uploadFiles()" style="margin-left:1em; padding:0.5em 1em; border-radius:4px; background:#4CAF50; color:#fff; border:none; cursor:pointer;">Upload</button>
+        <div id="uploadStatus" style="margin-top:0.5em; color:#ffd600;"></div>
+      </div>
+      
+      <!-- File List -->
+      <div>
+        <h4>Files on Device</h4>
+        <button onclick="refreshFileList()" style="margin-bottom:1em; padding:0.3em 1em; border-radius:4px; background:#666; color:#fff; border:none; cursor:pointer;">Refresh</button>
+        <div id="fileList" style="max-height:300px; overflow-y:auto; background:#222; padding:1em; border-radius:4px; border:1px solid #555;">
+          Loading...
+        </div>
+      </div>
     </div>
     <div style="margin:2em 0 1em 0; text-align:center;">
       <label style="font-size:1.1em;">
@@ -89,6 +131,153 @@
       });
     };
     fetchOutputMode();
+    
+    // File Manager functionality
+    function toggleFileManager() {
+      const fileManager = document.getElementById('fileManager');
+      if (fileManager.style.display === 'none') {
+        fileManager.style.display = 'block';
+        refreshFileList();
+      } else {
+        fileManager.style.display = 'none';
+      }
+    }
+    
+    async function uploadFiles() {
+      const fileInput = document.getElementById('fileInput');
+      const uploadStatus = document.getElementById('uploadStatus');
+      const files = fileInput.files;
+      
+      if (files.length === 0) {
+        uploadStatus.textContent = 'Please select files to upload';
+        uploadStatus.style.color = '#ff6666';
+        return;
+      }
+      
+      uploadStatus.textContent = 'Uploading files sequentially...';
+      uploadStatus.style.color = '#ffd600';
+      
+      let successCount = 0;
+      let errorCount = 0;
+      
+      // Upload files one by one to prevent memory issues and corruption
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        uploadStatus.textContent = `Uploading ${i + 1}/${files.length}: ${file.name}...`;
+        
+        try {
+          const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData
+          });
+          
+          if (response.ok) {
+            successCount++;
+            uploadStatus.textContent = `✅ Uploaded ${i + 1}/${files.length}: ${file.name} (${successCount} success, ${errorCount} errors)`;
+            uploadStatus.style.color = '#4CAF50';
+            
+            // Small delay between uploads to prevent overwhelming the ESP32
+            if (i < files.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
+            }
+          } else {
+            errorCount++;
+            uploadStatus.textContent = `❌ Error uploading ${file.name}: HTTP ${response.status}`;
+            uploadStatus.style.color = '#ff6666';
+            break; // Stop on first error
+          }
+        } catch (error) {
+          errorCount++;
+          uploadStatus.textContent = `❌ Error uploading ${file.name}: ${error.message}`;
+          uploadStatus.style.color = '#ff6666';
+          break; // Stop on first error
+        }
+      }
+      
+      // Final status
+      if (errorCount === 0) {
+        uploadStatus.textContent = `✅ Successfully uploaded all ${successCount} file(s)`;
+        uploadStatus.style.color = '#4CAF50';
+        fileInput.value = '';
+        refreshFileList();
+      } else {
+        uploadStatus.textContent = `⚠️ Upload completed with ${errorCount} error(s). ${successCount} file(s) uploaded successfully.`;
+        uploadStatus.style.color = '#ffc107';
+      }
+    }
+    
+    function refreshFileList() {
+      const fileList = document.getElementById('fileList');
+      fileList.innerHTML = 'Loading...';
+      
+      fetch('/api/files')
+        .then(response => response.json())
+        .then(data => {
+          if (data.files.length === 0) {
+            fileList.innerHTML = '<em>No files found</em>';
+            return;
+          }
+          
+          let html = '<table style="width:100%; border-collapse:collapse;">';
+          html += '<thead><tr><th style="text-align:left; padding:0.5em; border-bottom:1px solid #555;">Name</th><th style="text-align:right; padding:0.5em; border-bottom:1px solid #555;">Size</th><th style="text-align:center; padding:0.5em; border-bottom:1px solid #555;">Actions</th></tr></thead>';
+          html += '<tbody>';
+          
+          data.files.forEach(file => {
+            html += '<tr>';
+            html += `<td style="padding:0.5em; border-bottom:1px solid #333;">${file.name}</td>`;
+            html += `<td style="padding:0.5em; border-bottom:1px solid #333; text-align:right;">${formatBytes(file.size)}</td>`;
+            html += `<td style="padding:0.5em; border-bottom:1px solid #333; text-align:center;">`;
+            html += `<button onclick="downloadFile('${file.name}')" style="margin-right:0.5em; padding:0.2em 0.5em; border-radius:3px; background:#4CAF50; color:#fff; border:none; cursor:pointer; font-size:0.8em;">Download</button>`;
+            html += `<button onclick="deleteFile('${file.name}')" style="padding:0.2em 0.5em; border-radius:3px; background:#f44336; color:#fff; border:none; cursor:pointer; font-size:0.8em;">Delete</button>`;
+            html += '</td>';
+            html += '</tr>';
+          });
+          
+          html += '</tbody></table>';
+          fileList.innerHTML = html;
+        })
+        .catch(error => {
+          fileList.innerHTML = `<em>Error loading files: ${error.message}</em>`;
+        });
+    }
+    
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+    
+    function downloadFile(filename) {
+      window.open('/' + filename, '_blank');
+    }
+    
+    function deleteFile(filename) {
+      if (!confirm(`Are you sure you want to delete "${filename}"?`)) {
+        return;
+      }
+      
+      fetch('/api/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename: filename})
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === 'deleted') {
+          refreshFileList();
+        } else {
+          alert(`Error deleting file: ${data.error}`);
+        }
+      })
+      .catch(error => {
+        alert(`Error deleting file: ${error.message}`);
+      });
+    }
   </script>
 </body>
 </html>
