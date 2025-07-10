@@ -5,6 +5,14 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <nav>
+    <a href="/">&#8962; Home</a>
+    <a href="/config.html">&#9881; Config</a>
+    <a href="/programs.html" class="active">&#9998; Programs</a>
+    <a href="/calibration.html">&#127777; Calibration</a>
+    <a href="/controllertuning.html">&#128293; PID Tuning</a>
+    <a href="/update.html">&#8593; Update</a>
+  </nav>
   <div class="container">
     <h1>Edit Programs</h1>
     <div style="margin-bottom:1em;">
@@ -15,7 +23,12 @@
     </div>
     <div id="progList"></div>
     <div style="margin:1em 0 1.5em 0; background:#ffe7a0; color:#232323; border-radius:7px; padding:0.8em 1.2em; font-size:1.08em; max-width:600px;">
-      <b>Note:</b> If you define a <b>mixPattern</b> whose total time is less than the stage duration, the pattern will <b>repeat automatically</b> until the stage ends. If a stage has <b>no mixing</b>, set <code>"noMix": true</code> and omit <code>mixPattern</code>.<br>To avoid surprises, always check your pattern and stage duration!
+      <b>Program Editor Tips:</b><br>
+      • <b>Duration:</b> Enter stage time in hours and minutes for easier input<br>
+      • <b>Temperature:</b> Set to 0&deg;C for no heating, up to 250&deg;C for heating stages<br>
+      • <b>Mixing:</b> If you define a <b>mixPattern</b> whose total time is less than the stage duration, the pattern will <b>repeat automatically</b> until the stage ends<br>
+      • <b>No mixing:</b> Check "No Mixing" and omit mixPattern for stages without mixing<br>
+      To avoid surprises, always check your pattern and stage duration!
     </div>
     <button id="addProg">+ Add Program</button>
     <button id="saveAll">Save All</button>
@@ -33,12 +46,15 @@
       <pre id="promptTemplate" style="background:#181818;color:#ffd600;padding:0.7em 1em;border-radius:6px;white-space:pre-wrap;font-size:1em;">
 Generate a JSON object for a custom breadmaker program. Each program must have:
 - A unique "name" (max 31 chars)
+- Optional "fermentBaselineTemp": baseline temperature in °C for fermentation calculations (default: 20)
+- Optional "fermentQ10": Q10 factor for fermentation time adjustment (default: 2.0)
 - A "customStages" array, each with:
     - "label": short stage name (e.g. "Mix", "Rise")
     - "min": duration in minutes (integer)
     - "temp": target temperature in °C (number)
     - "light": "on" or "off"
     - "buzzer": "on" or "off"
+    - Optional "isFermentation": true for stages that should adjust time based on temperature
     - Either:
         - "mixPattern": array of steps, each with "mixSec" (int, seconds mixing) and "waitSec" (int, seconds waiting)
         - or "noMix": true (for stages with no mixing)
@@ -48,9 +64,11 @@ Generate a JSON object for a custom breadmaker program. Each program must have:
 - Example:
 {
   "name": "Brioche",
+  "fermentBaselineTemp": 20,
+  "fermentQ10": 2.0,
   "customStages": [
     { "label": "Mix", "min": 8, "temp": 28, "light": "off", "buzzer": "off", "mixPattern": [ {"mixSec":60,"waitSec":30} ], "instructions": "Add flour and yeast, start mixing." },
-    { "label": "Rise", "min": 60, "temp": 28, "light": "off", "buzzer": "off", "noMix": true, "instructions": "No action needed." },
+    { "label": "Rise", "min": 60, "temp": 28, "light": "off", "buzzer": "off", "noMix": true, "isFermentation": true, "instructions": "No action needed." },
     { "label": "Bake", "min": 35, "temp": 180, "light": "on", "buzzer": "on", "noMix": true, "instructions": "Remove bread after baking." }
   ]
 }

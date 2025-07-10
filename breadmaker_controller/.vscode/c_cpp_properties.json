@@ -1,0 +1,63 @@
+{
+    "configurations": [
+        {
+            "name": "ESP8266",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "C:/Users/${env:USERNAME}/AppData/Local/Arduino15/packages/esp8266/hardware/esp8266/3.1.2/cores/esp8266",
+                "C:/Users/${env:USERNAME}/AppData/Local/Arduino15/packages/esp8266/hardware/esp8266/3.1.2/variants/nodemcu",
+                "C:/Users/${env:USERNAME}/AppData/Local/Arduino15/packages/esp8266/hardware/esp8266/3.1.2/libraries/**",
+                "C:/Users/${env:USERNAME}/AppData/Local/Arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/sdk/include",
+                "C:/Users/${env:USERNAME}/AppData/Local/Arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/sdk/lwip2/include",
+                "C:/Users/${env:USERNAME}/AppData/Local/Arduino15/packages/esp8266/hardware/esp8266/3.1.2/tools/sdk/libc/xtensa-lx106-elf/include",
+                "C:/Users/${env:USERNAME}/Documents/Arduino/libraries/**",
+                "C:/Users/${env:USERNAME}/Documents/Arduino/libraries/ArduinoJson/src",
+                "C:/Users/${env:USERNAME}/Documents/Arduino/libraries/ESPAsyncTCP/src",
+                "C:/Users/${env:USERNAME}/Documents/Arduino/libraries/ESPAsyncWebServer/src",
+                "C:/Users/${env:USERNAME}/Documents/Arduino/libraries/ESPAsyncHTTPUpdateServer/src",
+                "C:/Users/${env:USERNAME}/Documents/Arduino/libraries/PID",
+                "C:/Users/${env:USERNAME}/Documents/Arduino/libraries/WebSockets/src",
+                "C:/Program Files (x86)/Arduino/libraries/**"
+            ],
+            "defines": [
+                "ESP8266",
+                "ARDUINO=10819",
+                "ARDUINO_ESP8266_NODEMCU", 
+                "ARDUINO_ARCH_ESP8266",
+                "ARDUINO_BOARD=\"ARDUINO_ESP8266_NODEMCU\"",
+                "F_CPU=80000000L",
+                "F_FLASH=40000000L",
+                "__ets__",
+                "ICACHE_FLASH",
+                "LWIP_OPEN_SRC",
+                "NONOSDK22x_190703=1",
+                "TCP_MSS=536",
+                "LWIP_FEATURES=1",
+                "LWIP_IPV6=0",
+                "VTABLES_IN_FLASH",
+                "MMU_IRAM_SIZE=0x8000",
+                "MMU_ICACHE_SIZE=0x8000"
+            ],
+            "compilerPath": "C:/Users/${env:USERNAME}/AppData/Local/Arduino15/packages/esp8266/tools/xtensa-lx106-elf-gcc/3.1.0-gcc10.3-e5f9fec/bin/xtensa-lx106-elf-gcc.exe",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-x64",
+            "compilerArgs": [
+                "-mlongcalls",
+                "-mtext-section-literals",
+                "-falign-functions=4",
+                "-ffunction-sections",
+                "-fdata-sections"
+            ],
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "C:/Users/${env:USERNAME}/AppData/Local/Arduino15/packages/esp8266/hardware/esp8266/3.1.2",
+                    "C:/Users/${env:USERNAME}/Documents/Arduino/libraries"
+                ],
+                "limitSymbolsToIncludedHeaders": false
+            }
+        }
+    ],
+    "version": 4
+}

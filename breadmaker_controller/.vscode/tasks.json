@@ -1,0 +1,71 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build and Upload Breadmaker Controller",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-File",
+				"build_and_upload.ps1"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"label": "Compile Only",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-File",
+				"build_and_upload.ps1",
+				"-SkipRom",
+				"-SkipFiles"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": ["$gcc"],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"label": "Upload Web Files Only",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-File",
+				"upload_files.ps1"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		},
+		{
+			"label": "Arduino CLI Compile",
+			"type": "shell",
+			"command": "arduino-cli",
+			"args": [
+				"compile",
+				"--fqbn",
+				"esp8266:esp8266:nodemcuv2",
+				"--output-dir",
+				"build",
+				"breadmaker_controller.ino"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": ["$gcc"],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			}
+		}
+	]
+}

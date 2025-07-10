@@ -1,0 +1,275 @@
+views:
+  - title: Breadmaker Controller
+    icon: mdi:bread-slice
+    cards:
+      - type: entity
+        entity: sensor.breadmaker_program
+        name: Current Program
+        icon: mdi:format-list-numbered
+        
+      - type: horizontal-stack
+        cards:
+          - type: entity
+            entity: sensor.breadmaker_state
+            name: Status
+            icon: mdi:play-circle
+          - type: entity
+            entity: sensor.breadmaker_stage
+            name: Current Stage
+            icon: mdi:progress-clock
+
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.breadmaker_temperature
+            name: Temperature
+            min: 0
+            max: 250
+            severity:
+              green: 0
+              yellow: 100
+              red: 200
+            needle: true
+          - type: gauge
+            entity: sensor.breadmaker_setpoint
+            name: Setpoint
+            min: 0
+            max: 250
+            severity:
+              green: 0
+              yellow: 100
+              red: 200
+            needle: true
+
+      - type: entities
+        title: System Information (Alternative)
+        entities:
+          - entity: sensor.breadmaker_free_heap
+            name: Free Memory
+            icon: mdi:memory
+            secondary_info: "{{ states('sensor.breadmaker_free_heap') }} bytes"
+          - entity: sensor.breadmaker_wifi_rssi
+            name: WiFi Signal  
+            icon: mdi:wifi
+            secondary_info: "{{ states('sensor.breadmaker_wifi_rssi') }} dBm"
+          - entity: sensor.breadmaker_uptime
+            name: Uptime
+            icon: mdi:clock-outline
+            secondary_info: "{{ (states('sensor.breadmaker_uptime') | int / 60) | round(1) }} minutes"
+
+      - type: entities
+        title: System Information
+        entities:
+          - entity: sensor.breadmaker_free_heap
+            name: Free Memory
+            icon: mdi:memory
+          - entity: sensor.breadmaker_wifi_rssi
+            name: WiFi Signal
+            icon: mdi:wifi
+          - entity: sensor.breadmaker_uptime
+            name: Uptime
+            icon: mdi:clock-outline
+
+      - type: entities
+        title: Output Status
+        entities:
+          - entity: binary_sensor.breadmaker_motor_active
+            name: Motor
+            icon: mdi:engine
+          - entity: binary_sensor.breadmaker_heater_active
+            name: Heater
+            icon: mdi:radiator
+          - entity: binary_sensor.breadmaker_light_on
+            name: Light
+            icon: mdi:lightbulb
+          - entity: binary_sensor.breadmaker_buzzer_active
+            name: Buzzer
+            icon: mdi:volume-high
+
+      - type: markdown
+        content: |
+          ## Quick Actions
+
+      - type: horizontal-stack
+        cards:
+          - type: button
+            name: Stop
+            icon: mdi:stop
+            tap_action:
+              action: call-service
+              service: rest_command.breadmaker_stop
+          - type: button
+            name: Pause
+            icon: mdi:pause
+            tap_action:
+              action: call-service
+              service: rest_command.breadmaker_pause
+          - type: button
+            name: Resume
+            icon: mdi:play
+            tap_action:
+              action: call-service
+              service: rest_command.breadmaker_resume
+
+      - type: horizontal-stack
+        cards:
+          - type: button
+            name: Advance Stage
+            icon: mdi:skip-next
+            tap_action:
+              action: call-service
+              service: rest_command.breadmaker_advance
+          - type: button
+            name: Back Stage
+            icon: mdi:skip-previous
+            tap_action:
+              action: call-service
+              service: rest_command.breadmaker_back
+          - type: button
+            name: Beep
+            icon: mdi:bell
+            tap_action:
+              action: call-service
+              service: rest_command.breadmaker_beep
+
+      - type: markdown
+        content: |
+          ## Manual Control
+
+      - type: conditional
+        conditions:
+          - entity: binary_sensor.breadmaker_manual_mode
+            state: "off"
+        card:
+          type: button
+          name: Enable Manual Mode
+          icon: mdi:hand-back-right
+          tap_action:
+            action: call-service
+            service: rest_command.breadmaker_manual_mode_on
+
+      - type: conditional
+        conditions:
+          - entity: binary_sensor.breadmaker_manual_mode
+            state: "on"
+        card:
+          type: button
+          name: Disable Manual Mode
+          icon: mdi:hand-back-left
+          tap_action:
+            action: call-service
+            service: rest_command.breadmaker_manual_mode_off
+
+      - type: conditional
+        conditions:
+          - entity: binary_sensor.breadmaker_manual_mode
+            state: "on"
+        card:
+          type: vertical-stack
+          cards:
+            - type: horizontal-stack
+              cards:
+                - type: conditional
+                  conditions:
+                    - entity: binary_sensor.breadmaker_motor_active
+                      state: "off"
+                  card:
+                    type: button
+                    name: Turn Motor On
+                    icon: mdi:engine
+                    tap_action:
+                      action: call-service
+                      service: rest_command.breadmaker_motor_on
+                - type: conditional
+                  conditions:
+                    - entity: binary_sensor.breadmaker_motor_active
+                      state: "on"
+                  card:
+                    type: button
+                    name: Turn Motor Off
+                    icon: mdi:engine-off
+                    tap_action:
+                      action: call-service
+                      service: rest_command.breadmaker_motor_off
+
+            - type: horizontal-stack
+              cards:
+                - type: conditional
+                  conditions:
+                    - entity: binary_sensor.breadmaker_heater_active
+                      state: "off"
+                  card:
+                    type: button
+                    name: Turn Heater On
+                    icon: mdi:radiator
+                    tap_action:
+                      action: call-service
+                      service: rest_command.breadmaker_heater_on
+                - type: conditional
+                  conditions:
+                    - entity: binary_sensor.breadmaker_heater_active
+                      state: "on"
+                  card:
+                    type: button
+                    name: Turn Heater Off
+                    icon: mdi:radiator-off
+                    tap_action:
+                      action: call-service
+                      service: rest_command.breadmaker_heater_off
+
+            - type: horizontal-stack
+              cards:
+                - type: conditional
+                  conditions:
+                    - entity: binary_sensor.breadmaker_light_on
+                      state: "off"
+                  card:
+                    type: button
+                    name: Turn Light On
+                    icon: mdi:lightbulb
+                    tap_action:
+                      action: call-service
+                      service: rest_command.breadmaker_light_on
+                - type: conditional
+                  conditions:
+                    - entity: binary_sensor.breadmaker_light_on
+                      state: "on"
+                  card:
+                    type: button
+                    name: Turn Light Off
+                    icon: mdi:lightbulb-off
+                    tap_action:
+                      action: call-service
+                      service: rest_command.breadmaker_light_off
+
+      - type: history-graph
+        title: Temperature History
+        entities:
+          - sensor.breadmaker_temperature
+          - sensor.breadmaker_setpoint
+        hours_to_show: 6
+        refresh_interval: 30
+
+      - type: history-graph
+        title: Motor Activity History
+        entities:
+          - binary_sensor.breadmaker_motor_active
+        hours_to_show: 6
+        refresh_interval: 30
+
+      - type: markdown
+        title: Debug Information
+        content: |
+          **Sensor Values Debug:**
+          
+          - Free Heap: {{ states('sensor.breadmaker_free_heap') }}
+          - WiFi RSSI: {{ states('sensor.breadmaker_wifi_rssi') }}  
+          - Uptime: {{ states('sensor.breadmaker_uptime') }}
+          
+          **Raw Sensor Attributes:**
+          
+          Free Heap Unit: {{ state_attr('sensor.breadmaker_free_heap', 'unit_of_measurement') }}
+          
+          WiFi RSSI Unit: {{ state_attr('sensor.breadmaker_wifi_rssi', 'unit_of_measurement') }}
+          
+          Uptime Unit: {{ state_attr('sensor.breadmaker_uptime', 'unit_of_measurement') }}

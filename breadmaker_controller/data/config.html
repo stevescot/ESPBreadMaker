@@ -53,14 +53,22 @@
   </style>
 </head>
 <body>
+  <nav>
+    <a href="/">&#8962; Home</a>
+    <a href="/config.html" class="active">&#9881; Config</a>
+    <a href="/programs.html">&#9998; Programs</a>
+    <a href="/calibration.html">&#127777; Calibration</a>
+    <a href="/controllertuning.html">&#128293; PID Tuning</a>
+    <a href="/update.html">&#8593; Update</a>
+  </nav>
   <div class="container">
     <h2>Configuration</h2>
     <div class="config-links">
-      <button class="config-link-btn" onclick="location.href='/programs.html'">Edit Programs</button>
-      <button class="config-link-btn" onclick="location.href='/calibration.html'">Calibrate Temperature</button>
-      <button class="config-link-btn" onclick="location.href='/controllertuning.html'">🎛️ PID Controller Tuning</button>
-      <button class="config-link-btn" onclick="location.href='/update.html'">Firmware Update</button>
-      <button class="config-link-btn" onclick="toggleFileManager()">File Manager</button>
+      <button class="config-link-btn" onclick="location.href='/programs.html'">&#9998; Edit Programs</button>
+      <button class="config-link-btn" onclick="location.href='/calibration.html'">&#127777; Calibrate Temperature</button>
+      <button class="config-link-btn" onclick="location.href='/controllertuning.html'">&#128293; PID Controller Tuning</button>
+      <button class="config-link-btn" onclick="location.href='/update.html'">&#8593; Firmware Update</button>
+      <button class="config-link-btn" onclick="toggleFileManager()">&#128193; File Manager</button>
     </div>
     
     <!-- File Manager Section -->
@@ -71,7 +79,7 @@
       <div style="margin-bottom:2em;">
         <h4>Upload File</h4>
         <div style="margin-bottom:0.5em; color:#bbb; font-size:0.9em; font-style:italic;">
-          💡 Tip: Multiple files are uploaded sequentially to prevent corruption
+          &#128161; Tip: Multiple files are uploaded sequentially to prevent corruption
         </div>
         <input type="file" id="fileInput" multiple style="margin:0.5em 0; padding:0.5em; border-radius:4px; background:#444; color:#fff; border:1px solid #666;">
         <button onclick="uploadFiles()" style="margin-left:1em; padding:0.5em 1em; border-radius:4px; background:#4CAF50; color:#fff; border:none; cursor:pointer;">Upload</button>

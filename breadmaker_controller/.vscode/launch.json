@@ -1,0 +1,26 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Upload Firmware",
+            "type": "node",
+            "request": "launch",
+            "program": "${workspaceFolder}/build_and_upload.ps1",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "runtimeExecutable": "pwsh.exe",
+            "runtimeArgs": ["-File"],
+            "preLaunchTask": "Compile Only"
+        },
+        {
+            "name": "Compile Only",
+            "type": "node", 
+            "request": "launch",
+            "program": "${workspaceFolder}/build_and_upload.ps1",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "runtimeExecutable": "pwsh.exe",
+            "runtimeArgs": ["-File", "-SkipRom", "-SkipFiles"]
+        }
+    ]
+}

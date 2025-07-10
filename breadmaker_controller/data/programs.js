@@ -69,6 +69,8 @@ function renderPrograms(progs) {
     // Only show custom stages UI, remove all classic stage fields
     html += `<label>Name: <input type="text" data-idx="${idx}" data-field="name" value="${p.name||''}"></label><br>`;
     html += `<label>Notes/Recipe:<br><textarea data-idx="${idx}" data-field="notes" rows="7" style="width:99%;min-height:7em;resize:vertical;">${p.notes||''}</textarea></label>`;
+    html += `<label>Fermentation Baseline Temp (&deg;C): <input type="number" data-idx="${idx}" data-field="fermentBaselineTemp" value="${p.fermentBaselineTemp||20}" style="width:4em;"></label>\n`;
+    html += `<label>Fermentation Q10 Factor: <input type="number" step="0.01" data-idx="${idx}" data-field="fermentQ10" value="${p.fermentQ10||2.0}" style="width:4em;"></label>\n`;
     // Custom stages UI
     if (Array.isArray(p.customStages)) {
       const palette = [
@@ -83,8 +85,11 @@ function renderPrograms(progs) {
           `<button type='button' data-movecustom='${idx},${cidx},down' title='Move Down' style='font-size:1.1em;margin-right:0.5em;'>&darr;</button>` +
           `<input type='text' data-idx='${idx}' data-cidx='${cidx}' data-cfield='label' value='${st.label||''}' placeholder='Label'> ` +
           `<button type='button' data-delcustom='${idx},${cidx}'>Delete</button><br>` +
-          `Duration (min): <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-cfield='min' value='${st.min||0}' style='width:4em;'> ` +
-          `Temp (°C): <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-cfield='temp' value='${st.temp||0}' style='width:4em;'><br>` +
+          `Duration: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-cfield='durationHours' value='${Math.floor((st.min||0)/60)}' style='width:3em;' min='0' max='23'> h ` +
+          `<input type='number' data-idx='${idx}' data-cidx='${cidx}' data-cfield='durationMinutes' value='${(st.min||0)%60}' style='width:3em;' min='0' max='59'> min ` +
+          `<span style='font-size:0.9em;color:#666;'>(Total: ${st.min||0} min)</span><br>` +
+          `Temp (&deg;C): <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-cfield='temp' value='${st.temp||0}' style='width:4em;' min='0' max='250'> ` +
+          `<span style='font-size:0.9em;color:#666;'>${(st.temp||0) === 0 ? '(No heating)' : '(Heating active)'}</span><br>` +
           `Instructions:<br><textarea data-idx='${idx}' data-cidx='${cidx}' data-cfield='instructions' rows='2' style='width:99%;'>${st.instructions||''}</textarea><br>`;
         // --- Mix section ---
         html += `<b>Mixing:</b> `;
@@ -102,6 +107,7 @@ function renderPrograms(progs) {
         } else {
           html += `<br>`;
         }
+        html += `<label><input type='checkbox' data-idx='${idx}' data-cidx='${cidx}' data-cfield='isFermentation'${st.isFermentation?' checked':''}> Is Fermentation Stage (adjust time by temp)</label><br>`;
         html += `</div>`;
       });
     } else {
@@ -136,7 +142,13 @@ function renderPrograms(progs) {
     card.querySelectorAll('[data-addcustom]').forEach(btn => {
       btn.onclick = () => {
         if (!progs[idx].customStages) progs[idx].customStages = [];
-        progs[idx].customStages.push({label:'',min:1,temp:25,instructions:'',mixPattern:[]});
+        progs[idx].customStages.push({
+          label: '',
+          min: 30,  // 30 minutes default
+          temp: 0,  // No heating by default
+          instructions: '',
+          mixPattern: []
+        });
         renderPrograms(progs);
       };
     });
@@ -156,6 +168,7 @@ function renderPrograms(progs) {
         const fld = inp.getAttribute('data-cfield');
         let val = inp.value;
         if (inp.type === 'number') val = inp.valueAsNumber;
+        if (inp.type === 'checkbox') val = inp.checked;
         if(fld==='label' && typeof val === 'string' && val.length>24) {
           alert('Stage label too long (max 24 chars)');
           inp.value = val.slice(0,24);
@@ -166,7 +179,33 @@ function renderPrograms(progs) {
           inp.value = val.slice(0,200);
           val = inp.value;
         }
+        
+        // Handle duration conversion from hours/minutes to total minutes
+        if(fld === 'durationHours' || fld === 'durationMinutes') {
+          const currentStage = progs[i].customStages[c];
+          let hours = 0, minutes = 0;
+          
+          if(fld === 'durationHours') {
+            hours = Math.max(0, Math.min(23, val || 0));
+            inp.value = hours; // Enforce limits
+            minutes = currentStage.min % 60;
+          } else {
+            minutes = Math.max(0, Math.min(59, val || 0));
+            inp.value = minutes; // Enforce limits
+            hours = Math.floor(currentStage.min / 60);
+          }
+          
+          progs[i].customStages[c].min = hours * 60 + minutes;
+          renderPrograms(progs); // Re-render to update the total display
+          return;
+        }
+        
         progs[i].customStages[c][fld] = val;
+        
+        // If temperature changed, re-render to update the heating indicator
+        if(fld === 'temp') {
+          renderPrograms(progs);
+        }
       };
     });
     // --- Mix/noMix toggle logic ---
@@ -177,6 +216,14 @@ function renderPrograms(progs) {
         progs[i].customStages[c].noMix = inp.checked;
         if (inp.checked) progs[i].customStages[c].mixPattern = [];
         renderPrograms(progs);
+      };
+    });
+    // --- Fermentation toggle logic ---
+    card.querySelectorAll('input[data-cfield="isFermentation"]').forEach(inp => {
+      inp.onchange = () => {
+        const i = parseInt(inp.getAttribute('data-idx'));
+        const c = parseInt(inp.getAttribute('data-cidx'));
+        progs[i].customStages[c].isFermentation = inp.checked;
       };
     });
     // --- Mix pattern editing logic ---
@@ -278,10 +325,14 @@ function renderPrograms(progs) {
         
         console.log(`Saving ${progs.length} programs (${sizeKB}KB)...`);
         
-        const response = await fetch('/api/programs', {
+        // Use file upload endpoint instead of /api/programs
+        const formData = new FormData();
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        formData.append('file', blob, 'programs.json');
+        
+        const response = await fetch('/api/upload', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: jsonString,
+          body: formData,
           signal: controller.signal
         });
         
@@ -291,15 +342,20 @@ function renderPrograms(progs) {
           throw new Error(`Server error: ${response.status} ${response.statusText}`);
         }
         
-        const resp = await response.json();
+        const responseText = await response.text();
         
-        if (resp.status === 'ok') {
+        if (responseText === 'Upload complete') {
           console.log(`✅ Save successful: ${progs.length} programs (${sizeKB}KB)`);
           alert(`Programs saved successfully! (${progs.length} programs, ${sizeKB}KB)`);
           // Refresh shared cache after save
           window.cachedPrograms = JSON.parse(JSON.stringify(progs));
+          // Reload programs from server to ensure consistency
+          setTimeout(() => {
+            window.cachedPrograms = null; // Clear cache
+            loadProgramsEditor(true); // Force refresh
+          }, 500);
         } else {
-          throw new Error(resp.message || 'Unknown server error');
+          throw new Error('Unexpected server response: ' + responseText);
         }
         
       } catch (error) {

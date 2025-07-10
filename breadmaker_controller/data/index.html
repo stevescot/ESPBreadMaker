@@ -78,6 +78,12 @@
       border: 2px solid #333;
       font-weight: 500;
       transition: background 0.3s, color 0.3s, border 0.3s;
+      cursor: pointer;
+      position: relative;
+    }
+    .stage-step:hover {
+      background: #444;
+      border-color: #555;
     }
     .stage-step.active {
       background: #ff9933;
@@ -88,6 +94,13 @@
       background: #4caf50;
       color: #fff;
       border: 2px solid #a5d6a7;
+    }
+    .stage-step.clickable {
+      box-shadow: 0 2px 4px rgba(255,255,255,0.1);
+    }
+    .stage-step.clickable:hover {
+      box-shadow: 0 2px 8px rgba(255,255,255,0.2);
+      transform: translateY(-1px);
     }
     .icon-row-devices {
       display: flex;
@@ -253,17 +266,41 @@
     </svg>
   </a>
   <div class="container">
-    <div class="start-at-row">
-      <label for="startAt">Start At:</label>
-      <input type="time" id="startAt" value="">
-      <button id="btnSetStartAt">Set</button>
-      <span id="startAtStatus" style="margin-left:1em; color:#ffb;"></span>
-    </div>
-
     <div class="program-row">
       <label for="progSelect" class="program-label">Program:</label>
       <select id="progSelect"></select>
       <span id="currentProg" class="program-name"></span>
+    </div>
+
+    <!-- Combined Timed and Stage Start Controls -->
+    <div class="timed-stage-controls" style="background:#2a2a2a;border-radius:8px;padding:1em;margin:0.7em auto;max-width:500px;">
+      <h3 style="color:#ffe;margin:0 0 0.7em 0;text-align:center;font-size:1.1em;">Scheduled Start</h3>
+      
+      <!-- Time Selection -->
+      <div style="display:flex;align-items:center;justify-content:center;margin-bottom:0.7em;gap:0.7em;flex-wrap:wrap;">
+        <label for="startAt" style="font-size:1em;color:#ffe;font-weight:bold;">Start Time:</label>
+        <input type="time" id="startAt" value="" style="padding:0.3em;border-radius:4px;border:1px solid #666;background:#333;color:#fff;">
+        <button id="btnSetStartAt" style="padding:0.3em 0.6em;border-radius:4px;background:#2196f3;color:#fff;border:none;cursor:pointer;">Set Time Only</button>
+      </div>
+      
+      <!-- Stage Selection (shown when program selected) -->
+      <div id="startAtStageRow" style="display:none;align-items:center;justify-content:center;margin-bottom:0.7em;gap:0.7em;flex-wrap:wrap;">
+        <label for="stageSelect" style="font-size:1em;color:#ffe;font-weight:bold;">Start at Stage:</label>
+        <select id="stageSelect" style="padding:0.3em;border-radius:4px;border:1px solid #666;background:#333;color:#fff;min-width:10em;">
+          <option value="">Start from beginning</option>
+        </select>
+        <button id="btnStartAtStage" style="padding:0.3em 0.6em;border-radius:4px;background:#4caf50;color:#fff;border:none;cursor:pointer;">Start at Stage Now</button>
+      </div>
+      
+      <!-- Combined Button -->
+      <div id="combinedStartRow" style="display:none;align-items:center;justify-content:center;margin-bottom:0.5em;gap:0.7em;">
+        <button id="btnSetTimedStageStart" style="padding:0.4em 1em;border-radius:6px;background:#ff9800;color:#fff;border:none;cursor:pointer;font-weight:bold;">Schedule Start at Time & Stage</button>
+      </div>
+      
+      <!-- Status Display -->
+      <div style="text-align:center;">
+        <span id="startAtStatus" style="color:#ffb;font-size:0.9em;"></span>
+      </div>
     </div>
 
     <!-- Manual Mode Toggle -->
@@ -348,6 +385,11 @@
       <div id="progressBarKey" style="margin-bottom:0.7em;"></div>
       <p id="stageReadyAt" style="margin-top:0.1em; color:#ffb;"> </p>
       <p id="programReadyAt" style="margin:0.2em 0 0.3em 0; color:#ffb;"> </p>
+      <div id="fermentationInfo" style="display:none; margin:0.3em 0; padding:0.5em; background:#2a3c2a; border-radius:6px; border:1px solid #4caf50;">
+        <p style="margin:0.2em 0;"><strong>Fermentation Factor:</strong> <span id="fermentFactor">1.0</span>x</p>
+        <p style="margin:0.2em 0;"><strong>Predicted Complete:</strong> <span id="predictedComplete">--</span></p>
+        <p style="margin:0.2em 0;"><strong>Initial Temp:</strong> <span id="initialTemp">--°C</span></p>
+      </div>
       <p><strong>Temperature:</strong> <span id="temp" style="cursor:pointer;">--&deg;C</span> <span id="setTemp" style="color:#ffd600;font-size:0.98em;margin-left:0.7em;"></span></p>
     </div>
 

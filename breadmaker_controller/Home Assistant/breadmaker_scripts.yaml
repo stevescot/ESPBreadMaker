@@ -1,0 +1,110 @@
+# Breadmaker Controller Scripts
+# Add these to your existing scripts.yaml file
+
+breadmaker_start_program:
+  alias: "Start Breadmaker Program"
+  description: "Select and start a breadmaker program"
+  fields:
+    program:
+      description: "Program name to start"
+      example: "basic"
+  sequence:
+    - action: rest_command.breadmaker_select_program
+      data:
+        program: "{{ program }}"
+    - delay: "00:00:02"
+    - action: rest_command.breadmaker_beep
+    - delay: "00:00:01"
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Program Selected"
+        message: "Program '{{ program }}' selected and ready to start"
+
+breadmaker_emergency_stop:
+  alias: "Emergency Stop Breadmaker"
+  description: "Emergency stop with notifications"
+  sequence:
+    - action: rest_command.breadmaker_stop
+    - action: rest_command.breadmaker_beep
+    - delay: "00:00:01"
+    - action: rest_command.breadmaker_beep
+    - action: notify.persistent_notification
+      data:
+        title: "🛑 Breadmaker Emergency Stop"
+        message: "Breadmaker has been emergency stopped"
+
+breadmaker_test_outputs:
+  alias: "Test Breadmaker Outputs"
+  description: "Test all outputs in manual mode"
+  sequence:
+    - action: rest_command.breadmaker_manual_mode_on
+    - delay: "00:00:01"
+    - action: rest_command.breadmaker_light_on
+    - delay: "00:00:02"
+    - action: rest_command.breadmaker_buzzer_on
+    - delay: "00:00:01"
+    - action: rest_command.breadmaker_buzzer_off
+    - delay: "00:00:01"
+    - action: rest_command.breadmaker_motor_on
+    - delay: "00:00:02"
+    - action: rest_command.breadmaker_motor_off
+    - delay: "00:00:01"
+    - action: rest_command.breadmaker_light_off
+    - delay: "00:00:01"
+    - action: rest_command.breadmaker_manual_mode_off
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Test Complete"
+        message: "All outputs tested successfully"
+
+breadmaker_quick_start:
+  alias: "Quick Start Default Program"
+  description: "Quickly start the default breadmaker program"
+  sequence:
+    - action: rest_command.breadmaker_select_program
+      data:
+        program: "default"
+    - delay: "00:00:02"
+    - action: rest_command.breadmaker_beep
+    - delay: "00:00:01"
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Quick Start"
+        message: "Default program selected and ready to start"
+
+breadmaker_pause_with_notification:
+  alias: "Pause Breadmaker with Notification"
+  description: "Pause breadmaker and send notification"
+  sequence:
+    - action: rest_command.breadmaker_pause
+    - action: rest_command.breadmaker_short_beep
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Paused"
+        message: "Breadmaker has been paused at stage: {{ states('sensor.breadmaker_stage') }}"
+
+breadmaker_resume_with_notification:
+  alias: "Resume Breadmaker with Notification"
+  description: "Resume breadmaker and send notification"
+  sequence:
+    - action: rest_command.breadmaker_resume
+    - action: rest_command.breadmaker_short_beep
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Resumed"
+        message: "Breadmaker has been resumed at stage: {{ states('sensor.breadmaker_stage') }}"
+
+breadmaker_status_check:
+  alias: "Check Breadmaker Status"
+  description: "Get current breadmaker status as notification"
+  sequence:
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Status Check"
+        message: >
+          Status: {{ states('sensor.breadmaker_status_summary') }}
+          Program: {{ states('sensor.breadmaker_program') }}
+          Stage: {{ states('sensor.breadmaker_stage') }}
+          Temperature: {{ states('sensor.breadmaker_temperature') }}°C
+          Health: {{ states('sensor.breadmaker_system_health') }}
+          Time Left: {{ states('sensor.breadmaker_stage_time_left') }} min

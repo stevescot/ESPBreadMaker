@@ -1,1 +1,1 @@
-{"outputMode":"digital","debugSerial":true,"lastProgram":"Bread - Sourdough In-Machine"}
+{"outputMode":"digital","debugSerial":true,"lastProgram":"Bread - Sourdough In-Machine","pidKp":0.11,"pidKi":0.00005,"pidKd":10,"pidSampleTime":7500,"pidWindowSize":15000,"tempSampleCount":30,"tempRejectCount":5,"tempSampleInterval":280}

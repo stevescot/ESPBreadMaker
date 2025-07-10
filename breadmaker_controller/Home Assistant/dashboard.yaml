@@ -1,0 +1,268 @@
+# Breadmaker Controller Dashboard View for Home Assistant
+# Add this as a new view in your existing dashboard
+views:
+  - title: Breadmaker Controller
+    icon: mdi:bread-slice
+    cards:
+      - type: horizontal-stack
+        cards:
+          - type: entity
+            entity: binary_sensor.breadmaker_running
+            name: Status
+            icon: mdi:play-circle
+          - type: entity
+            entity: sensor.breadmaker_stage
+            name: Current Stage
+            icon: mdi:progress-clock
+          - type: entity
+            entity: sensor.breadmaker_program
+            name: Program
+            icon: mdi:format-list-numbered
+
+      - type: horizontal-stack
+        cards:
+      - type: gauge
+        entity: sensor.breadmaker_temperature
+        name: Temperature
+        min: 0
+        max: 250
+        severity:
+          green: 0
+          yellow: 100
+          red: 200
+        needle: true
+      - type: gauge
+        entity: sensor.breadmaker_setpoint
+        name: Setpoint
+        min: 0
+        max: 250
+        severity:
+          green: 0
+          yellow: 100
+          red: 200
+        needle: true
+
+  - type: horizontal-stack
+    cards:
+      - type: entity
+        entity: sensor.breadmaker_stage_time_left
+        name: Stage Time Left
+        icon: mdi:timer-sand
+      - type: entity
+        entity: sensor.breadmaker_stage_ready_at
+        name: Stage Ready At
+        icon: mdi:clock-outline
+      - type: entity
+        entity: sensor.breadmaker_program_ready_at
+        name: Program Ready At
+        icon: mdi:clock-end
+
+  - type: entities
+    title: Output Status
+    entities:
+      - entity: binary_sensor.breadmaker_motor
+        name: Motor
+        icon: mdi:engine
+      - entity: binary_sensor.breadmaker_heater
+        name: Heater
+        icon: mdi:fire
+      - entity: binary_sensor.breadmaker_light
+        name: Light
+        icon: mdi:lightbulb
+      - entity: binary_sensor.breadmaker_buzzer
+        name: Buzzer
+        icon: mdi:volume-high
+
+  - type: entities
+    title: Manual Controls
+    entities:
+      - entity: switch.breadmaker_manual_mode
+        name: Manual Mode
+        icon: mdi:hand-back-right
+      - entity: switch.breadmaker_motor
+        name: Motor Control
+        icon: mdi:engine
+      - entity: switch.breadmaker_heater
+        name: Heater Control
+        icon: mdi:fire
+      - entity: switch.breadmaker_light
+        name: Light Control
+        icon: mdi:lightbulb
+      - entity: switch.breadmaker_buzzer
+        name: Buzzer Control
+        icon: mdi:volume-high
+
+  - type: horizontal-stack
+    cards:
+      - type: button
+        entity: switch.breadmaker
+        name: Start
+        icon: mdi:play
+        tap_action:
+          action: toggle
+      - type: button
+        name: Stop
+        icon: mdi:stop
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_stop
+      - type: button
+        name: Pause
+        icon: mdi:pause
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_pause
+      - type: button
+        name: Resume
+        icon: mdi:play
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_resume
+
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Advance Stage
+        icon: mdi:skip-next
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_advance
+      - type: button
+        name: Back Stage
+        icon: mdi:skip-previous
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_back
+      - type: button
+        name: Beep
+        icon: mdi:bell
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_beep
+
+  - type: history-graph
+    title: Temperature History
+    hours_to_show: 4
+    refresh: 30
+    entities:
+      - entity: sensor.breadmaker_temperature
+        name: Temperature
+      - entity: sensor.breadmaker_setpoint
+        name: Setpoint
+
+  - type: entities
+    title: System Information
+    entities:
+      - entity: sensor.breadmaker_wifi_rssi
+        name: WiFi Signal
+        icon: mdi:wifi
+      - entity: sensor.breadmaker_heap_free
+        name: Free Memory
+        icon: mdi:memory
+      - entity: sensor.breadmaker_uptime
+        name: Uptime
+        icon: mdi:clock-outline
+
+  - type: conditional
+    conditions:
+      - entity: binary_sensor.breadmaker_running
+        state: "on"
+    card:
+      type: markdown
+      content: |
+        ## Current Program Progress
+        
+        **Program:** {{ states('sensor.breadmaker_program') }}
+        
+        **Stage:** {{ states('sensor.breadmaker_stage') }}
+        
+        **Time Left:** {{ states('sensor.breadmaker_stage_time_left') }}
+        
+        **Temperature:** {{ states('sensor.breadmaker_temperature') }}°C
+        
+        **Setpoint:** {{ states('sensor.breadmaker_setpoint') }}°C
+        
+        **Stage Ready At:** {{ states('sensor.breadmaker_stage_ready_at') }}
+        
+        **Program Ready At:** {{ states('sensor.breadmaker_program_ready_at') }}
+
+  - type: conditional
+    conditions:
+      - entity: binary_sensor.breadmaker_running
+        state: "off"
+    card:
+      type: markdown
+      content: |
+        ## Breadmaker Idle
+        
+        The breadmaker is currently idle and ready to start a new program.
+        
+        **Current Temperature:** {{ states('sensor.breadmaker_temperature') }}°C
+        
+        **Last Program:** {{ states('sensor.breadmaker_program') }}
+        
+        **System Status:** Online
+        
+        **Uptime:** {{ states('sensor.breadmaker_uptime') }}
+
+  - type: entities
+    title: Quick Actions
+    entities:
+      - type: call-service
+        name: Select Default Program
+        icon: mdi:format-list-numbered
+        action_name: Select
+        service: rest_command.breadmaker_select_program
+        service_data:
+          program: "default"
+      - type: call-service
+        name: Select Basic Program
+        icon: mdi:format-list-numbered
+        action_name: Select
+        service: rest_command.breadmaker_select_program
+        service_data:
+          program: "basic"
+      - type: call-service
+        name: Select White Bread
+        icon: mdi:format-list-numbered
+        action_name: Select
+        service: rest_command.breadmaker_select_program
+        service_data:
+          program: "white"
+      - type: call-service
+        name: Select Whole Wheat
+        icon: mdi:format-list-numbered
+        action_name: Select
+        service: rest_command.breadmaker_select_program
+        service_data:
+          program: "wholewheat"
+
+  - type: markdown
+    title: Instructions
+    content: |
+      ## Breadmaker Controller
+      
+      ### Manual Mode
+      Enable manual mode to control individual outputs (motor, heater, light, buzzer) directly.
+      
+      ### Programs
+      Select a program before starting. Available programs are shown in the quick actions section.
+      
+      ### Safety
+      - Maximum temperature is limited to 250°C
+      - The system has thermal runaway protection
+      - Startup delay ensures temperature sensor stabilization
+      
+      ### Controls
+      - **Start/Stop**: Main program control
+      - **Pause/Resume**: Temporary pause without losing progress
+      - **Advance/Back**: Skip to next/previous stage
+      - **Beep**: Test buzzer functionality
+      
+      ### Monitoring
+      - Temperature and setpoint are continuously monitored
+      - Stage progress shows time remaining
+      - System health information is available
+      
+      ### Web Interface
+      Access the full web interface at: http://YOUR_BREADMAKER_IP/

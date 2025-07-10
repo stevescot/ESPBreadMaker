@@ -1,16 +1,104 @@
 # Breadmaker Controller (ESP8266)
 
-A drop-in replacement controller for breadmakers, using an ESP8266 microcontroller. Features a modern web UI, program editor, OTA firmware update, and temperature calibration.
+A versatile kitchen appliance controller using an ESP8266 microcontroller. Features a modern web UI, program editor, OTA firmware update, temperature calibration, robust manual mode, and Home Assistant integration. Supports bread making, fermentation, sous vide, and various utility functions.
 
 ## Features
 - Controls motor, heater, light, and buzzer (PWM, ~1V logic)
-- Web UI: live status, SVG icons, program editor, stage progress
-- Dual-stage bake with independent times/temps, PID control
-- Manual toggles for outputs
+- Web UI: live status, SVG icons, program editor, stage progress, manual mode
+- Multi-stage temperature control with PID
+- Precise mixing patterns with customizable durations
+- Manual mode: direct output toggles and manual temperature setpoint (PID)
 - Persistent storage (LittleFS)
 - OTA firmware update via web page
 - Multi-point RTD temperature calibration
 - WiFi setup via built-in captive portal (no WiFiManager)
+- Temperature sensor noise suppression with startup delay
+- Accurate timing with actual vs. estimated stage start times
+- Google Calendar integration for stage reminders
+- Home Assistant integration via REST sensors and automations
+
+## Setup Stages
+1. **Hardware Wiring & Connection**
+   - **ESP8266 Board:** NodeMCU, Wemos D1 Mini, or similar.
+   - **Breadmaker Board Connections:**
+     - **Motor:** Connect to a digital output pin (e.g., D1/GPIO5) **with a 1k resistor in series**
+     - **Heater:** Connect to a digital output pin (e.g., D2/GPIO4) **with a 1k resistor in series**
+     - **Light:** Connect to a digital output pin (e.g., D6/GPIO12) **with a 1k resistor in series**
+     - **Buzzer:** Connect to a digital output pin (e.g., D7/GPIO13) **with a 1k resistor in series**
+     - **Temperature Sensor (RTD/Analog):** Connect to A0 (ADC input). **Add a 10k pull-down resistor from the sensor signal to ground** (typical for voltage divider circuits; adjust as needed for your sensor type).
+   - **Power:** Use 5V USB or regulated supply. Ensure breadmaker control lines are opto-isolated or logic-level compatible.
+   - **Pin assignments** can be changed in `outputs_manager.cpp` if needed.
+
+2. **Firmware & Web UI Upload**
+   - Install Arduino IDE and ESP8266 board support
+   - Install required libraries:
+     - ESPAsyncWebServer
+     - ESPAsyncTCP
+     - ESPAsyncHTTPUpdateServer
+     - ArduinoJson
+     - PID_v1
+     - LittleFS
+   - Upload the `data/` folder to LittleFS using the Arduino LittleFS Data Upload tool or provided scripts
+   - Build and upload the firmware using provided scripts (`build_and_upload.ps1`, `.bat`) or Arduino IDE
+
+3. **First Boot & WiFi Setup**
+   - Power on the device. If no WiFi is configured, a dark-themed captive portal will appear for setup
+   - Connect to the device's WiFi AP, open the captive portal, and enter your WiFi credentials
+   - After connecting to your network, access the web UI at the device's IP address
+
+4. **Web UI & Program Selection**
+   - Use the web UI to select or edit programs, monitor status, and control outputs
+   - Manual mode allows direct toggling of outputs and manual temperature setpoint
+   - All program selection is by index (position in list), not by name
+
+5. **Home Assistant Integration**
+   - Use the provided YAML examples in `Home Assistant/` for:
+     - REST sensors to monitor status, temperature, stage, and outputs
+     - Automations for notifications, reminders, and control
+     - Dashboard cards for live status and control
+   - Example REST sensor:
+     ```yaml
+     sensor:
+       - platform: rest
+         name: Breadmaker Status
+         resource: http://<breadmaker_ip>/api/status
+         value_template: '{{ value_json.stage }}'
+         json_attributes:
+           - temp
+           - setTemp
+           - program
+           - stage
+           - running
+           - manualMode
+     ```
+   - See `Home Assistant/breadmaker_automations.yaml` and `dashboard.yaml` for more.
+
+## Capabilities
+### Bread Making
+- Sourdough programs with autolyse and stretch-and-fold reminders
+- Classic bread programs with precise timing
+- Specialized dough programs (pizza, enriched, whole wheat, rye)
+- In-machine and external baking options
+
+### Fermentation & Dairy
+- Yogurt and kefir making
+- Soft cheese production
+- Temperature-controlled fermentation
+
+### Desserts & Confectionery
+- Chocolate tempering
+- Caramel making with precise temperature control
+- Consistent results for candy making
+
+### Utility Functions
+- Sous vide cooking
+- Herb drying
+- Container sanitization
+- Proof box functionality
+- Beeswax melting
+- Hot towel warming
+- DIY cosmetics preparation
+- Butter melting and holding
 
 ## Hardware
 - ESP8266 (NodeMCU, Wemos D1 Mini, etc.)
@@ -18,28 +106,49 @@ A drop-in replacement controller for breadmakers, using an ESP8266 microcontroll
 - RTD or analog temperature sensor (wired to A0)
 
 ## Recent Changes (2025)
-- **WiFi captive portal**: Now uses `/wifi.html` in LittleFS, with modern dark styling and AJAX feedback. WiFi credentials are stored only in `/wifi.json` (LittleFS), not EEPROM. WiFiManager is no longer used.
-- **Stage structure**: The main breadmaking flow now starts with an "Autolyse" stage (replaces old delay). The "starter" stage is removed from the main flow.
-- **Program format**: Programs now use `autolyseTime` (min) as the first stage field instead of `delayStart`. All UI and backend logic updated for this.
-- **UI consistency**: All web UIs (main, program editor, captive portal) use a dark theme for visual consistency.
-- **Program editor**: `/programs.html` and `/programs.js` updated to allow editing/adding programs with the new stage structure. Fields are: autolyseTime, mixTime, bulkTemp, bulkTime, knockDownTime, riseTemp, riseTime, bake1Temp, bake1Time, bake2Temp, bake2Time, coolTime.
-- **Backend**: `breadmaker_controller.ino` updated to use `autolyseTime` for the autolyse stage, and to load WiFi credentials from `/wifi.json` via `loadWiFiCreds()`.
-- **Sample program**: The default program in `/programs.json` now uses `autolyseTime` instead of `delayStart`.
-- **Program selection by index**: The web UI and backend now use a program index (not name) for selection (`/select?idx=N`). This is robust for long names and special characters. Name-based selection is still supported for compatibility, but index is recommended.
-- **Google Calendar links for interactions**: The plan summary table now generates Google Calendar links only for stages that require user interaction (e.g., add mix-ins, remove paddle, shape dough). The event time matches when the interaction is needed, and the event links back to the breadmaker's web UI so you can check the current status directly.
+- **Manual Mode:** Added direct control of outputs (heater, motor, light, buzzer) and manual temperature setpoint via new API endpoints and web UI. Manual mode disables program controls and allows real-time output toggling.
+- **API Refactor:** All control and status endpoints now use `/api/` prefix. Status JSONs only include a program list (not full definitions) for efficiency.
+- **UI/UX Overhaul:**
+  - Main UI: Manual mode toggle, output controls, program dropdown, robust status polling, device icon hooks.
+  - Update page: Shows firmware build time, upload progress, and rebooting status after OTA update.
+  - All web UIs use a modern dark theme and improved event handling.
+- **Build & Upload Workflow:**
+  - Scripts for building and uploading both firmware and web files (LittleFS image) are provided (`build_and_upload.ps1`, `.bat`, `upload_files.ps1`).
+  - Web UI files are uploaded to ESP8266 LittleFS for serving.
+- **Firmware Improvements:**
+  - Modularized code for maintainability and robustness.
+  - Pin initialization for all outputs in `outputs_manager.cpp`.
+  - OTA update endpoint and troubleshooting guidance.
+  - Firmware build time available via `/api/firmware_info`.
+- **Program Handling:**
+  - Program selection by index (recommended) or name (legacy support).
+  - Custom stages only; classic stage logic removed.
+  - Resume state robustly saved and restored.
+- **Testing & Debugging:**
+  - Python and JS test coverage for backend and UI.
+  - Hardware troubleshooting and best practices documented.
+
+## Latest Updates (July 2025)
+- **Startup Temperature Sensor Stabilization:** Added 15-second delay after power-on and resume to prevent temperature sensor noise from affecting program startup. UI displays startup delay status and disables Start button until stabilization is complete.
+- **Enhanced Calendar Link Accuracy:** Calendar links now use actual stage start times for completed stages and dynamically updated estimates for future stages. When stages are manually advanced, future calendar events automatically reflect realistic updated timing.
+- **Improved Timing Synchronization:** Fixed stage and program ready time calculations to use actual elapsed time rather than planned durations, ensuring UI displays remain accurate after manual stage advancement.
+- **Robust Stage Progression:** Enhanced debug output and timing logic to ensure stage advancement works correctly with proper timing calculations and state management.
+- **Mix Pattern Logic Improvements:** Fixed firmware mix pattern repetition to cycle correctly through all patterns for the full stage duration, not just execute once.
+- **Auto-Tune UI Modularization:** Split PID auto-tuning JavaScript into separate modular files for better maintainability and error handling.
+- **Program Management Enhancements:** Improved "Save All" functionality with timeout protection, payload size validation, and enhanced user feedback.
+- **Status JSON Expansion:** Added `actualStageStartTimes` array to status JSON to track when each stage actually began, enabling more accurate calendar events and timing displays.
 
 ## Major Changes (2025-06)
-- **Custom Stages Only:** All classic stage logic and variables have been removed from both firmware and UI. Only `customStages` are supported for all programs, navigation, and reporting.
-- **Robust Resume State:** Resume state (`/resume.json`) is now saved every minute while running, immediately when a program is started, and when a program is selected. This allows the system to restore the last selected or started program after a power cycle, even if it was not running yet.
-- **Endpoints Updated:** `/status` and `/ha` endpoints now report the current custom stage label or "Idle" as appropriate. All navigation and state logic uses only `customStages`.
+- **Manual Mode:** Direct output control and manual temperature setpoint (PID) via web UI and API.
+- **API & Status:** `/api/status` and related endpoints provide concise, robust status and program lists.
 - **UI Improvements:**
-  - Main UI and plan summary are robust to initial load, stopped state, and missing/invalid program names.
-  - Plan summary table updates row status for custom stages and hides calendar icons until running.
-  - Program editor UI now uses a dropdown for program selection, supports LLM prompt/copy, JSON paste/validate/add, and only shows the selected program.
-  - Custom stage cards in the editor use the same color palette as the main UI. Added "Move Up" and "Move Down" for stage reordering.
-- **Persistent Program Selection:** The last selected program is saved to `settings.json` and restored on boot.
-- **Test Coverage:** Python backend tests (`test_status_endpoint.py`, `test_programs_format.py`) pass. Long-running test (`test_full_cycle.py`) runs and verifies backend response. JavaScript UI tests are present but require Node.js/Jest to run.
-- **Error Handling:** System is robust to missing/default program names and invalid states. Resume state is cleared on stop or program end.
+  - Manual mode toggle and output controls
+  - Program dropdown and robust status polling
+  - Firmware build time and upload/rebooting status on update page
+- **Build/Upload:** Scripts for firmware and web files (LittleFS) included; see build_and_upload.ps1 and upload_files.ps1.
+- **Persistent Program Selection:** Last selected program saved and restored on boot.
+- **Custom Stages Only:** All programs use custom stages for maximum flexibility.
+- **Error Handling:** Robust to missing/default program names and invalid states.
 
 See the test/README.md for test plan and details.
 
@@ -52,34 +161,71 @@ See the test/README.md for test plan and details.
    - ArduinoJson
    - PID_v1
    - LittleFS
-3. **Upload `data/` folder** to LittleFS using the Arduino LittleFS Data Upload tool
-4. **Build and upload** the firmware
+3. **Upload `data/` folder** to LittleFS using the Arduino LittleFS Data Upload tool or provided scripts
+4. **Build and upload** the firmware using provided scripts or Arduino IDE
 5. **Power on the device.** If no WiFi is configured, a dark-themed captive portal will appear for setup
 6. **Access the web UI** at the device's IP address
 7. **Select programs by index**: The web UI now selects programs by their position in the list, not by name. This avoids issues with long or special-character names.
+8. **Manual mode:** Use the toggle on the main UI to directly control outputs or set a manual temperature setpoint (PID controlled).
+
+## Program Categories
+### Bread Programs
+- Multiple sourdough variants (basic, in-machine, pizza)
+- Classic white bread
+- Whole wheat bread
+- Enriched sweet dough
+- Rye bread
+
+### Utility Programs
+- Sous vide cooking
+- Herb drying
+- Container sanitization
+- Proof box
+- Beeswax melting
+- Hot towel warming
+- DIY cosmetics
+- Butter melting
+
+### Fermentation Programs
+- Yogurt/kefir making
+- Soft cheese making
+
+### Dessert Programs
+- Chocolate tempering
+- Soft caramel making
 
 ## Web Pages
-- `/` — Main status and control
-- `/config` — Program editor, calibration, firmware update
-- `/update` — OTA firmware update
-- `/calibrate` — RTD calibration
-- `/programs` — Program editor
-- `/wifi.html` — WiFi captive portal (auto-appears if not configured)
+- `/` — Main status and manual/program control
+- `/config` — Program editor, calibration, and firmware update (combined)
+- `/update` — OTA firmware update (shows build time, upload progress, and reboot status)
+- `/calibrate` — RTD calibration (live raw value, multi-point)
+- `/programs` — Program editor (advanced, supports JSON import/export)
+- `/wifi.html` — WiFi captive portal (auto-appears if not configured, dark theme)
+
+## API Endpoints
+- `/api/status` — Current status, mode, outputs, temperature, and program list
+- `/api/manual` — Set manual mode and direct output states
+- `/api/manual_temp` — Set manual temperature setpoint (PID)
+- `/api/programs` — List available programs (names only)
+- `/api/select` — Select program by index or name
+- `/api/start`, `/api/stop` — Start/stop selected program
+- `/api/firmware_info` — Firmware build time and version
+- `/api/update` — OTA firmware upload
 
 ## Security
-- OTA and config pages are open by default. For real-world use, add authentication.
+- OTA and config pages are open by default. For real-world use, add authentication or restrict access to your local network.
 
 ## Notes
-- For sourdough, use the "Autolyse" stage for the initial rest. Starter management is not part of the main breadmaking flow.
-- All configuration and program data is stored in LittleFS.
-- **Program selection:** If you have issues selecting a program with a long or special-character name, use the index-based selection (now default in the UI).
-- **Google Calendar links:** Calendar links in the plan summary are only shown for stages that require user interaction. The event time matches the required action, and the event links back to the breadmaker's web UI (e.g., `http://breadmaker.local/`).
-- **Custom Stages:** All programs now use only `customStages` with programmable steps, labels, and device control. Classic/legacy stage logic is fully removed from firmware and UI.
-- **Resume and Power Loss:** The system saves and restores the full program state (including current stage, timers, and indices) on every transition, and fast-forwards on boot to the correct point. This ensures robust resume after power loss.
-- **Knockdown Stage:** The "Sourdough Bread - In-Machine" program now includes a "Knockdown" stage after "Bulk Ferment" and before "Proof" for proper degassing.
-- **Light Output:** The light output is now always controlled with digital (on/off) logic to prevent flicker or interference with the motor or heater.
-- **UI Countdown:** The "Time Left (this stage)" countdown is now smooth and flicker-free, updating every second based on the backend's absolute stage timing.
-- **Mobile UI:** The UI is robust to mobile usage, with status polling paused while dropdowns are open to prevent flicker.
+- Temperature ranges from 5°C (cold proof) to 230°C (bread baking)
+- Mix patterns can be customized with durations from 5 seconds to several hours
+- All programs use the custom stages system for maximum flexibility
+- Each stage can have specific heating, mixing, lighting, and buzzer requirements
+- Programs include detailed ingredient measurements and instructions
+- The system supports both time-based and temperature-based stage transitions
+- Utility functions make full use of precise temperature control and mixing capabilities
+- 15-second startup delay prevents temperature sensor noise from affecting program timing
+- Calendar links automatically update when stages are manually advanced for accurate scheduling
+- Timing displays use actual elapsed time rather than estimates for precision
 
 ## License
 MIT

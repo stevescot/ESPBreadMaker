@@ -1,0 +1,187 @@
+title: Breadmaker Controller
+icon: mdi:bread-slice
+cards:
+  - type: horizontal-stack
+    cards:
+      - type: entity
+        entity: sensor.breadmaker_state
+        name: Status
+        icon: mdi:play-circle
+      - type: entity
+        entity: sensor.breadmaker_stage
+        name: Current Stage
+        icon: mdi:progress-clock
+      - type: entity
+        entity: sensor.breadmaker_program
+        name: Program
+        icon: mdi:format-list-numbered
+
+  - type: horizontal-stack
+    cards:
+      - type: gauge
+        entity: sensor.breadmaker_temperature
+        name: Temperature
+        min: 0
+        max: 250
+        severity:
+          green: 0
+          yellow: 100
+          red: 200
+        needle: true
+      - type: gauge
+        entity: sensor.breadmaker_setpoint
+        name: Setpoint
+        min: 0
+        max: 250
+        severity:
+          green: 0
+          yellow: 100
+          red: 200
+        needle: true
+
+  - type: entities
+    title: System Information
+    entities:
+      - entity: sensor.breadmaker_heap_free
+        name: Free Memory
+        icon: mdi:memory
+      - entity: sensor.breadmaker_wifi_rssi
+        name: WiFi Signal
+        icon: mdi:wifi
+      - entity: sensor.breadmaker_uptime
+        name: Uptime
+        icon: mdi:clock-outline
+
+  - type: entities
+    title: Output Status
+    entities:
+      - entity: sensor.breadmaker_motor
+        name: Motor
+        icon: mdi:engine
+      - entity: sensor.breadmaker_heater
+        name: Heater
+        icon: mdi:radiator
+      - entity: sensor.breadmaker_light
+        name: Light
+        icon: mdi:lightbulb
+      - entity: sensor.breadmaker_buzzer
+        name: Buzzer
+        icon: mdi:volume-high
+
+  - type: markdown
+    content: |
+      ## Quick Actions
+
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Stop
+        icon: mdi:stop
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_stop
+      - type: button
+        name: Pause
+        icon: mdi:pause
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_pause
+      - type: button
+        name: Resume
+        icon: mdi:play
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_resume
+
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Advance Stage
+        icon: mdi:skip-next
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_advance
+      - type: button
+        name: Back Stage
+        icon: mdi:skip-previous
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_back
+      - type: button
+        name: Beep
+        icon: mdi:bell
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_beep
+
+  - type: markdown
+    content: |
+      ## Manual Control
+
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Manual Mode On
+        icon: mdi:hand-back-right
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_manual_mode_on
+      - type: button
+        name: Manual Mode Off
+        icon: mdi:hand-back-left
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_manual_mode_off
+
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Motor On
+        icon: mdi:engine
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_motor_on
+      - type: button
+        name: Motor Off
+        icon: mdi:engine-off
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_motor_off
+
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Heater On
+        icon: mdi:radiator
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_heater_on
+      - type: button
+        name: Heater Off
+        icon: mdi:radiator-off
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_heater_off
+
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Light On
+        icon: mdi:lightbulb
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_light_on
+      - type: button
+        name: Light Off
+        icon: mdi:lightbulb-off
+        tap_action:
+          action: call-service
+          service: rest_command.breadmaker_light_off
+
+  - type: history-graph
+    title: Temperature History
+    entities:
+      - sensor.breadmaker_temperature
+      - sensor.breadmaker_setpoint
+    hours_to_show: 6
+    refresh_interval: 30

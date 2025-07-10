@@ -1,0 +1,168 @@
+# Breadmaker Controller Automations
+# Add these to your existing automations.yaml file
+
+# Basic program monitoring
+- alias: "Breadmaker Stage Changed"
+  description: "Notify when breadmaker stage changes"
+  trigger:
+    - entity_id: sensor.breadmaker_stage
+      for: "00:00:01"
+  condition:
+    - condition: template
+      value_template: "{{ trigger.from_state.state != trigger.to_state.state }}"
+    - condition: template
+      value_template: "{{ trigger.to_state.state not in ['unknown', 'unavailable', 'none'] }}"
+    - condition: template
+      value_template: "{{ trigger.from_state.state not in ['unknown', 'unavailable', 'none'] }}"
+  action:
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Stage Update"
+        message: "Stage changed from {{ trigger.from_state.state }} to {{ trigger.to_state.state }}"
+    # Uncomment and customize for mobile notifications:
+    # - action: notify.mobile_app_your_device
+    #   data:
+    #     title: "Breadmaker Update"
+    #     message: "Stage changed from {{ trigger.from_state.state }} to {{ trigger.to_state.state }}"
+
+- alias: "Breadmaker Program Complete"
+  description: "Notify when breadmaker program completes"
+  trigger:
+    - entity_id: binary_sensor.breadmaker_running
+      from: "on"
+      to: "off"
+  action:
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Complete"
+        message: "Your bread program has finished! Program: {{ states('sensor.breadmaker_program') }}"
+    - action: rest_command.breadmaker_beep
+    # Uncomment and customize for mobile notifications:
+    # - action: notify.mobile_app_your_device
+    #   data:
+    #     title: "Breadmaker Complete"
+    #     message: "Your bread program has finished!"
+    #     data:
+    #       actions:
+    #         - action: "BREADMAKER_BEEP"
+    #           title: "Beep"
+
+# Safety and system health monitoring
+- alias: "Breadmaker Critical Safety Alert"
+  description: "Critical safety alerts for thermal runaway or sensor faults"
+  trigger:
+    - entity_id: binary_sensor.breadmaker_thermal_runaway
+      to: "on"
+    - entity_id: binary_sensor.breadmaker_sensor_fault
+      to: "on"
+  action:
+    - action: notify.persistent_notification
+      data:
+        title: "🚨 BREADMAKER CRITICAL ALERT"
+        message: >
+          Critical safety fault detected!
+          Thermal Runaway: {{ states('binary_sensor.breadmaker_thermal_runaway') }}
+          Sensor Fault: {{ states('binary_sensor.breadmaker_sensor_fault') }}
+          Temperature: {{ states('sensor.breadmaker_temperature') }}°C
+    - action: rest_command.breadmaker_stop
+    # Uncomment for mobile notifications:
+    # - action: notify.mobile_app_your_device
+    #   data:
+    #     title: "🚨 BREADMAKER CRITICAL ALERT"
+    #     message: "Critical system fault detected! Breadmaker stopped."
+    #     data:
+    #       priority: high
+    #       sound: alarm.wav
+
+- alias: "Breadmaker System Health Warning"
+  description: "Warning for system health issues"
+  trigger:
+    - entity_id: sensor.breadmaker_free_heap
+      below: 2000
+    - entity_id: sensor.breadmaker_wifi_rssi
+      below: -80
+    - entity_id: sensor.breadmaker_fs_utilization
+      above: 90
+    - trigger: template
+      value_template: "{{ states('sensor.breadmaker_system_health') == 'Warning' }}"
+  action:
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker System Warning"
+        message: >
+          System health issue detected:
+          Free Memory: {{ states('sensor.breadmaker_free_heap') }} bytes
+          WiFi RSSI: {{ states('sensor.breadmaker_wifi_rssi') }} dBm
+          FS Usage: {{ states('sensor.breadmaker_fs_utilization') }}%
+          Health Status: {{ states('sensor.breadmaker_system_health') }}
+
+# Convenience automations
+- alias: "Breadmaker Program Started"
+  description: "Actions when breadmaker program starts"
+  trigger:
+    - entity_id: binary_sensor.breadmaker_running
+      from: "off"
+      to: "on"
+  action:
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Started"
+        message: "Program '{{ states('sensor.breadmaker_program') }}' started. First stage: {{ states('sensor.breadmaker_stage') }}"
+    - action: rest_command.breadmaker_short_beep
+
+- alias: "Breadmaker Stage Advance Warning"
+  description: "Warning before stage advances automatically"
+  trigger:
+    - entity_id: sensor.breadmaker_stage_time_left
+      below: 5
+  condition:
+    - condition: state
+      entity_id: binary_sensor.breadmaker_running
+      state: "on"
+    - condition: template
+      value_template: "{{ states('sensor.breadmaker_stage_time_left') | int > 0 }}"
+  action:
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Stage Ending Soon"
+        message: "Stage '{{ states('sensor.breadmaker_stage') }}' will end in {{ states('sensor.breadmaker_stage_time_left') }} minutes"
+
+# Temperature monitoring
+- alias: "Breadmaker Temperature Alert"
+  description: "Alert for temperature issues"
+  trigger:
+    - trigger: template
+      value_template: "{{ states('sensor.breadmaker_temperature_error') | float | abs > 10 }}"
+  condition:
+    - condition: state
+      entity_id: binary_sensor.breadmaker_running
+      state: "on"
+    - condition: template
+      value_template: "{{ states('sensor.breadmaker_setpoint') | float > 30 }}"
+  action:
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Temperature Warning"
+        message: >
+          Temperature deviation from setpoint:
+          Current: {{ states('sensor.breadmaker_temperature') }}°C
+          Setpoint: {{ states('sensor.breadmaker_setpoint') }}°C
+          Error: {{ states('sensor.breadmaker_temperature_error') }}°C
+
+# Performance monitoring
+- alias: "Breadmaker Performance Alert"
+  description: "Alert for performance issues"
+  trigger:
+    - entity_id: sensor.breadmaker_cpu_usage
+      above: 80
+    - entity_id: sensor.breadmaker_max_loop_time
+      above: 50000  # 50ms
+  action:
+    - action: notify.persistent_notification
+      data:
+        title: "Breadmaker Performance Warning"
+        message: >
+          Performance issue detected:
+          CPU Usage: {{ states('sensor.breadmaker_cpu_usage') }}%
+          Max Loop Time: {{ states('sensor.breadmaker_max_loop_time') }}μs
+          Free Memory: {{ states('sensor.breadmaker_free_heap') }} bytes

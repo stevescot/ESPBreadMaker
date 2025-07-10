@@ -1,0 +1,165 @@
+# Example Home Assistant Package Configuration
+# This is an alternative way to organize the breadmaker integration
+# Save this as packages/breadmaker.yaml and add to your configuration.yaml:
+# homeassistant:
+#   packages: !include_dir_named packages
+
+breadmaker:
+  sensor:
+    # Main breadmaker status sensor
+    - platform: rest
+      resource: "http://YOUR_BREADMAKER_IP/ha"
+      name: "Breadmaker Status"
+      value_template: "{{ value_json.state }}"
+      json_attributes:
+        - stage
+        - program
+        - temperature
+        - motor
+        - light
+        - buzzer
+        - heater
+        - setpoint
+        - manual_mode
+        - stage_time_left
+        - stage_ready_at
+        - program_ready_at
+        - heap_free
+        - uptime_sec
+        - wifi_rssi
+        - ip
+        - firmware_build
+        - pid_output
+        - raw_temp
+        - calib_points
+        - littlefs_total
+        - littlefs_used
+        - restart_reason
+      scan_interval: 10
+      timeout: 30
+      headers:
+        User-Agent: "Home Assistant"
+
+    # Derived sensors
+    - platform: template
+      sensors:
+        breadmaker_temperature:
+          friendly_name: "Breadmaker Temperature"
+          value_template: "{{ state_attr('sensor.breadmaker_status', 'temperature') }}"
+          unit_of_measurement: "°C"
+          device_class: temperature
+          availability_template: "{{ states('sensor.breadmaker_status') != 'unavailable' }}"
+
+        breadmaker_stage:
+          friendly_name: "Breadmaker Stage"
+          value_template: "{{ state_attr('sensor.breadmaker_status', 'stage') }}"
+          availability_template: "{{ states('sensor.breadmaker_status') != 'unavailable' }}"
+
+        breadmaker_program:
+          friendly_name: "Breadmaker Program"
+          value_template: "{{ state_attr('sensor.breadmaker_status', 'program') }}"
+          availability_template: "{{ states('sensor.breadmaker_status') != 'unavailable' }}"
+
+        breadmaker_setpoint:
+          friendly_name: "Breadmaker Setpoint"
+          value_template: "{{ state_attr('sensor.breadmaker_status', 'setpoint') }}"
+          unit_of_measurement: "°C"
+          device_class: temperature
+          availability_template: "{{ states('sensor.breadmaker_status') != 'unavailable' }}"
+
+        breadmaker_stage_time_left:
+          friendly_name: "Breadmaker Stage Time Left"
+          value_template: >
+            {% set seconds = state_attr('sensor.breadmaker_status', 'stage_time_left') %}
+            {% if seconds %}
+              {% set hours = (seconds // 3600) %}
+              {% set minutes = ((seconds % 3600) // 60) %}
+              {% set secs = (seconds % 60) %}
+              {% if hours > 0 %}
+                {{ '%d:%02d:%02d' | format(hours, minutes, secs) }}
+              {% else %}
+                {{ '%d:%02d' | format(minutes, secs) }}
+              {% endif %}
+            {% else %}
+              0:00
+            {% endif %}
+          unit_of_measurement: "time"
+          availability_template: "{{ states('sensor.breadmaker_status') != 'unavailable' }}"
+
+  binary_sensor:
+    - platform: template
+      sensors:
+        breadmaker_running:
+          friendly_name: "Breadmaker Running"
+          value_template: "{{ states('sensor.breadmaker_status') == 'on' }}"
+          device_class: running
+          availability_template: "{{ states('sensor.breadmaker_status') != 'unavailable' }}"
+
+        breadmaker_motor:
+          friendly_name: "Breadmaker Motor"
+          value_template: "{{ state_attr('sensor.breadmaker_status', 'motor') }}"
+          device_class: running
+          availability_template: "{{ states('sensor.breadmaker_status') != 'unavailable' }}"
+
+        breadmaker_heater:
+          friendly_name: "Breadmaker Heater"
+          value_template: "{{ state_attr('sensor.breadmaker_status', 'heater') }}"
+          device_class: heat
+          availability_template: "{{ states('sensor.breadmaker_status') != 'unavailable' }}"
+
+  switch:
+    - platform: rest
+      name: "Breadmaker"
+      resource: "http://YOUR_BREADMAKER_IP/start"
+      state_resource: "http://YOUR_BREADMAKER_IP/ha"
+      is_on_template: "{{ value_json.state == 'on' }}"
+      body_on: ""
+      body_off: ""
+      headers:
+        User-Agent: "Home Assistant"
+
+  rest_command:
+    breadmaker_stop:
+      url: "http://YOUR_BREADMAKER_IP/stop"
+      method: GET
+      headers:
+        User-Agent: "Home Assistant"
+
+    breadmaker_pause:
+      url: "http://YOUR_BREADMAKER_IP/pause"
+      method: GET
+      headers:
+        User-Agent: "Home Assistant"
+
+    breadmaker_resume:
+      url: "http://YOUR_BREADMAKER_IP/resume"
+      method: GET
+      headers:
+        User-Agent: "Home Assistant"
+
+  automation:
+    - alias: "Breadmaker Stage Changed"
+      trigger:
+        - platform: state
+          entity_id: sensor.breadmaker_stage
+      condition:
+        - condition: template
+          value_template: "{{ trigger.to_state.state != trigger.from_state.state }}"
+      action:
+        - service: notify.mobile_app_your_device
+          data:
+            title: "Breadmaker Update"
+            message: "Stage changed from {{ trigger.from_state.state }} to {{ trigger.to_state.state }}"
+
+    - alias: "Breadmaker Program Complete"
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.breadmaker_running
+          from: "on"
+          to: "off"
+      action:
+        - service: notify.mobile_app_your_device
+          data:
+            title: "Breadmaker Complete"
+            message: "Your bread program has finished!"
+        - service: rest_command.breadmaker_beep

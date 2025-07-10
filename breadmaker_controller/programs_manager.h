@@ -19,7 +19,9 @@ struct CustomStage {
     uint16_t min = 0; // Duration in minutes
     float temp = 0.0f;
     bool noMix = false;
+    bool isFermentation = false; // Flag to enable fermentation time adjustment
     std::vector<MixStep> mixPattern;
+    String instructions; // Stage instructions
     String light; // legacy, can be ignored
     String buzzer; // legacy, can be ignored
 };
@@ -29,11 +31,17 @@ struct Program {
     String name;
     String notes;
     String icon; // optional, can be empty
+    float fermentBaselineTemp = 20.0f; // Baseline temperature for fermentation calculations
+    float fermentQ10 = 2.0f; // Q10 factor for fermentation time adjustment
     std::vector<CustomStage> customStages;
 };
 
+
+
 // --- Programs map ---
-extern std::map<String, Program> programs;
+extern std::vector<Program> programs;
+// --- Ordered program names (matches load order from JSON) ---
+// programNamesOrdered is no longer needed; use programs[programId].name for lookups
 
 // --- Program management functions ---
 void loadPrograms();

@@ -10,11 +10,11 @@ function formatDuration(seconds) {
   seconds = Math.round(seconds);
   let h = Math.floor(seconds / 3600);
   let m = Math.floor((seconds % 3600) / 60);
-  let s = seconds % 60;
+  // Only show hours and minutes, never seconds
   if (h > 0) {
-    return h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
   } else {
-    return m + ':' + (s < 10 ? '0' : '') + s;
+    return m + 'm';
   }
 }
 
@@ -34,6 +34,91 @@ function toGCalDate(date) {
     pad(date.getUTCHours()) +
     pad(date.getUTCMinutes()) +
     pad(date.getUTCSeconds()) + 'Z';
+}
+
+// ---- Stage Dropdown Population ----
+function populateStageDropdown(programIdx) {
+  const stageSelect = document.getElementById('stageSelect');
+  const startAtStageRow = document.getElementById('startAtStageRow');
+  const combinedStartRow = document.getElementById('combinedStartRow');
+  
+  if (!stageSelect || !window.cachedPrograms) return;
+  
+  // Remember the current selected value
+  const currentValue = stageSelect.value;
+  
+  // Clear existing options
+  stageSelect.innerHTML = '<option value="">Start from beginning</option>';
+  
+  // Get the selected program
+  const program = window.cachedPrograms[programIdx];
+  if (!program || !program.customStages || !Array.isArray(program.customStages)) {
+    // Hide the start at stage row if no custom stages
+    if (startAtStageRow) startAtStageRow.style.display = 'none';
+    if (combinedStartRow) combinedStartRow.style.display = 'none';
+    return;
+  }
+  
+  // Populate stages
+  program.customStages.forEach((stage, idx) => {
+    const option = document.createElement('option');
+    option.value = idx;
+    option.textContent = `${idx + 1}. ${stage.label}`;
+    stageSelect.appendChild(option);
+  });
+  
+  // Restore the selected value if it still exists
+  if (currentValue !== undefined && currentValue !== "") {
+    const stageIdx = parseInt(currentValue);
+    if (stageIdx >= 0 && stageIdx < program.customStages.length) {
+      stageSelect.value = currentValue;
+    }
+  }
+  
+  // Show the start at stage controls
+  if (startAtStageRow) startAtStageRow.style.display = 'flex';
+  
+  // Show combined button only if there are stages available
+  updateCombinedStartButton();
+}
+
+// ---- Update Combined Start Button Visibility ----
+function updateCombinedStartButton() {
+  const combinedStartRow = document.getElementById('combinedStartRow');
+  const startAtInput = document.getElementById('startAt');
+  const stageSelect = document.getElementById('stageSelect');
+  
+  if (!combinedStartRow || !startAtInput || !stageSelect) return;
+  
+  // Show combined button if both time is set and stage options are available
+  const hasTime = startAtInput.value && startAtInput.value.trim() !== '';
+  const hasStages = stageSelect.options.length > 1; // More than just "Start from beginning"
+  
+  if (hasTime && hasStages) {
+    combinedStartRow.style.display = 'flex';
+  } else {
+    combinedStartRow.style.display = 'none';
+  }
+}
+
+// ---- Handle Stage Click ----
+function handleStageClick(stageIdx) {
+  if (confirm(`Start the program at stage ${stageIdx + 1}? This will skip the previous stages.`)) {
+    fetch(`/start_at_stage?stage=${stageIdx}`)
+      .then(r => r.json())
+      .then(response => {
+        if (response.error) {
+          alert(`Error: ${response.error}\n${response.message || ''}`);
+        } else {
+          console.log(`Started at stage ${stageIdx}: ${response.stageName || ''}`);
+          window.updateStatus();
+        }
+      })
+      .catch(err => {
+        console.error('Failed to start at stage:', err);
+        alert('Failed to start at stage. Please try again.');
+      });
+  }
 }
 
 // ---- Utility: Render Icons (update visual state only) ----
@@ -115,24 +200,60 @@ function updateStageProgress(currentStage, statusData) {
   const customStages = program.customStages;
   let activeIdx = -1;
   let isIdle = currentStage === "Idle" || !statusData.running;
-  
+  // Use stageIdx if available, else match by label
   if (!isIdle) {
-    // Find current stage index by matching stage label
-    activeIdx = customStages.findIndex(stage => stage.label === currentStage);
+    if (typeof statusData.stageIdx === 'number') {
+      activeIdx = statusData.stageIdx;
+    } else {
+      activeIdx = customStages.findIndex(stage => stage.label === currentStage);
+    }
   }
-  
+  // Use actualStageStartTimes and stageStartTimes for progress
+  const actualStarts = Array.isArray(statusData.actualStageStartTimes) ? statusData.actualStageStartTimes : [];
+  const estStarts = Array.isArray(statusData.stageStartTimes) ? statusData.stageStartTimes : [];
   for (let i = 0; i < customStages.length; ++i) {
     const stage = customStages[i];
     const div = document.createElement('div');
     div.className = 'stage-step';
     div.textContent = stage.label;
-    
+    // Tooltip: show timing info if available
+    let tip = '';
+    if (actualStarts[i] && actualStarts[i] > 0) {
+      tip += 'Started: ' + formatDateTime(actualStarts[i] * 1000);
+    } else if (estStarts[i] && estStarts[i] > 0) {
+      tip += 'Est. start: ' + formatDateTime(estStarts[i] * 1000);
+    }
+    if (tip) div.title = tip;
+    // Make stages clickable for direct stage skipping
+    if (!isIdle && statusData.running) {
+      div.style.cursor = 'pointer';
+      div.title = (div.title ? div.title + '\n' : '') + `Click to skip to ${stage.label}`;
+      div.onclick = function() {
+        handleStageClick(i);
+      };
+    }
+    // Progress coloring
     if (isIdle) {
       // All grey/inactive if idle
     } else if (i < activeIdx) {
       div.classList.add('done');
     } else if (i === activeIdx) {
       div.classList.add('active');
+    }
+    // Add elapsed time for this stage if available
+    if (actualStarts[i] && (i === activeIdx || i < activeIdx)) {
+      let elapsed = 0;
+      if (i < customStages.length - 1 && actualStarts[i+1]) {
+        elapsed = actualStarts[i+1] - actualStarts[i];
+      } else if (i === activeIdx && statusData.elapsed) {
+        elapsed = Math.floor((Date.now()/1000) - actualStarts[i]);
+      }
+      if (elapsed > 0) {
+        const span = document.createElement('span');
+        span.className = 'stage-elapsed';
+        span.textContent = ' (' + formatDuration(elapsed) + ')';
+        div.appendChild(span);
+      }
     }
     cont.appendChild(div);
   }
@@ -142,20 +263,9 @@ function updateStageProgress(currentStage, statusData) {
 let lastProgramList = [];
 function populateProgramDropdown(s) {
   let select = document.getElementById('progSelect');
-  // Robustly handle both array and object program lists
+  // Only use window.cachedPrograms for program list
   let programNames = [];
-  
-  // First try to get from status object
-  if (s && s.programList && Array.isArray(s.programList)) {
-    programNames = s.programList;
-  } else if (s && s.programs && typeof s.programs === 'object') {
-    programNames = Object.keys(s.programs);
-  } else if (s && Array.isArray(s.programs)) {
-    programNames = s.programs.map(p => p.name);
-  }
-  
-  // If no programs in status, try to get from cached programs
-  if (programNames.length === 0 && window.cachedPrograms) {
+  if (window.cachedPrograms) {
     if (Array.isArray(window.cachedPrograms)) {
       if (window.cachedPrograms.length > 0 && typeof window.cachedPrograms[0] === 'object' && window.cachedPrograms[0].name) {
         programNames = window.cachedPrograms.map(p => p.name);
@@ -166,7 +276,7 @@ function populateProgramDropdown(s) {
       programNames = Object.keys(window.cachedPrograms);
     }
   }
-  
+
   if (select && programNames.length) {
     if (!arraysEqual(lastProgramList, programNames)) {
       lastProgramList = [...programNames];
@@ -189,16 +299,29 @@ function populateProgramDropdown(s) {
               }
               throw new Error('Selection failed');
             })
-            .then(window.updateStatus)
+            .then(s => {
+              window.updateStatus(s);
+              // Update stage dropdown when program changes
+              populateStageDropdown(this.value);
+              // Update combined button visibility
+              updateCombinedStartButton();
+            })
             .catch(err => console.error('Program selection failed:', err));
         };
         select.hasChangeListener = true;
       }
     }
-    // Update selected index
-    const correctIdx = programNames.indexOf(s && s.program);
+    // Update selected index using programId from status if available
+    let correctIdx = -1;
+    if (s && typeof s.programId === 'number') {
+      correctIdx = s.programId;
+    } else if (s && typeof s.program === 'string') {
+      correctIdx = programNames.indexOf(s.program);
+    }
     if (correctIdx >= 0 && select.selectedIndex !== correctIdx) {
       select.selectedIndex = correctIdx;
+      // Update stage dropdown when program is set programmatically
+      populateStageDropdown(correctIdx);
     }
   }
   let curProg = document.getElementById('currentProg');
@@ -247,6 +370,13 @@ function updateStatusInternal(s) {
 
   // ---- Program Dropdown & Progress ----
   populateProgramDropdown(s);
+  // Update stage dropdown based on current program
+  if (s && s.program && window.cachedPrograms) {
+    const programIdx = window.cachedPrograms.findIndex(p => p.name === s.program);
+    if (programIdx >= 0) {
+      populateStageDropdown(programIdx);
+    }
+  }
   updateStageProgress(s.stage, s);
   
   // ---- Plan Summary (stages table) ----
@@ -314,6 +444,10 @@ function updateStatusInternal(s) {
     }
     document.getElementById('setTemp').innerHTML = setTempText;
   }
+
+  // ---- Fermentation Information ----
+  updateFermentationInfo(s);
+
   if (document.getElementById('heater')) document.getElementById('heater').textContent = s.heater > 0 ? 'ON' : 'OFF';
   if (document.getElementById('motor')) document.getElementById('motor').textContent = s.motor ? 'ON' : 'OFF';
   if (document.getElementById('light')) document.getElementById('light').textContent = s.light ? 'ON' : 'OFF';
@@ -369,6 +503,81 @@ function updateStartupDelayUI(s) {
       btnStart.disabled = false;
       btnStart.title = '';
     }
+  }
+}
+
+// ---- Fermentation Information ----
+function updateFermentationInfo(s) {
+  const fermentInfoEl = document.getElementById('fermentationInfo');
+  const fermentFactorEl = document.getElementById('fermentFactor');
+  const predictedCompleteEl = document.getElementById('predictedComplete');
+  const initialTempEl = document.getElementById('initialTemp');
+  
+  if (!fermentInfoEl) return;
+  
+  // Show fermentation info if we have fermentation data and are running, or if we can preview
+  const canPreview = s && !s.running && typeof s.temp === 'number' && s.temp > 0 && window.cachedPrograms && typeof s.program === 'string';
+  const showFermentInfo = (s && s.running && (typeof s.fermentationFactor === 'number' || typeof s.predictedCompleteTime === 'number' || typeof s.initialFermentTemp === 'number')) || canPreview;
+
+  if (showFermentInfo) {
+    fermentInfoEl.style.display = 'block';
+
+    // Fermentation factor
+    let fermentationFactor = (typeof s.fermentationFactor === 'number' && s.fermentationFactor > 0) ? s.fermentationFactor : null;
+    if (!fermentationFactor && canPreview) {
+      // Estimate for preview
+      const temp = Math.max(10, Math.min(50, s.temp));
+      const baseTemp = 30;
+      const Q10 = 2;
+      fermentationFactor = Math.pow(Q10, (baseTemp - temp) / 10);
+      fermentationFactor = Math.max(0.2, Math.min(fermentationFactor, 5));
+    }
+    if (fermentFactorEl && fermentationFactor) {
+      fermentFactorEl.textContent = fermentationFactor.toFixed(2);
+    } else if (fermentFactorEl) {
+      fermentFactorEl.textContent = '--';
+    }
+
+    // Predicted complete time
+    let predictedComplete = (typeof s.predictedCompleteTime === 'number' && s.predictedCompleteTime > 0) ? s.predictedCompleteTime : null;
+    if (!predictedComplete && canPreview) {
+      // Preview: sum up adjusted durations from now
+      let prog = null;
+      if (Array.isArray(window.cachedPrograms)) {
+        prog = window.cachedPrograms.find(p => p.name === s.program);
+      } else if (typeof window.cachedPrograms === 'object') {
+        prog = window.cachedPrograms[s.program];
+      }
+      if (prog && prog.customStages && Array.isArray(prog.customStages)) {
+        let now = Date.now();
+        let t = now;
+        for (let i = 0; i < prog.customStages.length; ++i) {
+          let st = prog.customStages[i];
+          let min = st.min;
+          if (st.fermentation && fermentationFactor) min = min * fermentationFactor;
+          t += min * 60000;
+        }
+        predictedComplete = Math.floor(t / 1000); // keep as seconds for consistency
+      }
+    }
+    // If predictedComplete is in seconds, convert to ms for comparison and display
+    let predictedCompleteMs = (predictedComplete && predictedComplete < 1e12) ? predictedComplete * 1000 : predictedComplete;
+    if (predictedCompleteEl && predictedCompleteMs && predictedCompleteMs > Date.now()) {
+      predictedCompleteEl.textContent = formatDateTime(predictedCompleteMs);
+    } else if (predictedCompleteEl) {
+      predictedCompleteEl.textContent = '--';
+    }
+
+    // Initial temp
+    if (initialTempEl && typeof s.initialFermentTemp === 'number') {
+      initialTempEl.textContent = s.initialFermentTemp.toFixed(1) + String.fromCharCode(176) + 'C';
+    } else if (initialTempEl && canPreview) {
+      initialTempEl.textContent = s.temp.toFixed(1) + String.fromCharCode(176) + 'C';
+    } else if (initialTempEl) {
+      initialTempEl.textContent = '--' + String.fromCharCode(176) + 'C';
+    }
+  } else {
+    fermentInfoEl.style.display = 'none';
   }
 }
 
@@ -445,9 +654,24 @@ function updateCountdownDisplay() {
   let s = lastStatus;
   let now = Date.now();
   let stageReadyAt = (typeof s.stageReadyAt === 'number') ? s.stageReadyAt : 0;
+  let scheduledStart = (typeof s.scheduledStart === 'number') ? s.scheduledStart : 0;
+  let programReadyAt = (typeof s.programReadyAt === 'number') ? s.programReadyAt : 0;
   let timeLeft = 0;
+  // If scheduledStart is in the future, show countdown to scheduled start
+  if (scheduledStart > Math.floor(now/1000)) {
+    let schedLeft = Math.max(0, Math.round(scheduledStart - (now/1000)));
+    document.getElementById('timeLeft').textContent = formatDuration(schedLeft);
+    document.getElementById('stageReadyAt').textContent = "Scheduled to start at: " + formatDateTime(scheduledStart * 1000);
+    // Also show program ready at if available
+    if (programReadyAt > 0) {
+      const progReadyTs = programReadyAt * 1000;
+      let el = document.getElementById('programReadyAt');
+      if (el) el.textContent = 'Program ready at: ' + formatDateTime(progReadyTs);
+    }
+    return;
+  }
   if (stageReadyAt > 0) {
-    timeLeft = Math.max(0, Math.round(stageReadyAt - (now / 1000))); // Fix: convert now to seconds to match stageReadyAt
+    timeLeft = Math.max(0, Math.round(stageReadyAt - (now / 1000)));
   } else if (typeof s.timeLeft === 'number') {
     // fallback if stageReadyAt missing
     let elapsed = Math.floor((now - lastStatusTime) / 1000);
@@ -456,10 +680,18 @@ function updateCountdownDisplay() {
   if (s.stage === "Idle" || !s.running || timeLeft <= 0) {
     document.getElementById('timeLeft').textContent = "--";
     document.getElementById('stageReadyAt').textContent = "";
+    let el = document.getElementById('programReadyAt');
+    if (el) el.textContent = '';
   } else {
     document.getElementById('timeLeft').textContent = formatDuration(timeLeft);
     const stageReadyTs = stageReadyAt * 1000; // Convert firmware's seconds to milliseconds
     document.getElementById('stageReadyAt').textContent = "Stage ready at: " + formatDateTime(stageReadyTs);
+    // Show program ready at if available
+    if (programReadyAt > 0) {
+      const progReadyTs = programReadyAt * 1000;
+      let el = document.getElementById('programReadyAt');
+      if (el) el.textContent = 'Program ready at: ' + formatDateTime(progReadyTs);
+    }
   }
 }
 
@@ -535,6 +767,40 @@ function showPlanSummary(s) {
       currentStageIdx = prog.customStages.findIndex(st => (st.label||'').toLowerCase() === s.stage.toLowerCase());
     }
     let summary = '<table class="plan-summary-table"><tr><th>Stage</th><th>Temp</th><th>Mix Pattern</th><th>Duration</th><th>Instructions</th><th>Calendar</th></tr>';
+
+    // --- Calculate fermentation factor for preview if not running ---
+    let fermentationFactor = 1.0;
+    if (typeof s.fermentationFactor === 'number' && s.fermentationFactor > 0) {
+      fermentationFactor = s.fermentationFactor;
+    } else if (!s.running && typeof s.temp === 'number' && s.temp > 0) {
+      // Estimate factor for preview using current temp and same logic as firmware (Arrhenius or Q10, example below)
+      // Clamp temp to reasonable range to avoid negative/NaN durations
+      const temp = Math.max(10, Math.min(50, s.temp));
+      const baseTemp = 30;
+      const Q10 = 2;
+      fermentationFactor = Math.pow(Q10, (baseTemp - temp) / 10);
+      fermentationFactor = Math.max(0.2, Math.min(fermentationFactor, 5));
+    }
+
+    // Use predictedStageEndTimes from status if available
+    const predictedStageEndTimes = Array.isArray(s.predictedStageEndTimes) ? s.predictedStageEndTimes : null;
+
+    // For preview: calculate predicted end times if not running
+    let previewStageEndTimes = null;
+    if (!s.running && typeof s.temp === 'number' && s.temp > 0) {
+      let now = Date.now();
+      previewStageEndTimes = [];
+      let t = now;
+      for (let i = 0; i < prog.customStages.length; ++i) {
+        let st = prog.customStages[i];
+        let isFermentation = !!st.fermentation;
+        let min = st.min;
+        if (isFermentation) min = min * fermentationFactor;
+        t += min * 60000;
+        previewStageEndTimes.push(Math.floor(t / 1000));
+      }
+    }
+
     prog.customStages.forEach((st, i) => {
       const color = st.color || palette[i % palette.length];
       let calCell = '';
@@ -546,10 +812,45 @@ function showPlanSummary(s) {
       } else if (Array.isArray(s.stageStartTimes) && s.stageStartTimes[i]) {
         // Stage hasn't started yet - use estimated time
         stStart = new Date(s.stageStartTimes[i] * 1000);
+      } else if (!s.running && typeof s.temp === 'number' && s.temp > 0) {
+        // Preview: use now or previous preview end time
+        if (i === 0) {
+          stStart = new Date();
+        } else if (previewStageEndTimes && previewStageEndTimes[i-1]) {
+          stStart = new Date(previewStageEndTimes[i-1] * 1000);
+        }
       }
-      let stEnd = stStart ? new Date(stStart.getTime() + (st.min * 60000)) : null;
+      // Calculate adjusted duration (min) for fermentation stages
+      let isFermentation = !!st.fermentation;
+      let adjustedMin = st.min;
+      if (isFermentation && fermentationFactor !== 1.0) {
+        adjustedMin = st.min * fermentationFactor;
+      }
+      // If predictedStageEndTimes is available, use it to show predicted end time and duration
+      let predictedEnd = null;
+      let predictedDurationMin = null;
+      if (predictedStageEndTimes && predictedStageEndTimes[i]) {
+        predictedEnd = new Date(predictedStageEndTimes[i] * 1000);
+        if (stStart) {
+          predictedDurationMin = (predictedStageEndTimes[i] - (stStart.getTime() / 1000)) / 60;
+        } else if (i === 0 && Array.isArray(s.stageStartTimes) && s.stageStartTimes[0]) {
+          predictedDurationMin = (predictedStageEndTimes[0] - s.stageStartTimes[0]) / 60;
+        } else {
+          predictedDurationMin = adjustedMin;
+        }
+      } else if (!s.running && previewStageEndTimes && previewStageEndTimes[i] && stStart) {
+        predictedEnd = new Date(previewStageEndTimes[i] * 1000);
+        predictedDurationMin = (previewStageEndTimes[i] - (stStart.getTime() / 1000)) / 60;
+      } else {
+        predictedDurationMin = adjustedMin;
+      }
+      // Clamp predictedDurationMin to avoid negative/NaN
+      if (typeof predictedDurationMin !== 'number' || isNaN(predictedDurationMin) || predictedDurationMin < 0) {
+        predictedDurationMin = adjustedMin;
+      }
       // Only show calendar if running and this stage requires user interaction
-      if (s.running && stStart && stEnd && st.instructions && st.instructions !== 'No action needed.') {
+      let stEnd = stStart ? new Date(stStart.getTime() + (adjustedMin * 60000)) : null;
+      if ((s.running || (!s.running && typeof s.temp === 'number' && s.temp > 0)) && stStart && stEnd && st.instructions && st.instructions !== 'No action needed.') {
         let breadmakerUrl = window.location.origin + '/';
         let gcalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent('Breadmaker: ' + st.label + ' (' + s.program + ')')}` +
           `&dates=${toGCalDate(stStart)}/${toGCalDate(stEnd)}` +
@@ -572,11 +873,35 @@ function showPlanSummary(s) {
         else if (i === currentStageIdx) rowClass = 'active';
         else rowClass = 'inactive';
       }
-      summary += `<tr class='${rowClass}' style="background:${color};color:#232323;">`
+      // Show actual elapsed time for done stages if available, else planned/adjusted duration
+      let durationCell = '';
+      if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i+1]) {
+        // Show actual elapsed time for completed stage
+        let elapsedSec = (s.actualStageStartTimes[i+1] - s.actualStageStartTimes[i]);
+        if (elapsedSec > 0) {
+          durationCell = `<span title="Actual elapsed time">${formatDuration(elapsedSec)}</span>`;
+        } else {
+          durationCell = '--';
+        }
+      } else if (typeof predictedDurationMin === 'number' && !isNaN(predictedDurationMin)) {
+        // Always use firmware-predicted duration if available (already adjusted for fermentation stages if needed)
+        durationCell = `<span title="Predicted by firmware">${formatDuration(predictedDurationMin * 60)}<br><small>(${predictedDurationMin.toFixed(1)} min)</small></span>`;
+      } else {
+        // Fallback: show planned duration only (no local fermentation adjustment)
+        durationCell = `${formatDuration(st.min * 60)}`;
+      }
+      // For completed (done) stages, override background to a green shade
+      let rowStyle = `color:#232323;`;
+      if (rowClass === 'done') {
+        rowStyle += 'background:#4caf50;';
+      } else {
+        rowStyle += `background:${color};`;
+      }
+      summary += `<tr class='${rowClass}' style="${rowStyle}">`
         + `<td>${st.label}</td>`
-        + `<td>${typeof st.temp === 'number' ? st.temp + '&deg;C' : '--'}</td>`
+        + `<td>${typeof st.temp === 'number' && st.temp > 0 ? st.temp + '&deg;C' : '--'}</td>`
         + `<td>${renderMixPatternGraph(st.mixPattern) || '--'}</td>`
-        + `<td>${st.min} min</td>`
+        + `<td>${durationCell}</td>`
         + `<td>${infoCell}</td>`
         + `<td>${calCell}</td>`
         + '</tr>';
@@ -636,11 +961,61 @@ function fetchProgramsOnce(callback) {
 
 // ---- Program Progress Bar Functions (stubs) ----
 function renderProgramProgressBar(s) {
-  // TODO: Implement program progress bar rendering if needed
+  // Enhanced: Render program progress bar using stageStartTimes, actualStageStartTimes, elapsed
   const elem = document.getElementById('programProgressBar');
-  if (elem) {
-    elem.innerHTML = ''; // Clear for now
+  if (!elem) return;
+  elem.innerHTML = '';
+  if (!s || !s.program || !window.cachedPrograms) return;
+  let prog = null;
+  if (Array.isArray(window.cachedPrograms)) {
+    prog = window.cachedPrograms.find(p => p.name === s.program);
+  } else if (typeof window.cachedPrograms === 'object') {
+    prog = window.cachedPrograms[s.program];
   }
+  if (!prog || !prog.customStages) return;
+  const stages = prog.customStages;
+  const actualStarts = Array.isArray(s.actualStageStartTimes) ? s.actualStageStartTimes : [];
+  const estStarts = Array.isArray(s.stageStartTimes) ? s.stageStartTimes : [];
+  // Calculate total program duration (estimate)
+  let totalMin = stages.reduce((sum, st) => sum + (st.min || 0), 0);
+  let totalSec = totalMin * 60;
+  // If we have actual start times, use them for elapsed
+  let elapsed = typeof s.elapsed === 'number' ? s.elapsed : 0;
+  if (!elapsed && actualStarts[0]) {
+    elapsed = Math.floor((Date.now()/1000) - actualStarts[0]);
+  }
+  // Render progress bar
+  let html = '<div class="program-progress-bar" style="display:flex;height:18px;width:100%;border-radius:8px;overflow:hidden;box-shadow:0 1px 2px #0003;background:#eee;">';
+  let accSec = 0;
+  for (let i = 0; i < stages.length; ++i) {
+    let stSec = (stages[i].min || 0) * 60;
+    let done = false, active = false;
+    if (actualStarts[i] && (i === stages.length-1 || actualStarts[i+1])) {
+      // Stage completed
+      done = true;
+    } else if (actualStarts[i]) {
+      // Current stage
+      active = true;
+    }
+    let color = done ? '#4caf50' : (active ? '#ffd600' : '#b0b0b0');
+    let width = (stSec / totalSec * 100).toFixed(2) + '%';
+    let label = stages[i].label;
+    html += `<div style="width:${width};background:${color};height:100%;position:relative;" title="${label}">`;
+    if (active) {
+      // Show elapsed for current stage
+      let stElapsed = Math.floor((Date.now()/1000) - actualStarts[i]);
+      html += `<span style='position:absolute;left:4px;top:1px;font-size:0.9em;color:#232323;'>${label} (${formatDuration(stElapsed)})</span>`;
+    } else {
+      html += `<span style='position:absolute;left:4px;top:1px;font-size:0.9em;color:#232323;'>${label}</span>`;
+    }
+    html += '</div>';
+    accSec += stSec;
+  }
+  html += '</div>';
+  // Show total elapsed/remaining
+  let remain = Math.max(0, totalSec - elapsed);
+  html += `<div style='margin-top:2px;font-size:0.95em;color:#232323;'>Elapsed: ${formatDuration(elapsed)} / ${formatDuration(totalSec)} &nbsp; Remaining: ${formatDuration(remain)}</div>`;
+  elem.innerHTML = html;
 }
 
 function renderProgressBarKey(s) {
@@ -803,6 +1178,40 @@ window.addEventListener('DOMContentLoaded', () => {
     };
   }
 
+  // Start at Stage functionality - Updated to work with new combined UI
+  const btnStartAtStage = document.getElementById('btnStartAtStage');
+  if (btnStartAtStage) {
+    btnStartAtStage.onclick = () => {
+      const stageSelect = document.getElementById('stageSelect');
+      if (stageSelect && stageSelect.value !== '') {
+        const stageIdx = parseInt(stageSelect.value);
+        if (confirm(`Start the program at stage ${stageIdx + 1}? This will skip the previous stages.`)) {
+          fetch(`/start_at_stage?stage=${stageIdx}`)
+            .then(r => r.json())
+            .then(response => {
+              if (response.error) {
+                alert(`Error: ${response.error}\n${response.message || ''}`);
+              } else {
+                console.log(`Started at stage ${stageIdx}: ${response.stageName || ''}`);
+                showStartAtStatus(`Started at stage ${stageIdx + 1}`);
+                window.updateStatus();
+              }
+            })
+            .catch(err => {
+              console.error('Failed to start at stage:', err);
+              alert('Failed to start at stage. Please try again.');
+            });
+        }
+      } else {
+        alert('Please select a stage to start at');
+      }
+    };
+  }
+
+  // Stage Dropdown Population
+  const startAtStageRow = document.getElementById('startAtStageRow');
+  // stageSelect is already declared elsewhere, do not redeclare here
+
   // Allow Enter key to set temperature
   if (manualTempInput && btnSetTemp) {
     manualTempInput.onkeypress = function(e) {
@@ -815,42 +1224,42 @@ window.addEventListener('DOMContentLoaded', () => {
   // ---- Button Event Handlers ----
   const btnStart = document.getElementById('btnStart');
   if (btnStart) {
-    btnStart.onclick = () => {
+    btnStart.addEventListener('click', function() {
       fetch('/start')
         .then(r => r.json())
         .then(window.updateStatus)
         .catch(err => console.error('Start failed:', err));
-    };
+    });
   }
 
   const btnStop = document.getElementById('btnStop');
   if (btnStop) {
-    btnStop.onclick = () => {
+    btnStop.addEventListener('click', function() {
       fetch('/stop')
         .then(r => r.json())
         .then(window.updateStatus)
         .catch(err => console.error('Stop failed:', err));
-    };
+    });
   }
 
   const btnBack = document.getElementById('btnBack');
   if (btnBack) {
-    btnBack.onclick = () => {
+    btnBack.addEventListener('click', function() {
       fetch('/back')
         .then(r => r.json())
         .then(window.updateStatus)
         .catch(err => console.error('Back failed:', err));
-    };
+    });
   }
 
   const btnAdvance = document.getElementById('btnAdvance');
   if (btnAdvance) {
-    btnAdvance.onclick = () => {
+    btnAdvance.addEventListener('click', function() {
       fetch('/advance')
         .then(r => r.json())
         .then(window.updateStatus)
         .catch(err => console.error('Advance failed:', err));
-    };
+    });
   }
 
   const btnSetStartAt = document.getElementById('btnSetStartAt');
@@ -863,6 +1272,7 @@ window.addEventListener('DOMContentLoaded', () => {
           .then(text => {
             showStartAtStatus(text);
             window.updateStatus();
+            updateCombinedStartButton(); // Update combined button visibility
           })
           .catch(err => {
             console.error('Set start time failed:', err);
@@ -872,6 +1282,62 @@ window.addEventListener('DOMContentLoaded', () => {
         showStartAtStatus('Please select a time');
       }
     };
+  }
+
+  // Combined Timed + Stage Start button
+  const btnSetTimedStageStart = document.getElementById('btnSetTimedStageStart');
+  if (btnSetTimedStageStart) {
+    btnSetTimedStageStart.onclick = () => {
+      const startAtInput = document.getElementById('startAt');
+      const stageSelect = document.getElementById('stageSelect');
+      
+      if (!startAtInput || !startAtInput.value) {
+        alert('Please select a start time');
+        return;
+      }
+      
+      const time = startAtInput.value;
+      const stageIdx = stageSelect && stageSelect.value !== '' ? parseInt(stageSelect.value) : '';
+      
+      let confirmMsg;
+      let url;
+      
+      if (stageIdx === '') {
+        // Time only
+        confirmMsg = `Schedule the program to start at ${time} from the beginning?`;
+        url = `/setStartAt?time=${encodeURIComponent(time)}`;
+      } else {
+        // Time + Stage
+        confirmMsg = `Schedule the program to start at ${time} at stage ${stageIdx + 1}?`;
+        url = `/setStartAtStage?time=${encodeURIComponent(time)}&stage=${stageIdx}`;
+      }
+      
+      if (confirm(confirmMsg)) {
+        fetch(url)
+          .then(r => r.text())
+          .then(text => {
+            showStartAtStatus(text);
+            window.updateStatus();
+          })
+          .catch(err => {
+            console.error('Failed to set timed start:', err);
+            showStartAtStatus('Failed to set timed start');
+          });
+      }
+    };
+  }
+
+  // Update combined button when time input changes
+  const startAtInput = document.getElementById('startAt');
+  if (startAtInput) {
+    startAtInput.addEventListener('change', updateCombinedStartButton);
+    startAtInput.addEventListener('input', updateCombinedStartButton);
+  }
+
+  // Update combined button when stage selection changes
+  const stageSelect = document.getElementById('stageSelect');
+  if (stageSelect) {
+    stageSelect.addEventListener('change', updateCombinedStartButton);
   }
 });
 

@@ -1,0 +1,620 @@
+rest:
+  - resource: "http://192.168.250.125/ha" # ESP8266 IP address
+    scan_interval: 30 # Update every 30 seconds
+    timeout: 10
+    sensor:
+      # Basic Status Sensors (confirmed working)
+      - name: "Breadmaker State"
+        value_template: "{{ value_json.state }}"
+        icon: "mdi:bread-slice"
+
+      - name: "Breadmaker Stage"
+        value_template: "{{ value_json.stage }}"
+        icon: "mdi:progress-clock"
+
+      - name: "Breadmaker Program"
+        value_template: "{{ value_json.program }}"
+        icon: "mdi:playlist-play"
+
+      - name: "Breadmaker Temperature"
+        value_template: "{{ value_json.temperature | round(1) }}"
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        icon: "mdi:thermometer"
+
+      # Note: setpoint now available in current firmware response
+      - name: "Breadmaker Setpoint"
+        value_template: "{{ value_json.setpoint }}"
+        unit_of_measurement: "°C"
+        device_class: temperature
+        icon: "mdi:thermometer-chevron-up"
+
+      # Output Status (all now available)
+      - name: "Breadmaker Motor"
+        value_template: "{{ value_json.motor }}"
+        icon: "mdi:motor"
+
+      - name: "Breadmaker Light"
+        value_template: "{{ value_json.light }}"
+        icon: "mdi:lightbulb"
+
+      - name: "Breadmaker Buzzer"
+        value_template: "{{ value_json.buzzer }}"
+        icon: "mdi:bell"
+
+      - name: "Breadmaker Heater"
+        value_template: "{{ value_json.heater }}"
+        icon: "mdi:heat-wave"
+
+      - name: "Breadmaker Manual Mode"
+        value_template: "{{ value_json.manual_mode }}"
+        icon: "mdi:hand-back-right"
+
+      # Timing Information (available in current firmware)
+      - name: "Breadmaker Stage Time Left"
+        value_template: "{{ value_json.stage_time_left }}"
+        unit_of_measurement: "min"
+        icon: "mdi:clock-outline"
+
+      - name: "Breadmaker Stage Ready At"
+        value_template: "{{ value_json.stage_ready_at }}"
+        icon: "mdi:clock-check"
+
+      - name: "Breadmaker Program Ready At"
+        value_template: "{{ value_json.program_ready_at }}"
+        icon: "mdi:clock-check-outline"
+
+      # System Health Sensors (now available!)
+      - name: "Breadmaker Uptime"
+        value_template: "{{ value_json.health.uptime_sec }}"
+        unit_of_measurement: "s"
+        device_class: duration
+        state_class: total_increasing
+        icon: "mdi:clock-outline"
+
+      - name: "Breadmaker Firmware Version"
+        value_template: "{{ value_json.health.firmware_version }}"
+        icon: "mdi:chip"
+
+      - name: "Breadmaker Build Date"
+        value_template: "{{ value_json.health.build_date }}"
+        icon: "mdi:calendar-clock"
+
+      - name: "Breadmaker Reset Reason"
+        value_template: "{{ value_json.health.reset_reason }}"
+        icon: "mdi:restart"
+
+      - name: "Breadmaker Chip ID"
+        value_template: "{{ value_json.health.chip_id }}"
+        icon: "mdi:identifier"
+
+      # Memory Monitoring
+      - name: "Breadmaker Free Heap"
+        value_template: "{{ value_json.health.memory.free_heap }}"
+        unit_of_measurement: "bytes"
+        state_class: measurement
+        icon: "mdi:memory"
+
+      - name: "Breadmaker Max Free Block"
+        value_template: "{{ value_json.health.memory.max_free_block }}"
+        unit_of_measurement: "bytes"
+        state_class: measurement
+        icon: "mdi:memory"
+
+      - name: "Breadmaker Min Free Heap"
+        value_template: "{{ value_json.health.memory.min_free_heap }}"
+        unit_of_measurement: "bytes"
+        state_class: measurement
+        icon: "mdi:memory"
+
+      - name: "Breadmaker Heap Fragmentation"
+        value_template: "{{ value_json.health.memory.fragmentation }}"
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: "mdi:puzzle"
+
+      # Performance Monitoring
+      - name: "Breadmaker CPU Usage"
+        value_template: "{{ value_json.health.performance.cpu_usage }}"
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: "mdi:speedometer"
+
+      - name: "Breadmaker Average Loop Time"
+        value_template: "{{ value_json.health.performance.avg_loop_time_us }}"
+        unit_of_measurement: "μs"
+        state_class: measurement
+        icon: "mdi:timer-outline"
+
+      - name: "Breadmaker Max Loop Time"
+        value_template: "{{ value_json.health.performance.max_loop_time_us }}"
+        unit_of_measurement: "μs"
+        state_class: measurement
+        icon: "mdi:timer"
+
+      - name: "Breadmaker Loop Count"
+        value_template: "{{ value_json.health.performance.loop_count }}"
+        state_class: total_increasing
+        icon: "mdi:counter"
+
+      # Network Monitoring
+      - name: "Breadmaker WiFi Connected"
+        value_template: "{{ value_json.health.network.connected }}"
+        icon: "mdi:wifi"
+
+      - name: "Breadmaker WiFi RSSI"
+        value_template: "{{ value_json.health.network.rssi }}"
+        unit_of_measurement: "dBm"
+        device_class: signal_strength
+        state_class: measurement
+        icon: "mdi:wifi-strength-2"
+
+      - name: "Breadmaker WiFi Reconnects"
+        value_template: "{{ value_json.health.network.reconnect_count }}"
+        state_class: total_increasing
+        icon: "mdi:wifi-refresh"
+
+      - name: "Breadmaker IP Address"
+        value_template: "{{ value_json.health.network.ip }}"
+        icon: "mdi:ip-network"
+
+      # File System Monitoring
+      - name: "Breadmaker FS Used"
+        value_template: "{{ value_json.health.filesystem.usedBytes }}"
+        unit_of_measurement: "bytes"
+        state_class: measurement
+        icon: "mdi:harddisk"
+
+      - name: "Breadmaker FS Total"
+        value_template: "{{ value_json.health.filesystem.totalBytes }}"
+        unit_of_measurement: "bytes"
+        icon: "mdi:harddisk"
+
+      - name: "Breadmaker FS Free"
+        value_template: "{{ value_json.health.filesystem.freeBytes }}"
+        unit_of_measurement: "bytes"
+        state_class: measurement
+        icon: "mdi:harddisk"
+
+      - name: "Breadmaker FS Utilization"
+        value_template: "{{ value_json.health.filesystem.utilization | round(1) }}"
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: "mdi:chart-pie"
+
+      # Error Monitoring
+      - name: "Breadmaker Error Count 0"
+        value_template: "{{ value_json.health.error_counts[0] }}"
+        state_class: total_increasing
+        icon: "mdi:alert-circle"
+
+      - name: "Breadmaker Error Count 1"
+        value_template: "{{ value_json.health.error_counts[1] }}"
+        state_class: total_increasing
+        icon: "mdi:alert-circle"
+
+      - name: "Breadmaker Error Count 2"
+        value_template: "{{ value_json.health.error_counts[2] }}"
+        state_class: total_increasing
+        icon: "mdi:alert-circle"
+
+      - name: "Breadmaker Error Count 3"
+        value_template: "{{ value_json.health.error_counts[3] }}"
+        state_class: total_increasing
+        icon: "mdi:alert-circle"
+
+      - name: "Breadmaker Error Count 4"
+        value_template: "{{ value_json.health.error_counts[4] }}"
+        state_class: total_increasing
+        icon: "mdi:alert-circle"
+
+      - name: "Breadmaker Error Count 5"
+        value_template: "{{ value_json.health.error_counts[5] }}"
+        state_class: total_increasing
+        icon: "mdi:alert-circle"
+
+      # Watchdog Monitoring
+      - name: "Breadmaker Watchdog Enabled"
+        value_template: "{{ value_json.health.watchdog_enabled }}"
+        icon: "mdi:shield-check"
+
+      - name: "Breadmaker Startup Complete"
+        value_template: "{{ value_json.health.startup_complete }}"
+        icon: "mdi:check-circle"
+
+      - name: "Breadmaker Watchdog Last Feed"
+        value_template: "{{ value_json.health.watchdog_last_feed }}"
+        unit_of_measurement: "ms"
+        state_class: measurement
+        icon: "mdi:shield-refresh"
+
+      - name: "Breadmaker Watchdog Timeout"
+        value_template: "{{ value_json.health.watchdog_timeout_ms }}"
+        unit_of_measurement: "ms"
+        icon: "mdi:shield-alert"
+
+      # Temperature Control System (bonus data!)
+      - name: "Breadmaker PID Input"
+        value_template: "{{ value_json.temperature_control.input }}"
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        icon: "mdi:thermometer-lines"
+
+      - name: "Breadmaker PID Output"
+        value_template: "{{ value_json.temperature_control.output }}"
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: "mdi:percent"
+
+      - name: "Breadmaker Raw Temperature"
+        value_template: "{{ value_json.temperature_control.raw_temp | round(1) }}"
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        icon: "mdi:thermometer"
+
+      - name: "Breadmaker Thermal Runaway"
+        value_template: "{{ value_json.temperature_control.thermal_runaway }}"
+        icon: "mdi:alert-octagon"
+
+      - name: "Breadmaker Sensor Fault"
+        value_template: "{{ value_json.temperature_control.sensor_fault }}"
+        icon: "mdi:alert-circle"
+
+      - name: "Breadmaker Window Elapsed"
+        value_template: "{{ value_json.temperature_control.window_elapsed_ms }}"
+        unit_of_measurement: "ms"
+        state_class: measurement
+        icon: "mdi:clock-fast"
+
+      - name: "Breadmaker Window Size"
+        value_template: "{{ value_json.temperature_control.window_size_ms }}"
+        unit_of_measurement: "ms"
+        icon: "mdi:clock-outline"
+
+      - name: "Breadmaker On Time"
+        value_template: "{{ value_json.temperature_control.on_time_ms }}"
+        unit_of_measurement: "ms"
+        state_class: measurement
+        icon: "mdi:clock-check"
+
+      - name: "Breadmaker Duty Cycle"
+        value_template: "{{ value_json.temperature_control.duty_cycle_percent }}"
+        unit_of_measurement: "%"
+        state_class: measurement
+        icon: "mdi:percent-circle"
+# Template sensors for enhanced functionality
+template:
+  - sensor:
+      - name: "Breadmaker Status Summary"
+        state: >
+          {% if states('sensor.breadmaker_state') == 'on' %}
+            Running: {{ states('sensor.breadmaker_stage') }}
+          {% else %}
+            Stopped
+          {% endif %}
+        icon: "mdi:information"
+
+      - name: "Breadmaker Progress"
+        state: >
+          {% if states('sensor.breadmaker_program') != 'unknown' %}
+            {{ states('sensor.breadmaker_program') }} - {{ states('sensor.breadmaker_stage') }}
+          {% else %}
+            Idle
+          {% endif %}
+        icon: "mdi:progress-helper"
+
+      # Convert uptime to human readable format
+      - name: "Breadmaker Uptime Formatted"
+        state: >
+          {% set uptime = states('sensor.breadmaker_uptime') | int %}
+          {% set days = (uptime // 86400) %}
+          {% set hours = ((uptime % 86400) // 3600) %}
+          {% set minutes = ((uptime % 3600) // 60) %}
+          {{ days }}d {{ hours }}h {{ minutes }}m
+        icon: "mdi:clock-outline"
+
+      # Calculate memory usage percentage
+      - name: "Breadmaker Memory Usage"
+        state: >
+          {% set free = states('sensor.breadmaker_free_heap') | int %}
+          {% set total = 81920 %}  {# ESP8266 total RAM #}
+          {% set used = total - free %}
+          {{ ((used / total) * 100) | round(1) }}
+        unit_of_measurement: "%"
+        icon: "mdi:memory"
+
+      # Temperature difference from setpoint
+      - name: "Breadmaker Temperature Error"
+        state: >
+          {% set temp = states('sensor.breadmaker_temperature') | float %}
+          {% set setpoint = states('sensor.breadmaker_setpoint') | float %}
+          {{ (temp - setpoint) | round(1) }}
+        unit_of_measurement: "°C"
+        icon: "mdi:thermometer-alert"
+
+      # System health summary
+      - name: "Breadmaker System Health"
+        state: >
+          {% set free_heap = states('sensor.breadmaker_free_heap') | int %}
+          {% set errors = states('sensor.breadmaker_error_count_0') | int +
+                         states('sensor.breadmaker_error_count_1') | int +
+                         states('sensor.breadmaker_error_count_2') | int +
+                         states('sensor.breadmaker_error_count_3') | int +
+                         states('sensor.breadmaker_error_count_4') | int +
+                         states('sensor.breadmaker_error_count_5') | int %}
+          {% set thermal_runaway = states('sensor.breadmaker_thermal_runaway') == 'true' %}
+          {% set sensor_fault = states('sensor.breadmaker_sensor_fault') == 'true' %}
+          {% if thermal_runaway or sensor_fault %}
+            Critical
+          {% elif errors > 0 %}
+            Warning
+          {% elif free_heap < 2000 %}
+            Low Memory
+          {% else %}
+            Healthy
+          {% endif %}
+        icon: "mdi:heart-pulse"
+
+# Binary sensors for comprehensive status monitoring
+binary_sensor:
+  - platform: template
+    sensors:
+      breadmaker_running:
+        friendly_name: "Breadmaker Running"
+        value_template: "{{ states('sensor.breadmaker_state') == 'on' }}"
+        icon_template: >
+          {% if states('sensor.breadmaker_state') == 'on' %}
+            mdi:play-circle
+          {% else %}
+            mdi:stop-circle
+          {% endif %}
+
+      breadmaker_motor_active:
+        friendly_name: "Breadmaker Motor Active"
+        value_template: "{{ states('sensor.breadmaker_motor') == 'true' }}"
+        icon_template: >
+          {% if states('sensor.breadmaker_motor') == 'true' %}
+            mdi:motor
+          {% else %}
+            mdi:motor-off
+          {% endif %}
+
+      breadmaker_light_on:
+        friendly_name: "Breadmaker Light On"
+        value_template: "{{ states('sensor.breadmaker_light') == 'true' }}"
+        icon_template: >
+          {% if states('sensor.breadmaker_light') == 'true' %}
+            mdi:lightbulb
+          {% else %}
+            mdi:lightbulb-off
+          {% endif %}
+
+      breadmaker_buzzer_active:
+        friendly_name: "Breadmaker Buzzer Active"
+        value_template: "{{ states('sensor.breadmaker_buzzer') == 'true' }}"
+        icon_template: >
+          {% if states('sensor.breadmaker_buzzer') == 'true' %}
+            mdi:bell
+          {% else %}
+            mdi:bell-off
+          {% endif %}
+
+      breadmaker_heater_active:
+        friendly_name: "Breadmaker Heater Active"
+        value_template: "{{ states('sensor.breadmaker_heater') == 'true' }}"
+        device_class: heat
+        icon_template: >
+          {% if states('sensor.breadmaker_heater') == 'true' %}
+            mdi:fire
+          {% else %}
+            mdi:fire-off
+          {% endif %}
+
+      breadmaker_manual_mode:
+        friendly_name: "Breadmaker Manual Mode"
+        value_template: "{{ states('sensor.breadmaker_manual_mode') == 'true' }}"
+        icon_template: >
+          {% if states('sensor.breadmaker_manual_mode') == 'true' %}
+            mdi:hand-back-right
+          {% else %}
+            mdi:robot
+          {% endif %}
+
+      breadmaker_wifi_connected:
+        friendly_name: "Breadmaker WiFi Connected"
+        value_template: "{{ states('sensor.breadmaker_wifi_connected') == 'true' }}"
+        device_class: connectivity
+        icon_template: >
+          {% if states('sensor.breadmaker_wifi_connected') == 'true' %}
+            mdi:wifi
+          {% else %}
+            mdi:wifi-off
+          {% endif %}
+
+      breadmaker_thermal_runaway:
+        friendly_name: "Breadmaker Thermal Runaway"
+        value_template: "{{ states('sensor.breadmaker_thermal_runaway') == 'true' }}"
+        device_class: problem
+        icon_template: >
+          {% if states('sensor.breadmaker_thermal_runaway') == 'true' %}
+            mdi:alert-octagon
+          {% else %}
+            mdi:shield-check
+          {% endif %}
+
+      breadmaker_sensor_fault:
+        friendly_name: "Breadmaker Sensor Fault"
+        value_template: "{{ states('sensor.breadmaker_sensor_fault') == 'true' }}"
+        device_class: problem
+        icon_template: >
+          {% if states('sensor.breadmaker_sensor_fault') == 'true' %}
+            mdi:alert-circle
+          {% else %}
+            mdi:check-circle
+          {% endif %}
+
+      breadmaker_healthy:
+        friendly_name: "Breadmaker System Healthy"
+        value_template: >
+          {% set free_heap = states('sensor.breadmaker_free_heap') | int %}
+          {% set errors = states('sensor.breadmaker_error_count_0') | int +
+                         states('sensor.breadmaker_error_count_1') | int +
+                         states('sensor.breadmaker_error_count_2') | int +
+                         states('sensor.breadmaker_error_count_3') | int +
+                         states('sensor.breadmaker_error_count_4') | int +
+                         states('sensor.breadmaker_error_count_5') | int %}
+          {% set thermal_runaway = states('sensor.breadmaker_thermal_runaway') == 'true' %}
+          {% set sensor_fault = states('sensor.breadmaker_sensor_fault') == 'true' %}
+          {{ free_heap > 2000 and errors == 0 and not thermal_runaway and not sensor_fault }}
+        device_class: problem
+        icon_template: >
+          {% set free_heap = states('sensor.breadmaker_free_heap') | int %}
+          {% set errors = states('sensor.breadmaker_error_count_0') | int +
+                         states('sensor.breadmaker_error_count_1') | int +
+                         states('sensor.breadmaker_error_count_2') | int +
+                         states('sensor.breadmaker_error_count_3') | int +
+                         states('sensor.breadmaker_error_count_4') | int +
+                         states('sensor.breadmaker_error_count_5') | int %}
+          {% set thermal_runaway = states('sensor.breadmaker_thermal_runaway') == 'true' %}
+          {% set sensor_fault = states('sensor.breadmaker_sensor_fault') == 'true' %}
+          {% if free_heap > 2000 and errors == 0 and not thermal_runaway and not sensor_fault %}
+            mdi:check-circle
+          {% else %}
+            mdi:alert-circle
+          {% endif %}
+
+# REST Commands for Programmatic Control
+rest_command:
+  # Stop breadmaker
+  breadmaker_stop:
+    url: "http://192.168.250.125/stop"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Pause breadmaker
+  breadmaker_pause:
+    url: "http://192.168.250.125/pause"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Resume breadmaker
+  breadmaker_resume:
+    url: "http://192.168.250.125/resume"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Advance stage
+  breadmaker_advance:
+    url: "http://192.168.250.125/advance"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Go back stage
+  breadmaker_back:
+    url: "http://192.168.250.125/back"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Select program
+  breadmaker_select_program:
+    url: "http://192.168.250.125/select?program={{ program }}"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Beep
+  breadmaker_beep:
+    url: "http://192.168.250.125/api/beep"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Short beep
+  breadmaker_short_beep:
+    url: "http://192.168.250.125/api/short_beep"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Manual mode control
+  breadmaker_manual_mode_on:
+    url: "http://192.168.250.125/api/manual_mode?state=true"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  breadmaker_manual_mode_off:
+    url: "http://192.168.250.125/api/manual_mode?state=false"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Individual output controls (for manual mode)
+  breadmaker_motor_on:
+    url: "http://192.168.250.125/api/motor?state=true"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  breadmaker_motor_off:
+    url: "http://192.168.250.125/api/motor?state=false"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  breadmaker_heater_on:
+    url: "http://192.168.250.125/api/heater?state=true"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  breadmaker_heater_off:
+    url: "http://192.168.250.125/api/heater?state=false"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  breadmaker_light_on:
+    url: "http://192.168.250.125/api/light?state=true"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  breadmaker_light_off:
+    url: "http://192.168.250.125/api/light?state=false"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  breadmaker_buzzer_on:
+    url: "http://192.168.250.125/api/buzzer?state=true"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  breadmaker_buzzer_off:
+    url: "http://192.168.250.125/api/buzzer?state=false"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+  # Play tone with custom frequency and duration
+  breadmaker_play_tone:
+    url: "http://192.168.250.125/api/buzzer_tone?freq={{ freq | default(1000) }}&duration={{ duration | default(500) }}"
+    method: GET
+    headers:
+      User-Agent: "Home Assistant"
+
+# Note: Automations and scripts are in separate files:
+# - automations.yaml (included via: automation: !include automations.yaml)
+# - scripts.yaml (included via: script: !include scripts.yaml)
+#
+# Add the breadmaker automations and scripts to those files instead.

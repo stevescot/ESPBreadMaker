@@ -14,12 +14,12 @@
     <a href="/config.html">⚙️ Config</a>
     <a href="/programs.html">📝 Programs</a>
     <a href="/calibration.html">🌡️ Calibration</a>
-    <a href="/controllertuning.html" class="active">🎛️ PID Tuning</a>
+    <a href="/controllertuning.html" class="active">🔥 PID Tuning</a>
     <a href="/update.html">⬆️ Update</a>
   </nav>
 
   <div class="tuning-container">
-    <h1>🎛️ High-Precision PID Controller Tuning</h1>
+    <h1>🔥 High-Precision PID Controller Tuning</h1>
     
     <div class="tuning-instructions">
       <h3>📚 PID Tuning Quick Reference</h3>
@@ -50,7 +50,7 @@
     <div class="tuning-grid">
       <!-- Control Panel -->
       <div class="control-panel">
-        <h2>🎛️ PID Parameters (High Precision)</h2>
+        <h2>🔥 PID Parameters (High Precision)</h2>
         
         <div class="param-group">
           <h3>📊 PID Coefficients</h3>
@@ -147,6 +147,22 @@
           <button class="btn btn-warning" onclick="resetToDefaults()">Reset Defaults</button>
           <button class="btn btn-primary" onclick="loadCurrentParams()">Load Current</button>
         </div>
+        
+        <div class="param-group">
+          <h3>🔊 Buzzer Tone Tests</h3>
+          <div class="button-group" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+            <button class="btn btn-info" onclick="testShortBeep()">🔊 Short Beep</button>
+            <button class="btn btn-info" onclick="testTone(500, 0.2, 300)">🔊 Low Tone</button>
+            <button class="btn btn-info" onclick="testTone(1000, 0.3, 200)">🔊 Mid Tone</button>
+            <button class="btn btn-info" onclick="testTone(2000, 0.1, 150)">🔊 High Tone</button>
+            <button class="btn btn-info" onclick="testTone(800, 0.4, 500)">🔊 Alert</button>
+            <button class="btn btn-info" onclick="testMultiTone()">🔊 Multi-Tone</button>
+          </div>
+          <div class="param-desc">
+            <strong>Buzzer Test Functions:</strong> Test different tone frequencies, amplitudes, and durations. 
+            The buzzer now generates proper sine wave tones instead of simple on/off signals.
+          </div>
+        </div>
 
         <div class="test-controls">
           <h3>🧪 Manual Testing</h3>
@@ -158,6 +174,7 @@
           <div class="button-group">
             <button class="btn btn-success" onclick="startManualTest()">Start Test</button>
             <button class="btn btn-danger" onclick="stopTest()">Stop Test</button>
+            <button class="btn btn-warning" onclick="testBeep()">🔊 Test Beep</button>
           </div>
         </div>
 
@@ -368,10 +385,7 @@
   </div>
 
   <!-- JavaScript Files -->
-  <script src="controllertuning-core.js"></script>
-  <script src="controllertuning-status.js"></script>
-  <script src="controllertuning-autotune.js"></script>
-  <script src="controllertuning-autotune-step.js"></script>
-  <script src="controllertuning-autotune-ultimate.js"></script>
+  <script src="script.js"></script>
+  <script src="controllertuning.js"></script>
 </body>
 </html>

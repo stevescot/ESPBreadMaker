@@ -2,10 +2,12 @@
 #include <ArduinoJson.h>
 #include "programs_manager.h"
 
+
 // --- Programs map ---
-std::map<String, Program> programs;
+std::vector<Program> programs;
 
 // --- Program management implementation ---
+
 
 // Load programs from LittleFS
 void loadPrograms() {
@@ -24,6 +26,8 @@ void loadPrograms() {
     p.name = pobj["name"].as<String>();
     p.notes = pobj["notes"] | String("");
     p.icon = pobj["icon"] | String("");
+    p.fermentBaselineTemp = pobj["fermentBaselineTemp"] | 20.0f;
+    p.fermentQ10 = pobj["fermentQ10"] | 2.0f;
     p.customStages.clear();
     for (JsonObject st : pobj["customStages"].as<JsonArray>()) {
       CustomStage cs;
@@ -31,6 +35,8 @@ void loadPrograms() {
       cs.min = st["min"] | 0;
       cs.temp = st["temp"] | 0.0;
       cs.noMix = st["noMix"] | false;
+      cs.isFermentation = st["isFermentation"] | false;
+      cs.instructions = st["instructions"] | String("");
       cs.light = st["light"] | String("");
       cs.buzzer = st["buzzer"] | String("");
       cs.mixPattern.clear();
@@ -43,7 +49,7 @@ void loadPrograms() {
       }
       p.customStages.push_back(cs);
     }
-    programs[p.name] = p;
+    programs.push_back(p);
   }
 }
 
@@ -51,12 +57,13 @@ void loadPrograms() {
 void savePrograms() {
   DynamicJsonDocument doc(8192);
   JsonArray arr = doc.to<JsonArray>();
-  for (auto &kv : programs) {
-    Program &p = kv.second;
+  for (auto &p : programs) {
     JsonObject pobj = arr.createNestedObject();
     pobj["name"] = p.name;
     pobj["notes"] = p.notes;
     pobj["icon"] = p.icon;
+    pobj["fermentBaselineTemp"] = p.fermentBaselineTemp;
+    pobj["fermentQ10"] = p.fermentQ10;
     JsonArray stagesArr = pobj.createNestedArray("customStages");
     for (auto &cs : p.customStages) {
       JsonObject st = stagesArr.createNestedObject();
@@ -64,6 +71,8 @@ void savePrograms() {
       st["min"] = cs.min;
       st["temp"] = cs.temp;
       st["noMix"] = cs.noMix;
+      st["isFermentation"] = cs.isFermentation;
+      st["instructions"] = cs.instructions;
       st["light"] = cs.light;
       st["buzzer"] = cs.buzzer;
       JsonArray mixArr = st.createNestedArray("mixPattern");

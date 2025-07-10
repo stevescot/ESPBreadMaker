@@ -7,12 +7,20 @@
   <script src="update.js"></script>
 </head>
 <body>
+  <nav>
+    <a href="/">&#8962; Home</a>
+    <a href="/config.html">&#9881; Config</a>
+    <a href="/programs.html">&#128221; Programs</a>
+    <a href="/calibration.html">&#127777; Calibration</a>
+    <a href="/controllertuning.html">&#128293; PID Tuning</a>
+    <a href="/update.html" class="active">&#11014; Update</a>
+  </nav>
   <div class="container">
     <h2>Firmware Update</h2>
     <div id="fwBuildInfo" style="margin-bottom:10px;color:#555;font-size:0.95em"></div>
     
     <div style="margin:15px 0; padding:12px; background:#d32f2f; color:white; border-radius:6px; border-left:4px solid #b71c1c;">
-      <b>⚠️ CRITICAL: HIGH IRAM USAGE DETECTED</b><br>
+      <b>&#9888; CRITICAL: HIGH IRAM USAGE DETECTED</b><br>
       <div style="margin-top:8px;">Your firmware uses <b>94% IRAM (62,007/65,536 bytes)</b>. OTA updates fail when IRAM usage exceeds 90% because the ESP8266 needs additional memory during the update process.</div>
       <div style="margin-top:8px; font-size:0.9em;">
         <b>Solutions:</b> Remove ICACHE_RAM_ATTR from non-critical functions, use serial upload instead, or reduce code size.<br>
