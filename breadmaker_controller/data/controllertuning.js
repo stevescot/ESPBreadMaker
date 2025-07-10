@@ -405,8 +405,8 @@ function resetToDefaults() {
 async function startManualTest() {
   const targetTemp = parseFloat(document.getElementById('targetTempInput').value);
   
-  if (isNaN(targetTemp) || targetTemp < 20 || targetTemp > 250) {
-    showMessage('Invalid target temperature (20-250°C)', 'error');
+  if (isNaN(targetTemp) || targetTemp < 0 || targetTemp > 250) {
+    showMessage('Invalid target temperature (0-250°C)', 'error');
     return;
   }
   

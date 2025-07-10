@@ -1,4 +1,3 @@
-
 // (Predicted times will be moved to the status endpoint instead)
 // --- Temperature safety flags ---
 bool thermalRunawayDetected = false;
@@ -143,6 +142,12 @@ bool isStartupDelayComplete();
 
 // --- Core state machine endpoints ---
 void setup() {
+  // --- Ensure all outputs are OFF immediately on boot/reset ---
+  setHeater(false);
+  setMotor(false);
+  setLight(false);
+  setBuzzer(false);
+
   startupTime = millis(); // Record startup time for sensor stabilization delay
   Serial.begin(115200);
   delay(100);
@@ -832,12 +837,20 @@ void setup() {
     streamStatusJson(*response);
     req->send(response);
   });
+
   // --- Firmware info endpoint ---
   server.on("/api/firmware_info", HTTP_GET, [](AsyncWebServerRequest* req){
     DynamicJsonDocument doc(128);
     doc["build"] = FIRMWARE_BUILD_DATE;
     String json; serializeJson(doc, json);
     req->send(200, "application/json", json);
+  });
+
+  // --- Restart endpoint ---
+  server.on("/api/restart", HTTP_POST, [](AsyncWebServerRequest* req){
+    req->send(200, "application/json", "{\"status\":\"restarting\"}");
+    delay(200);
+    ESP.restart();
   });
 
   // --- Home Assistant-friendly endpoint (lightweight - uses cached values only) ---
@@ -1548,7 +1561,7 @@ void saveResumeState() {
   f.printf("  \"elapsedMixSec\":%lu,\n", (customMixStepStart > 0) ? (millis() - customMixStepStart) / 1000UL : 0UL);
   f.printf("  \"programStartTime\":%lu,\n", (unsigned long)programStartTime);
   f.printf("  \"isRunning\":%s,\n", isRunning ? "true" : "false");
-  f.print("  \"actualStageStartTimes\":[");
+   f.print("  \"actualStageStartTimes\":[");
   for (int i = 0; i < 20; i++) {
     f.printf("%s%lu", (i > 0) ? "," : "", (unsigned long)actualStageStartTimes[i]);
   }
@@ -1805,6 +1818,7 @@ void loop() {
       for (size_t i = 0; i < p.customStages.size(); ++i) {
         CustomStage &stage = p.customStages[i];
         double plannedStageSec = (double)stage.min * 60.0;
+        double adjustedStageSec = plannedStageSec;
         if (stage.isFermentation) {
           if (i < customStageIdx) {
             // For completed fermentation stages, assume factor at time of completion (approximate)
@@ -2218,19 +2232,24 @@ void updateTimeProportionalHeater() {
     const unsigned long minOnTime = 1000;   // Minimum 1 second ON (was 5s - too aggressive!)
     const unsigned long minOffTime = 1000;  // Minimum 1 second OFF 
     const float minOutputThreshold = 0.02;  // Below 2% output, turn OFF completely
-    
+\
     // If output is very low, just turn OFF completely (avoid excessive short cycling)
     if (Output < minOutputThreshold) {
       onTime = 0;  // Complete OFF
     }
-    // Otherwise apply minimum ON time only if above threshold
-    else if (onTime > 0 && onTime < minOnTime) {
-      onTime = minOnTime;  // Extend very short ON periods to protect relay
+    // If output is 100% (or very close), force ON for entire window
+    else if (Output >= 0.999f) {
+      onTime = windowSize;
     }
-    
-    // Ensure minimum OFF time
-    if (onTime > 0 && (windowSize - onTime) < minOffTime) {
-      onTime = windowSize - minOffTime;  // Ensure minimum OFF time
+    // Otherwise apply minimum ON/OFF time logic
+    else {
+      if (onTime > 0 && onTime < minOnTime) {
+        onTime = minOnTime;  // Extend very short ON periods to protect relay
+      }
+      // Ensure minimum OFF time, but only if there is actually an OFF period
+      if (onTime > 0 && onTime < windowSize && (windowSize - onTime) < minOffTime) {
+        onTime = windowSize - minOffTime;  // Ensure minimum OFF time
+      }
     }
     
     if (debugSerial && millis() % 15000 < 50) {  // Debug every 15 seconds
@@ -2273,7 +2292,7 @@ void streamHeaterDebugStatus(Print& out) {
   out.printf("\"calculated_on_time_ms\":%lu,", onTime);
   out.printf("\"on_time_percent\":%.2f,", onTimePercent);
   out.printf("\"should_be_on\":%s,", (elapsed < onTime) ? "true" : "false");
-  out.printf("\"dynamic_restart_count\":%u,", dynamicRestartCount);
+  out.printf("\"dynamic_restarts\":%u,", dynamicRestartCount);
   out.printf("\"last_restart_reason\":\"%s\",", lastDynamicRestartReason.c_str());
   out.printf("\"last_restart_ago_ms\":%lu,", (lastDynamicRestart > 0) ? (now - lastDynamicRestart) : 0);
   out.printf("\"last_pid_output\":%.2f,", lastPIDOutput);
@@ -2449,48 +2468,51 @@ void streamStatusJson(Print& out) {
   // stage, stageStartTimes, programStart, elapsed, stageReadyAt, programReadyAt
   if (activeProgramId < programs.size()) {
     Program &p = programs[activeProgramId];
-    if (!isRunning) {
-      out.print("\"stage\":\"Idle\",");
-    } else if (customStageIdx < p.customStages.size()) {
+    // Determine preview or running mode
+    bool previewMode = !isRunning;
+    // Stage label
+    if (isRunning && customStageIdx < p.customStages.size()) {
       out.print("\"stage\":\"");
       out.print(p.customStages[customStageIdx].label.c_str());
       out.print("\",");
     } else {
-      out.print("\"stage\":\"\",");
+      out.print("\"stage\":\"Idle\",");
     }
     // --- Predicted (temperature-adjusted) stage end times ---
     out.print("\"predictedStageEndTimes\":[");
     float actualTemp = getAveragedTemperature();
-    // Use programStartTime as the base (Unix seconds)
-    unsigned long programStartUnix = (unsigned long)programStartTime; // seconds since epoch
+    float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
+    float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
+    float fermentationFactorForProgram = pow(q10, (baseline - actualTemp) / 10.0);
+    // Use programStartTime if running, otherwise use now as preview start
+    unsigned long programStartUnix = (unsigned long)(isRunning ? programStartTime : time(nullptr));
     double cumulativePredictedSec = 0.0;
     for (size_t i = 0; i < p.customStages.size(); ++i) {
       CustomStage &stage = p.customStages[i];
       double plannedStageSec = (double)stage.min * 60.0;
       double adjustedStageSec = plannedStageSec;
       if (stage.isFermentation) {
-        float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
-        float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
-        float factor = pow(q10, (baseline - actualTemp) / 10.0);
-        adjustedStageSec = plannedStageSec * factor;
+        adjustedStageSec = plannedStageSec * fermentationFactorForProgram;
       }
       cumulativePredictedSec += adjustedStageSec;
       if (i > 0) out.print(",");
       out.printf("%lu", (unsigned long)(programStartUnix + (unsigned long)(cumulativePredictedSec)));
     }
     out.print("],");
+    // Always report the program's fermentation factor (for display in UI)
+    fermentationFactor = fermentationFactorForProgram;
     // --- Predicted (temperature-adjusted) program end time ---
     out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)(programStartUnix + (unsigned long)(cumulativePredictedSec)));
     // --- Legacy: stageStartTimes array (planned, not adjusted) ---
     out.print("\"stageStartTimes\":[");
-    time_t t = programStartTime;
+    time_t t = isRunning ? programStartTime : time(nullptr);
     for (size_t i = 0; i < p.customStages.size(); ++i) {
       if (i > 0) out.print(",");
       out.printf("%lu", (unsigned long)t);
       t += (time_t)p.customStages[i].min * 60;
     }
     out.print("],");
-    out.printf("\"programStart\":%lu,", (unsigned long)programStartTime);
+    out.printf("\"programStart\":%lu,", (unsigned long)programStartUnix);
     // elapsed
     es = (customStageStart == 0) ? 0 : (nowMs - customStageStart) / 1000;
     // Calculate stageReadyAt and programReadyAt (legacy, not adjusted)
@@ -2509,7 +2531,7 @@ void streamStatusJson(Print& out) {
           programReadyAt += (time_t)p.customStages[i].min * 60;
         }
       } else {
-        programReadyAt = programStartTime;
+        programReadyAt = isRunning ? programStartTime : time(nullptr);
         for (size_t i = 0; i < p.customStages.size(); ++i) {
           programReadyAt += (time_t)p.customStages[i].min * 60;
         }

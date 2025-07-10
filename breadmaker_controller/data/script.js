@@ -1,3 +1,56 @@
+// ---- Utility: Format Time (HH:MM or HH:MM:SS) ----
+function formatTime(date, withSeconds = false) {
+  if (!(date instanceof Date)) return '--';
+  let h = date.getHours().toString().padStart(2, '0');
+  let m = date.getMinutes().toString().padStart(2, '0');
+  let s = date.getSeconds().toString().padStart(2, '0');
+  return withSeconds ? `${h}:${m}:${s}` : `${h}:${m}`;
+}
+
+// ---- Display Predicted End Time in UI ----
+function updatePredictedEndTimeDisplay(status) {
+  const el = document.getElementById('predictedEndTimeDisplay');
+  if (!el) return;
+
+  // Only show if we have predictedStageEndTimes and a program is selected
+  if (!status || !status.predictedStageEndTimes || !Array.isArray(status.predictedStageEndTimes) || status.predictedStageEndTimes.length === 0) {
+    el.textContent = '';
+    return;
+  }
+
+  // Determine the reference start time: now (if no scheduled start), or scheduled start time
+  let startAt = null;
+  const startAtInput = document.getElementById('startAt');
+  if (startAtInput && startAtInput.value) {
+    // Parse scheduled start time (HH:MM, local time)
+    const [hh, mm] = startAtInput.value.split(':').map(Number);
+    const now = new Date();
+    startAt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
+    // If scheduled time is earlier than now, assume next day
+    if (startAt < now) startAt.setDate(startAt.getDate() + 1);
+  }
+
+  // The last predictedStageEndTime is the program end (UNIX timestamp, seconds)
+  const lastEndSec = status.predictedStageEndTimes[status.predictedStageEndTimes.length - 1];
+  if (typeof lastEndSec !== 'number' || isNaN(lastEndSec)) {
+    el.textContent = '';
+    return;
+  }
+
+  // Convert to JS Date (seconds to ms)
+  const predictedEnd = new Date(lastEndSec * 1000);
+  // Format with date and time
+  const dateStr = predictedEnd.toLocaleDateString();
+  const timeStr = formatTime(predictedEnd, true);
+  if (status && status.running) {
+    // If running, just show the predicted end time (program is in progress)
+    el.textContent = `Predicted End Time: ${dateStr} ${timeStr}`;
+  } else if (startAt) {
+    el.textContent = `Predicted End Time: ${dateStr} ${timeStr} (if started at ${formatTime(startAt)})`;
+  } else {
+    el.textContent = `Predicted End Time: ${dateStr} ${timeStr} (if started now)`;
+  }
+}
 // ---- Utility Functions ----
 function showStartAtStatus(msg) {
   let el = document.getElementById('startAtStatus');
@@ -344,6 +397,8 @@ let lastStatusTime = 0;
 let countdownInterval = null;
 
 function updateStatusInternal(s) {
+  // Update predicted end time display
+  updatePredictedEndTimeDisplay(s);
   // If no status object provided, fetch it from server
   if (!s || typeof s !== 'object') {
     fetch('/status')
@@ -512,73 +567,25 @@ function updateFermentationInfo(s) {
   const fermentFactorEl = document.getElementById('fermentFactor');
   const predictedCompleteEl = document.getElementById('predictedComplete');
   const initialTempEl = document.getElementById('initialTemp');
-  
   if (!fermentInfoEl) return;
-  
-  // Show fermentation info if we have fermentation data and are running, or if we can preview
-  const canPreview = s && !s.running && typeof s.temp === 'number' && s.temp > 0 && window.cachedPrograms && typeof s.program === 'string';
-  const showFermentInfo = (s && s.running && (typeof s.fermentationFactor === 'number' || typeof s.predictedCompleteTime === 'number' || typeof s.initialFermentTemp === 'number')) || canPreview;
-
-  if (showFermentInfo) {
-    fermentInfoEl.style.display = 'block';
-
-    // Fermentation factor
-    let fermentationFactor = (typeof s.fermentationFactor === 'number' && s.fermentationFactor > 0) ? s.fermentationFactor : null;
-    if (!fermentationFactor && canPreview) {
-      // Estimate for preview
-      const temp = Math.max(10, Math.min(50, s.temp));
-      const baseTemp = 30;
-      const Q10 = 2;
-      fermentationFactor = Math.pow(Q10, (baseTemp - temp) / 10);
-      fermentationFactor = Math.max(0.2, Math.min(fermentationFactor, 5));
-    }
-    if (fermentFactorEl && fermentationFactor) {
-      fermentFactorEl.textContent = fermentationFactor.toFixed(2);
-    } else if (fermentFactorEl) {
-      fermentFactorEl.textContent = '--';
-    }
-
-    // Predicted complete time
-    let predictedComplete = (typeof s.predictedCompleteTime === 'number' && s.predictedCompleteTime > 0) ? s.predictedCompleteTime : null;
-    if (!predictedComplete && canPreview) {
-      // Preview: sum up adjusted durations from now
-      let prog = null;
-      if (Array.isArray(window.cachedPrograms)) {
-        prog = window.cachedPrograms.find(p => p.name === s.program);
-      } else if (typeof window.cachedPrograms === 'object') {
-        prog = window.cachedPrograms[s.program];
-      }
-      if (prog && prog.customStages && Array.isArray(prog.customStages)) {
-        let now = Date.now();
-        let t = now;
-        for (let i = 0; i < prog.customStages.length; ++i) {
-          let st = prog.customStages[i];
-          let min = st.min;
-          if (st.fermentation && fermentationFactor) min = min * fermentationFactor;
-          t += min * 60000;
-        }
-        predictedComplete = Math.floor(t / 1000); // keep as seconds for consistency
-      }
-    }
-    // If predictedComplete is in seconds, convert to ms for comparison and display
-    let predictedCompleteMs = (predictedComplete && predictedComplete < 1e12) ? predictedComplete * 1000 : predictedComplete;
-    if (predictedCompleteEl && predictedCompleteMs && predictedCompleteMs > Date.now()) {
-      predictedCompleteEl.textContent = formatDateTime(predictedCompleteMs);
-    } else if (predictedCompleteEl) {
-      predictedCompleteEl.textContent = '--';
-    }
-
-    // Initial temp
-    if (initialTempEl && typeof s.initialFermentTemp === 'number') {
-      initialTempEl.textContent = s.initialFermentTemp.toFixed(1) + String.fromCharCode(176) + 'C';
-    } else if (initialTempEl && canPreview) {
-      initialTempEl.textContent = s.temp.toFixed(1) + String.fromCharCode(176) + 'C';
-    } else if (initialTempEl) {
-      initialTempEl.textContent = '--' + String.fromCharCode(176) + 'C';
-    }
+  // Always show fermentation info
+  fermentInfoEl.style.display = 'block';
+  // Fermentation factor
+  fermentFactorEl.textContent = (typeof s.fermentationFactor === 'number') ? s.fermentationFactor.toFixed(2) : '--';
+  // Predicted complete (use predictedStageEndTimes if available)
+  if (s.predictedStageEndTimes && Array.isArray(s.predictedStageEndTimes) && s.predictedStageEndTimes.length > 0) {
+    const lastEnd = s.predictedStageEndTimes[s.predictedStageEndTimes.length - 1];
+    predictedCompleteEl.textContent = formatDateTime(lastEnd * 1000);
   } else {
-    fermentInfoEl.style.display = 'none';
+    predictedCompleteEl.textContent = '--';
   }
+  // Initial temp
+  if (typeof s.initialFermentTemp === 'number') {
+    initialTempEl.textContent = s.initialFermentTemp.toFixed(1) + '°C';
+  } else {
+    initialTempEl.textContent = '--°C';
+  }
+  // No extra closing brace here
 }
 
 // ---- Program Ready At (Custom Stages Only) ----
@@ -793,9 +800,10 @@ function showPlanSummary(s) {
       let t = now;
       for (let i = 0; i < prog.customStages.length; ++i) {
         let st = prog.customStages[i];
-        let isFermentation = !!st.fermentation;
         let min = st.min;
-        if (isFermentation) min = min * fermentationFactor;
+        if (st.fermentation) {
+          min = min * fermentationFactor;
+        }
         t += min * 60000;
         previewStageEndTimes.push(Math.floor(t / 1000));
       }
@@ -825,23 +833,27 @@ function showPlanSummary(s) {
       let adjustedMin = st.min;
       if (isFermentation && fermentationFactor !== 1.0) {
         adjustedMin = st.min * fermentationFactor;
+      } else {
+        adjustedMin = st.min;
       }
-      // If predictedStageEndTimes is available, use it to show predicted end time and duration
+      // If predictedStageEndTimes is available, always use it to show predicted end time and duration
       let predictedEnd = null;
       let predictedDurationMin = null;
       if (predictedStageEndTimes && predictedStageEndTimes[i]) {
         predictedEnd = new Date(predictedStageEndTimes[i] * 1000);
-        if (stStart) {
-          predictedDurationMin = (predictedStageEndTimes[i] - (stStart.getTime() / 1000)) / 60;
-        } else if (i === 0 && Array.isArray(s.stageStartTimes) && s.stageStartTimes[0]) {
-          predictedDurationMin = (predictedStageEndTimes[0] - s.stageStartTimes[0]) / 60;
+        // For duration, use difference between this and previous stage end (or start)
+        if (i === 0) {
+          // First stage: duration is end - start (use stStart if available, else just use planned)
+          if (stStart) {
+            predictedDurationMin = (predictedStageEndTimes[0] - (stStart.getTime() / 1000)) / 60;
+          } else {
+            predictedDurationMin = adjustedMin;
+          }
         } else {
-          predictedDurationMin = adjustedMin;
+          predictedDurationMin = (predictedStageEndTimes[i] - predictedStageEndTimes[i-1]) / 60;
         }
-      } else if (!s.running && previewStageEndTimes && previewStageEndTimes[i] && stStart) {
-        predictedEnd = new Date(previewStageEndTimes[i] * 1000);
-        predictedDurationMin = (previewStageEndTimes[i] - (stStart.getTime() / 1000)) / 60;
       } else {
+        // Fallback: use planned/adjusted duration
         predictedDurationMin = adjustedMin;
       }
       // Clamp predictedDurationMin to avoid negative/NaN
@@ -866,16 +878,26 @@ function showPlanSummary(s) {
           `<svg width='18' height='18' viewBox='0 0 20 20' style='vertical-align:middle;'><circle cx='10' cy='10' r='9' fill='#ffd600' stroke='#888' stroke-width='1.2'/><text x='10' y='15' text-anchor='middle' font-size='13' fill='#232323' font-family='Arial' dy='-0.2em'>i</text></svg>` +
           `</span>`;
       }
-      // Row status: done/active/inactive
+      // Row status: done/active/inactive/skipped
       let rowClass = '';
+      let skipped = false;
       if (currentStageIdx >= 0) {
-        if (i < currentStageIdx) rowClass = 'done';
-        else if (i === currentStageIdx) rowClass = 'active';
+        if (i < currentStageIdx) {
+          // If actualStageStartTimes[i] is missing but a later stage has started, this stage was skipped
+          if (!s.actualStageStartTimes || !s.actualStageStartTimes[i]) {
+            rowClass = 'done';
+            skipped = true;
+          } else {
+            rowClass = 'done';
+          }
+        } else if (i === currentStageIdx) rowClass = 'active';
         else rowClass = 'inactive';
       }
       // Show actual elapsed time for done stages if available, else planned/adjusted duration
       let durationCell = '';
-      if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i+1]) {
+      if (skipped) {
+        durationCell = `<span title="Skipped stage">Skipped</span>`;
+      } else if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i+1]) {
         // Show actual elapsed time for completed stage
         let elapsedSec = (s.actualStageStartTimes[i+1] - s.actualStageStartTimes[i]);
         if (elapsedSec > 0) {
@@ -883,17 +905,20 @@ function showPlanSummary(s) {
         } else {
           durationCell = '--';
         }
+      } else if (rowClass === 'active' && typeof s.timeLeft === 'number' && i === currentStageIdx && s.running) {
+        // Show actual time left for the active stage
+        durationCell = `<span title="Time left in this stage">${formatDuration(s.timeLeft)}</span>`;
       } else if (typeof predictedDurationMin === 'number' && !isNaN(predictedDurationMin)) {
-        // Always use firmware-predicted duration if available (already adjusted for fermentation stages if needed)
+        // Always show predicted duration if available
         durationCell = `<span title="Predicted by firmware">${formatDuration(predictedDurationMin * 60)}<br><small>(${predictedDurationMin.toFixed(1)} min)</small></span>`;
       } else {
         // Fallback: show planned duration only (no local fermentation adjustment)
         durationCell = `${formatDuration(st.min * 60)}`;
       }
-      // For completed (done) stages, override background to a green shade
+      // For completed (done) stages, override background to a grey shade
       let rowStyle = `color:#232323;`;
       if (rowClass === 'done') {
-        rowStyle += 'background:#4caf50;';
+        rowStyle += 'background:#bbb;';
       } else {
         rowStyle += `background:${color};`;
       }
@@ -1111,6 +1136,8 @@ window.updateStatus = function(s) {
   updateStatusInternal(s);
   // Also ensure program dropdown is populated
   populateProgramDropdown(s);
+  // Update predicted end time display (in case status is updated outside updateStatusInternal)
+  updatePredictedEndTimeDisplay(s);
 };
 
 // ---- Event Listeners ----

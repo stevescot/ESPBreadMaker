@@ -112,10 +112,23 @@
       </label>
       <span id="debugSerialStatus" style="margin-left:1em; color:#ffd600;"></span>
     </div>
+    <button class="config-link-btn" id="restartBtn" style="background:#d32f2f; color:#fff; margin-bottom:1.5em;">&#x21bb; Restart Device</button>
     <button class="back-btn" onclick="location.href='/'">Back</button>
   </div>
   <script src="debug_serial.js"></script>
   <script>
+    // Restart button logic
+    document.getElementById('restartBtn').onclick = function() {
+      if (confirm('Are you sure you want to restart the device?')) {
+        fetch('/api/restart', {method: 'POST'})
+          .then(r => r.json())
+          .then(d => {
+            alert('Device is restarting...');
+            setTimeout(() => location.reload(), 5000);
+          })
+          .catch(e => alert('Restart failed: ' + e));
+      }
+    };
     // Output mode switch logic
     const outputModeSelect = document.getElementById('outputModeSelect');
     const outputModeStatus = document.getElementById('outputModeStatus');

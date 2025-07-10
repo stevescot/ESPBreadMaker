@@ -1,3 +1,39 @@
+# Next Step Action Notification
+- alias: "Breadmaker Next Step Action Required"
+  description: "Notify user of required actions for the next step in the breadmaker program."
+  trigger:
+    - platform: state
+      entity_id: sensor.breadmaker_stage
+  condition:
+    - condition: template
+      value_template: >
+        {{
+          trigger.from_state.state != trigger.to_state.state
+          and trigger.to_state.state not in ['unknown', 'unavailable', 'none']
+          and trigger.from_state.state not in ['unknown', 'unavailable', 'none']
+        }}
+  action:
+    - service: notify.persistent_notification
+      data:
+        title: "Breadmaker: Next Step Action Required"
+        message: >
+          The breadmaker has advanced to the next step: {{ trigger.to_state.state }}.
+          {% if state_attr('sensor.breadmaker_stage', 'action_required') %}
+          Action required: {{ state_attr('sensor.breadmaker_stage', 'action_required') }}
+          {% else %}
+          No manual action required for this step.
+          {% endif %}
+    # Uncomment for mobile notifications:
+    # - service: notify.mobile_app_your_device
+    #   data:
+    #     title: "Breadmaker: Next Step Action Required"
+    #     message: >
+    #       The breadmaker has advanced to the next step: {{ trigger.to_state.state }}.
+    #       {% if state_attr('sensor.breadmaker_stage', 'action_required') %}
+    #       Action required: {{ state_attr('sensor.breadmaker_stage', 'action_required') }}
+    #       {% else %}
+    #       No manual action required for this step.
+    #       {% endif %}
 # Breadmaker Controller Automations
 # Add these to your existing automations.yaml file
 
@@ -5,7 +41,8 @@
 - alias: "Breadmaker Stage Changed"
   description: "Notify when breadmaker stage changes"
   trigger:
-    - entity_id: sensor.breadmaker_stage
+    - platform: state
+      entity_id: sensor.breadmaker_stage
       for: "00:00:01"
   condition:
     - condition: template
@@ -28,7 +65,8 @@
 - alias: "Breadmaker Program Complete"
   description: "Notify when breadmaker program completes"
   trigger:
-    - entity_id: binary_sensor.breadmaker_running
+    - platform: state
+      entity_id: binary_sensor.breadmaker_running
       from: "on"
       to: "off"
   action:
@@ -51,9 +89,11 @@
 - alias: "Breadmaker Critical Safety Alert"
   description: "Critical safety alerts for thermal runaway or sensor faults"
   trigger:
-    - entity_id: binary_sensor.breadmaker_thermal_runaway
+    - platform: state
+      entity_id: binary_sensor.breadmaker_thermal_runaway
       to: "on"
-    - entity_id: binary_sensor.breadmaker_sensor_fault
+    - platform: state
+      entity_id: binary_sensor.breadmaker_sensor_fault
       to: "on"
   action:
     - action: notify.persistent_notification
@@ -77,13 +117,16 @@
 - alias: "Breadmaker System Health Warning"
   description: "Warning for system health issues"
   trigger:
-    - entity_id: sensor.breadmaker_free_heap
+    - platform: numeric_state
+      entity_id: sensor.breadmaker_free_heap
       below: 2000
-    - entity_id: sensor.breadmaker_wifi_rssi
-      below: -80
-    - entity_id: sensor.breadmaker_fs_utilization
-      above: 90
-    - trigger: template
+    - platform: numeric_state
+      entity_id: sensor.breadmaker_wifi_rssi
+      below: -80.0
+    - platform: numeric_state
+      entity_id: sensor.breadmaker_fs_utilization
+      above: 90.0
+    - platform: template
       value_template: "{{ states('sensor.breadmaker_system_health') == 'Warning' }}"
   action:
     - action: notify.persistent_notification
@@ -100,7 +143,8 @@
 - alias: "Breadmaker Program Started"
   description: "Actions when breadmaker program starts"
   trigger:
-    - entity_id: binary_sensor.breadmaker_running
+    - platform: state
+      entity_id: binary_sensor.breadmaker_running
       from: "off"
       to: "on"
   action:
@@ -113,8 +157,9 @@
 - alias: "Breadmaker Stage Advance Warning"
   description: "Warning before stage advances automatically"
   trigger:
-    - entity_id: sensor.breadmaker_stage_time_left
-      below: 5
+    - platform: numeric_state
+      entity_id: sensor.breadmaker_stage_time_left
+      below: 5.0
   condition:
     - condition: state
       entity_id: binary_sensor.breadmaker_running
@@ -131,7 +176,7 @@
 - alias: "Breadmaker Temperature Alert"
   description: "Alert for temperature issues"
   trigger:
-    - trigger: template
+    - platform: template
       value_template: "{{ states('sensor.breadmaker_temperature_error') | float | abs > 10 }}"
   condition:
     - condition: state
@@ -153,10 +198,12 @@
 - alias: "Breadmaker Performance Alert"
   description: "Alert for performance issues"
   trigger:
-    - entity_id: sensor.breadmaker_cpu_usage
-      above: 80
-    - entity_id: sensor.breadmaker_max_loop_time
-      above: 50000  # 50ms
+    - platform: numeric_state
+      entity_id: sensor.breadmaker_cpu_usage
+      above: 80.0
+    - platform: numeric_state
+      entity_id: sensor.breadmaker_max_loop_time
+      above: 50000.0  # 50ms
   action:
     - action: notify.persistent_notification
       data:
