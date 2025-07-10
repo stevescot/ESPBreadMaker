@@ -1,0 +1,253 @@
+body {
+  font-family: sans-serif;
+  background: #232323;
+  color: #f1f1f1;
+  margin: 0;
+  padding: 0;
+}
+.container {
+  padding: 1em;
+  max-width: 700px;
+  margin: auto;
+}
+.stage-progress {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  justify-content: center;
+  margin: 1em 0 1.2em 0;
+  gap: 0.16em;    /* Reduced gap */
+}
+.stage-step {
+  min-width: 34px;   /* Much narrower */
+  padding: 0.33em 0.1em;
+  font-size: 0.86em;
+  text-align: center;
+  white-space: pre-line;
+  background: #333;
+  color: #bbb;
+  border-radius: 10px;
+  border: 2px solid #333;
+  font-weight: 500;
+  transition: background 0.3s, color 0.3s, border 0.3s;
+}
+.stage-step.active {
+  background: #ff9933;
+  color: #232323;
+  border: 2px solid #ffb366;
+}
+.stage-step.done {
+  background: #4caf50;
+  color: #fff;
+  border: 2px solid #a5d6a7;
+}
+
+.icon-row-devices {
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  gap: 2.2em;
+  margin: 1em 0 1.4em 0;
+}
+.dev-icon-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 60px;
+}
+.icon {
+  width: 40px; height: 40px; display: block;
+  cursor: pointer;
+  margin-bottom: 0.12em;
+  transition: filter 0.18s, box-shadow 0.18s;
+}
+.icon:active { filter: brightness(1.3); }
+.spin svg #mixGroup { animation: spin 0.8s linear infinite; }
+@keyframes spin { 100% { transform: rotate(360deg); } }
+.heat-on #flamePath { fill: #ff3333; }
+.heat-off #flamePath { fill: #888; }
+.light-on #bulb { fill: #ffe066; filter: drop-shadow(0 0 4px #fff960); }
+.light-off #bulb { fill: #888; }
+.buzz-on #buzzBody, .buzz-on #buzzWave { fill: #ffe066; stroke: #ffe066; filter: drop-shadow(0 0 4px #fff960); }
+.buzz-off #buzzBody, .buzz-off #buzzWave { fill: #888; stroke: #888; }
+.dev-label {
+  font-size: 0.69em;
+  color: #aaa;
+  margin-top: 0.01em;
+  margin-bottom: 0.13em;
+  text-align: center;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+}
+.dev-status {
+  font-size: 0.93em;
+  font-weight: bold;
+  color: #fff;
+  margin-top: 0.11em;
+}
+.controls, .prog-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  margin: 1em 0;
+  gap: 0.4em;
+}
+button, select {
+  font-size: 1em;
+  margin: 0.3em;
+  padding: 0.5em 1em;
+  background: #444;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+button:hover { background: #666; }
+button:disabled {
+  background: #333;
+  color: #777;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+button:disabled:hover {
+  background: #333;
+}
+#statusBlock p {
+  text-align: center;
+  margin: 0.5em 0;
+}
+select { background: #222; color: #fff; border: 1px solid #666; border-radius: 5px; }
+.breadmaker-pic {
+  display: block;
+  max-width: 160px;
+  width: 100%;
+  height: auto;
+  margin: 0.7em auto 0.6em auto;
+  border-radius: 16px;
+  box-shadow: 0 2px 16px #1118;
+}
+.program-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7em;
+  margin-bottom: 0.7em;
+  margin-top: 0.2em;
+}
+.program-label {
+  font-size: 1em;
+  color: #ccc;
+}
+.program-name {
+  font-size: 0.96em;
+  color: #eee;
+  font-style: italic;
+}
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+  justify-content: center;
+  margin-bottom: 1em;
+}
+.button-row button {
+  min-width: 60px;
+  max-width: 110px;
+  padding: 0.33em 0.6em;
+  font-size: 1em;
+  border-radius: 6px;
+  margin: 0.12em;
+}
+.config-cog {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 100;
+  width: 36px;
+  height: 36px;
+  opacity: 0.78;
+  transition: opacity 0.2s;
+}
+.config-cog:hover {
+  opacity: 1.0;
+  filter: drop-shadow(0 0 3px #fff8);
+}
+.progress-bar-outer {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 18px;
+  background: #222;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 6px #1118;
+  margin: 0.2em 0 0.7em 0;
+}
+.progress-segment {
+  height: 100%;
+  transition: width 0.4s, background 0.4s, opacity 0.3s;
+  border-right: 1px solid #232323;
+}
+.progress-segment:last-child {
+  border-right: none;
+}
+.progress-segment.done {
+  background: #888 !important;
+  opacity: 0.5;
+}
+.progress-key-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.5em;
+  justify-content: center;
+  margin: 0.2em 0 0.2em 0;
+}
+.progress-key-item {
+  display: inline-block;
+  padding: 0.18em 0.7em;
+  border-radius: 7px;
+  font-size: 0.97em;
+  color: #232323;
+  font-weight: 500;
+  box-shadow: 0 1px 3px #1114;
+  margin-bottom: 0.1em;
+}
+.plan-summary-table td.stage-name-cell {
+  font-weight: bold;
+  color: #232323;
+  border-radius: 7px;
+  padding: 0.18em 0.7em;
+}
+.progress-bar-cursor {
+  position: absolute;
+  top: -8px;
+  height: 34px;
+  width: 3px;
+  background: #e53935;
+  left: 0;
+  z-index: 3;
+  border-radius: 2px;
+  box-shadow: 0 0 8px 2px #e53935cc;
+  pointer-events: none;
+}
+.exmark {
+  color: #e53935;
+  font-size: 1.3em;
+  font-weight: bold;
+  vertical-align: middle;
+  margin-right: 0.18em;
+  filter: drop-shadow(0 0 2px #fff8);
+  cursor: pointer;
+  display: inline-block;
+}
+.exmark[title] {
+  text-decoration: none;
+  border-bottom: 1px dotted #e53935;
+}
+@media (max-width: 700px) {
+  .config-cog { top: 8px; right: 8px; width: 32px; height: 32px; }
+}
