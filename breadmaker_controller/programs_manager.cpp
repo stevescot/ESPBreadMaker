@@ -53,37 +53,3 @@ void loadPrograms() {
   }
 }
 
-// Save programs to LittleFS
-void savePrograms() {
-  DynamicJsonDocument doc(8192);
-  JsonArray arr = doc.to<JsonArray>();
-  for (auto &p : programs) {
-    JsonObject pobj = arr.createNestedObject();
-    pobj["name"] = p.name;
-    pobj["notes"] = p.notes;
-    pobj["icon"] = p.icon;
-    pobj["fermentBaselineTemp"] = p.fermentBaselineTemp;
-    pobj["fermentQ10"] = p.fermentQ10;
-    JsonArray stagesArr = pobj.createNestedArray("customStages");
-    for (auto &cs : p.customStages) {
-      JsonObject st = stagesArr.createNestedObject();
-      st["label"] = cs.label;
-      st["min"] = cs.min;
-      st["temp"] = cs.temp;
-      st["noMix"] = cs.noMix;
-      st["isFermentation"] = cs.isFermentation;
-      st["instructions"] = cs.instructions;
-      st["light"] = cs.light;
-      st["buzzer"] = cs.buzzer;
-      JsonArray mixArr = st.createNestedArray("mixPattern");
-      for (auto &ms : cs.mixPattern) {
-        JsonObject m = mixArr.createNestedObject();
-        m["mixSec"] = ms.mixSec;
-        m["waitSec"] = ms.waitSec;
-        m["durationSec"] = ms.durationSec;
-      }
-    }
-  }
-  File f = LittleFS.open("/programs.json", "w");
-  if (f) { serializeJson(doc, f); f.close(); }
-}

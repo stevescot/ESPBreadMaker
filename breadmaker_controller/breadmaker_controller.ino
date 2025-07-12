@@ -1,4 +1,5 @@
 
+
 // (Predicted times will be moved to the status endpoint instead)
 // --- Temperature safety flags ---
 bool thermalRunawayDetected = false;
@@ -1893,7 +1894,49 @@ void loop() {
     
   // Update temperature for broadcasts
   float temp = getAveragedTemperature();
-
+ // --- Live fermentation timing integration and auto-advance ---
+  if (programs.size() > 0 && activeProgramId < programs.size() && customStageIdx < programs[activeProgramId].customStages.size()) {
+    Program &p = programs[activeProgramId];
+    CustomStage &st = p.customStages[customStageIdx];
+    if (st.isFermentation) {
+      float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
+      float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
+      float actualTemp = getAveragedTemperature();
+      unsigned long nowMs = millis();
+      if (fermentLastUpdateMs == 0) {
+        fermentLastTemp = actualTemp;
+        fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
+        fermentLastUpdateMs = nowMs;
+        fermentWeightedSec = 0.0;
+      } else if (isRunning) {
+        double elapsedSec = (nowMs - fermentLastUpdateMs) / 1000.0;
+        fermentWeightedSec += elapsedSec * fermentLastFactor;
+        fermentLastTemp = actualTemp;
+        fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
+        fermentLastUpdateMs = nowMs;
+      }
+      fermentationFactor = fermentLastFactor;
+      double plannedStageSec = (double)st.min * 60.0;
+      if (fermentWeightedSec >= plannedStageSec) {
+        if (debugSerial) Serial.printf("[FERMENT] Auto-advance: weighted %.1fs >= planned %.1fs\n", fermentWeightedSec, plannedStageSec);
+        customStageIdx++;
+        customStageStart = millis();
+        fermentWeightedSec = 0.0;
+        fermentLastUpdateMs = millis();
+        fermentLastFactor = 1.0;
+        fermentLastTemp = actualTemp;
+        saveResumeState();
+        yield(); delay(1); return;
+      }
+    } else {
+      fermentWeightedSec = 0.0;
+      fermentLastUpdateMs = millis();
+      fermentLastFactor = 1.0;
+      fermentLastTemp = getAveragedTemperature();
+      fermentationFactor = 1.0;
+    }
+  }
+// ...existing code...
   if (!isRunning) {
     // Check if we should resume after startup delay
     static bool delayedResumeChecked = false;
@@ -1981,45 +2024,39 @@ void loop() {
 
     // --- Fermentation factor logic (update every 10 min or on temp change >0.1C) ---
     if (st.isFermentation) {
+      // --- Live fermentation timing integration and auto-advance ---
       float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
       float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
       float actualTemp = getAveragedTemperature();
       if (initialFermentTemp == 0.0) initialFermentTemp = actualTemp;
       unsigned long nowMs = millis();
-      bool needUpdate = false;
-      // Only update every 10 min if running, else every 10s
-      unsigned long updateInterval = isRunning ? 600000UL : 10000UL;
+      // Integrate weighted fermentation time in real time
       if (fermentLastUpdateMs == 0) {
         fermentLastTemp = actualTemp;
         fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
         fermentLastUpdateMs = nowMs;
-        if (isRunning) fermentWeightedSec = 0.0;
-        needUpdate = false;
+        fermentWeightedSec = 0.0;
       } else if (isRunning) {
-        // Only update if temp changed >5C or 10min passed
-        if (fabs(actualTemp - fermentLastTemp) > 5.0 || (nowMs - fermentLastUpdateMs) > 600000UL) {
-          needUpdate = true;
-        }
-      } else {
-        // Not running: update if temp changed >5C or 10s passed
-        if (fabs(actualTemp - fermentLastTemp) > 5.0 || (nowMs - fermentLastUpdateMs) > 10000UL) {
-          needUpdate = true;
-        }
-      }
-      if (needUpdate) {
-        if (isRunning) {
-          // Add elapsed time at previous factor only if running
-          double elapsedSec = (nowMs - fermentLastUpdateMs) / 1000.0;
-          fermentWeightedSec += elapsedSec * fermentLastFactor;
-        }
-        // Update to new temp/factor
+        double elapsedSec = (nowMs - fermentLastUpdateMs) / 1000.0;
+        fermentWeightedSec += elapsedSec * fermentLastFactor;
         fermentLastTemp = actualTemp;
         fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
         fermentLastUpdateMs = nowMs;
-        // --- Save fermentation progress whenever recalculated (every 10 min or temp jump) ---
-        saveResumeState();
       }
       fermentationFactor = fermentLastFactor;
+      // Auto-advance if weighted time exceeds planned duration
+      double plannedStageSec = (double)st.min * 60.0;
+      if (fermentWeightedSec >= plannedStageSec) {
+        if (debugSerial) Serial.printf("[FERMENT] Auto-advance: weighted %.1fs >= planned %.1fs\n", fermentWeightedSec, plannedStageSec);
+        customStageIdx++;
+        customStageStart = millis();
+        fermentWeightedSec = 0.0;
+        fermentLastUpdateMs = millis();
+        fermentLastFactor = 1.0;
+        fermentLastTemp = actualTemp;
+        saveResumeState();
+        yield(); delay(1); return;
+      }
     } else {
       // Reset fermentation tracking when not in fermentation stage
       if (initialFermentTemp != 0.0) {
@@ -2225,47 +2262,7 @@ void loop() {
         stageComplete = true;
       }
     }
-    if (stageComplete) {
-      if (debugSerial) Serial.printf("[STAGE] Stage %d (%s) complete after %lu seconds, advancing to stage %d\n", 
-                                    customStageIdx, st.label.c_str(), (millis() - customStageStart) / 1000UL, customStageIdx + 1);
-      customStageIdx++;
-      customStageStart = millis();
-      customMixIdx = 0;
-      customMixStepStart = 0;
-      // Record actual start time of this stage
-      if (customStageIdx < 20) actualStageStartTimes[customStageIdx] = time(nullptr);
-      saveResumeState(); // <-- Ensure state is saved immediately after stage transition
-      if (customStageIdx >= p.customStages.size()) {
-        if (debugSerial) Serial.println("[STAGE] All stages complete, stopping program");
-        stopBreadmaker(); customStageIdx = 0; customStageStart = 0; clearResumeState(); yield(); delay(1); return;
-      } else {
-        if (debugSerial) Serial.printf("[STAGE] Starting stage %d (%s)\n", customStageIdx, p.customStages[customStageIdx].label.c_str());
-      }
-    }
-    yield(); delay(1); return;
-  }
-  // Housekeeping: auto-off light, buzzer
-  if (!manualMode) {
-    bool customLightOn = false;
-    if (isRunning && activeProgramId < programs.size()) {
-      Program &p = programs[activeProgramId];
-      if (!p.customStages.empty() && customStageIdx < p.customStages.size()) {
-        CustomStage &st = p.customStages[customStageIdx];
-        customLightOn = (st.light == "on");
-      }
-    }
-    yield(); delay(1);
-    if (!customLightOn && lightState && (millis() - lightOnTime > 30000)) setLight(false);
-  }
-  yield(); delay(1);
-  // Buzzer auto-off is now handled by updateBuzzerTone()
-  yield(); delay(1);
-  if (scheduledStart && !isRunning) {
-    if (time(nullptr) >= scheduledStart) {
-      scheduledStart = 0;
-      isRunning = true;
-      
-      // Handle starting at a specific stage or from the beginning
+    // (Fermentation timing handled at top of loop; nothing needed here)
       if (scheduledStartStage >= 0 && scheduledStartStage < maxCustomStages) {
         customStageIdx = scheduledStartStage;
         if (debugSerial) Serial.printf("[SCHEDULED] Starting at stage %d\n", scheduledStartStage);
@@ -2289,7 +2286,7 @@ void loop() {
       yield(); delay(100);
       return;
     }
-  }
+  
   temp = getAveragedTemperature(); // Update temp instead of declaring new one
   yield(); delay(1);
 }
@@ -2855,164 +2852,3 @@ void streamStatusJson(Print& out) {
   out.printf("\"initialFermentTemp\":%.2f", initialFermentTemp);
   out.print("}");
 }
-// --- Last sent status cache ---
-// String lastStatusJson;
-/*
-// --- Helper: Stream current status as JSON to Print (for HTTP streaming) ---
-void streamStatusJson(Print& out) {
-  // We'll manually construct the JSON object, field by field, to minimize RAM usage
-  out.print("{");
-  bool first = true;
-  auto emit = [&](const char* key, const String& value) {
-    if (!first) out.print(",");
-    first = false;
-    out.print("\"" + String(key) + "\":");
-    out.print(value);
-  };
-  auto emitStr = [&](const char* key, const String& value) {
-    if (!first) out.print(",");
-    first = false;
-    out.print("\"" + String(key) + "\":\"");
-    out.print(value);
-    out.print("\"");
-  };
-  // Scalar fields
-  emit("scheduledStart", String((uint32_t)scheduledStart));
-  emit("scheduledStartStage", String(scheduledStartStage));
-  emit("running", isRunning ? "true" : "false");
-  if (programs.size() > 0) {
-    emitStr("program", programs[activeProgramId].name);
-  } else {
-    emitStr("program", "");
-  }
-  unsigned long nowMs = millis();
-  time_t now = time(nullptr);
-  unsigned long es = 0;
-  int stageLeft = 0;
-  time_t stageReadyAt = 0;
-  time_t programReadyAt = 0;
-  if (programs.size() > 0 && activeProgramId < programs.size()) {
-    Program &p = programs[activeProgramId];
-    // If not running, set stage to "Idle"
-    if (!isRunning) {
-      emitStr("stage", "Idle");
-    } else if (customStageIdx < p.customStages.size()) {
-      emitStr("stage", p.customStages[customStageIdx].label.c_str());
-    } else {
-      emitStr("stage", "");
-    }
-    // Custom stages: calculate stage start times based on durations and programStartTime
-    out.print(",\"stageStartTimes\":[");
-    time_t t = programStartTime;
-    for (size_t i = 0; i < p.customStages.size(); ++i) {
-      if (i > 0) out.print(",");
-      out.print((uint32_t)t);
-      t += (time_t)p.customStages[i].min * 60;
-    }
-    out.print("]");
-    emit("programStart", String((uint32_t)programStartTime));
-    // Elapsed time in current stage
-    es = (customStageStart == 0) ? 0 : (nowMs - customStageStart) / 1000;
-    // Calculate stageReadyAt and programReadyAt based on actual stage start times
-    stageReadyAt = 0;
-    programReadyAt = 0;
-    if (customStageIdx < p.customStages.size()) {
-      // Current stage ready time = actual start time + duration
-      if (actualStageStartTimes[customStageIdx] > 0) {
-        stageReadyAt = actualStageStartTimes[customStageIdx] + (time_t)p.customStages[customStageIdx].min * 60;
-      }
-      // Program ready time calculation: current time + time left in current stage + remaining stages
-      if (actualStageStartTimes[customStageIdx] > 0) {
-        unsigned long actualElapsedInStage = (millis() - customStageStart) / 1000UL;
-        unsigned long plannedStageDuration = (unsigned long)p.customStages[customStageIdx].min * 60UL;
-        unsigned long timeLeftInCurrentStage = (actualElapsedInStage < plannedStageDuration) ? 
-                                               (plannedStageDuration - actualElapsedInStage) : 0;
-        programReadyAt = now + (time_t)timeLeftInCurrentStage;
-        for (size_t i = customStageIdx + 1; i < p.customStages.size(); ++i) {
-          programReadyAt += (time_t)p.customStages[i].min * 60;
-        }
-      } else {
-        programReadyAt = programStartTime;
-        for (size_t i = 0; i < p.customStages.size(); ++i) {
-          programReadyAt += (time_t)p.customStages[i].min * 60;
-        }
-      }
-    }
-    if (customStageIdx < p.customStages.size()) {
-      stageLeft = max(0, (int)(stageReadyAt - now));
-    }
-  } else {
-    emitStr("stage", "");
-    out.print(",\"stageStartTimes\":[]");
-    emit("programStart", String((uint32_t)programStartTime));
-  }
-  emit("elapsed", String(es));
-  emit("setTemp", String(Setpoint, 2));
-  emit("timeLeft", String(stageLeft));
-  emit("stageReadyAt", String((uint32_t)stageReadyAt));
-  emit("programReadyAt", String((uint32_t)programReadyAt));
-  emit("temp", String(getAveragedTemperature(), 2));
-  emit("motor", motorState ? "true" : "false");
-  emit("light", lightState ? "true" : "false");
-  emit("buzzer", buzzerState ? "true" : "false");
-  emit("stageStartTime", String((uint32_t)customStageStart));
-  emit("manualMode", manualMode ? "true" : "false");
-  // PID and temperature control info
-  emit("target", String(Setpoint, 2));
-  emit("raw_temp", String(readTemperature(), 2));
-  emit("heater", heaterState ? "true" : "false");
-  emit("pid_output", String(Output, 4));
-  emit("kp", String(Kp, 4));
-  emit("ki", String(Ki, 4));
-  emit("kd", String(Kd, 4));
-  emit("temp_sample_count", String(tempSampleCount));
-  emit("temp_reject_count", String(tempRejectCount));
-  emit("temp_sample_interval_ms", String(tempSampleInterval));
-  // Time-proportional control window info
-  unsigned long elapsedWin = (windowStartTime > 0) ? (nowMs - windowStartTime) : 0;
-  emit("window_size_ms", String(windowSize));
-  emit("window_elapsed_ms", String(elapsedWin));
-  unsigned long progressPercent = (windowSize > 0) ? (elapsedWin * 100 / windowSize) : 0;
-  emit("window_progress", String(min(progressPercent, 100UL)));
-  emit("on_time", String(onTime));
-  emitStr("phase", heaterState ? "heating" : "waiting");
-  emit("dynamic_restarts", String(dynamicRestartCount));
-  // Startup delay info
-  emit("startupDelayComplete", isStartupDelayComplete() ? "true" : "false");
-  if (!isStartupDelayComplete()) {
-    emit("startupDelayRemainingMs", String(STARTUP_DELAY_MS - (millis() - startupTime)));
-  }
-  // Actual stage start times
-  out.print(",\"actualStageStartTimes\":[");
-  for (int i = 0; i < 20; i++) {
-    if (i > 0) out.print(",");
-    out.print((uint32_t)actualStageStartTimes[i]);
-  }
-  out.print("]");
-  // Remove programList from /status endpoint (UI uses /api/programs)
-  out.print("}");
-}
-*/
-/*deprecate web sockets
-// --- WebSocket event handler ---
-void wsStatusEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
-  if (type == WStype_CONNECTED) {
-    // Send current status on connect
-    AsyncResponseStream *response = req->beginResponseStream("application/json");
-    streamStatusJson(*response);
-    wsStatusServer.sendTXT(num, response->str());
-  }
-}
-
-// --- Broadcast status if changed ---
-void broadcastStatusWSIfChanged() {
-  AsyncResponseStream *response = req->beginResponseStream("application/json");
-  streamStatusJson(*response);
-  String current = response->str();
-  if (current != lastStatusJson) {
-    lastStatusJson = current;
-    wsStatusServer.broadcastTXT(current);
-  }
-}
-
-*/
