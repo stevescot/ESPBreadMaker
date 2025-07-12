@@ -77,20 +77,119 @@
   </style>
 </head>
 <body>
+  <nav>
+    <a href="/">&#8962; Home</a>
+    <a href="/config.html">&#9881; Config</a>
+    <a href="/programs.html">&#9998; Programs</a>
+    <a href="/calibration.html">&#127777; Calibration</a>
+    <a href="/controllertuning.html">&#128293; PID Tuning</a>
+    <a href="/update.html">&#8593; Update</a>
+    <a href="/wifi.html" class="active" style="color:#ffd600; text-decoration:underline; font-weight:bold;">📶 WiFi</a>
+  </nav>
   <div class="wifi-setup-container">
     <h2>WiFi Setup</h2>
+    <div id="currentNetworkInfo" style="background:#222;padding:0.7em 1em 0.7em 1em;border-radius:6px;margin-bottom:1.1em;font-size:1.04em;color:#ffd600;text-align:left;">
+      <b>Current Network:</b> <span id="currentSsid" style="color:#fff;">(loading...)</span>
+      <span id="currentIp" style="color:#ffd600;font-size:0.97em;margin-left:0.7em;"></span>
+    </div>
+    <div style="background:#333;padding:0.8em 1em 0.8em 1em;border-radius:6px;margin-bottom:1.2em;font-size:1.04em;color:#ffd600;text-align:left;">
+      <b>After connecting the breadmaker to your WiFi network:</b><br>
+      <ul style="margin:0.5em 0 0.5em 1.2em;padding:0;">
+        <li>Access the controller from any device on the same network at <b>http://breadmaker.local/</b></li>
+        <li>If that address does not work, check your WiFi router for the device's IP address and use it in your browser.</li>
+        <li>For best results, use a modern browser or device that supports mDNS/Bonjour (most do).</li>
+      </ul>
+    </div>
     <form id='wifiForm'>
       <label>SSID:</label>
-      <select name='ssid'>{{options}}</select>
+      <div style="display:flex;gap:0.5em;align-items:center;">
+        <select name='ssid' style="flex:1;">{{options}}</select>
+        <button type="button" id="scanBtn" style="width:auto;padding:0.5em 1em;background:#2196f3;color:#fff;">Scan</button>
+      </div>
       <label>Password:</label>
       <input name='pass' type='password' placeholder='Password' autocomplete='current-password' autocapitalize='off' spellcheck='false'>
       <button type='submit'>Save</button>
     </form>
+    <button id="disableHotspotBtn" style="margin-top:1em;background:#d32f2f;color:#fff;">Disable Hotspot</button>
     <div id="feedback"></div>
   </div>
   <script>
     const form = document.getElementById('wifiForm');
     const feedback = document.getElementById('feedback');
+    const disableBtn = document.getElementById('disableHotspotBtn');
+    const currentSsid = document.getElementById('currentSsid');
+    const currentIp = document.getElementById('currentIp');
+
+
+
+    function updateWifiStatus(showSpinner) {
+      if (showSpinner) {
+        feedback.innerHTML = 'Scanning... <span id="spinner"></span>';
+      }
+      fetch('/api/wifi_status')
+        .then(r => r.json())
+        .then(j => {
+          // Show current connection
+          if (j.connected) {
+            currentSsid.textContent = j.ssid || '(unknown)';
+            currentIp.textContent = j.ip ? `IP: ${j.ip}` : '';
+          } else {
+            currentSsid.textContent = '(not connected)';
+            currentIp.textContent = '';
+          }
+          // Populate SSID dropdown
+          const ssidSelect = form.querySelector('select[name="ssid"]');
+          if (ssidSelect && j.networks && Array.isArray(j.networks)) {
+            ssidSelect.innerHTML = '';
+            // If currently connected, show it first
+            if (j.ssid) {
+              const opt = document.createElement('option');
+              opt.value = j.ssid;
+              opt.textContent = j.ssid + ' (current)';
+              ssidSelect.appendChild(opt);
+            }
+            // Add all scanned networks (skip duplicate of current)
+            j.networks.forEach(net => {
+              if (!j.ssid || net.ssid !== j.ssid) {
+                const opt = document.createElement('option');
+                opt.value = net.ssid;
+                opt.textContent = net.ssid + (net.secure ? ' 🔒' : '');
+                ssidSelect.appendChild(opt);
+              }
+            });
+          }
+          // If scan is in progress, poll again
+          if (j.scanInProgress) {
+            setTimeout(() => updateWifiStatus(true), 1000);
+          } else if (showSpinner) {
+            feedback.innerHTML = 'Scan complete.';
+            setTimeout(() => { feedback.innerHTML = ''; }, 1200);
+          }
+        })
+        .catch(() => {
+          currentSsid.textContent = '(error)';
+          currentIp.textContent = '';
+          if (showSpinner) feedback.innerHTML = 'Error scanning.';
+        });
+    }
+
+    // Initial load
+    updateWifiStatus(false);
+
+    // Scan button logic
+    const scanBtn = document.getElementById('scanBtn');
+    scanBtn.onclick = function(e) {
+      e.preventDefault();
+      feedback.innerHTML = 'Starting scan... <span id="spinner"></span>';
+      fetch('/api/wifi_scan', { method: 'POST' })
+        .then(() => {
+          setTimeout(() => updateWifiStatus(true), 800); // Give scan a moment to start
+        })
+        .catch(() => {
+          feedback.innerHTML = 'Error starting scan.';
+        });
+    };
+
     form.onsubmit = function(e) {
       e.preventDefault();
       feedback.innerHTML = 'Saving... <span id="spinner"></span>';
@@ -115,6 +214,23 @@
       .catch(() => {
         feedback.innerHTML = 'Error saving WiFi settings.';
       });
+    };
+
+    disableBtn.onclick = function() {
+      if (!confirm('Disable the hotspot? You will only be able to access the device via your WiFi network.')) return;
+      feedback.innerHTML = 'Disabling hotspot... <span id="spinner"></span>';
+      fetch('/api/disable_ap', { method: 'POST' })
+        .then(r => r.json())
+        .then(j => {
+          if (j.status === 'ap_disabled') {
+            feedback.innerHTML = 'Hotspot disabled. Connect to the device via your WiFi network.';
+          } else {
+            feedback.innerHTML = 'Failed to disable hotspot.';
+          }
+        })
+        .catch(() => {
+          feedback.innerHTML = 'Error disabling hotspot.';
+        });
     };
   </script>
 </body>

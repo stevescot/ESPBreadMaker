@@ -1,3 +1,25 @@
+// ---- WiFi Signal Icon Update ----
+function updateWifiIcon(rssi, connected) {
+  const wifiSvg = document.getElementById('wifiSvg');
+  if (!wifiSvg) return;
+  // RSSI: 0 (no signal), -30 (excellent), -67 (good), -70 (okay), -80 (weak), -90 (unusable)
+  let bars = 0;
+  if (!connected || typeof rssi !== 'number' || rssi < -90) bars = 0;
+  else if (rssi >= -60) bars = 4;
+  else if (rssi >= -67) bars = 3;
+  else if (rssi >= -75) bars = 2;
+  else if (rssi >= -85) bars = 1;
+  else bars = 0;
+  // Set bar colors
+  const colors = ['#888', '#ff9800', '#ffd600', '#4caf50'];
+  // All bars grey by default
+  wifiSvg.querySelector('#wifi-bar-1').setAttribute('fill', bars >= 1 ? colors[Math.min(bars-1,3)] : '#888');
+  wifiSvg.querySelector('#wifi-bar-2').setAttribute('stroke', bars >= 2 ? colors[Math.min(bars-1,3)] : '#888');
+  wifiSvg.querySelector('#wifi-bar-3').setAttribute('stroke', bars >= 3 ? colors[Math.min(bars-1,3)] : '#888');
+  wifiSvg.querySelector('#wifi-bar-4').setAttribute('stroke', bars >= 4 ? colors[Math.min(bars-1,3)] : '#888');
+  // Optionally, set opacity if not connected
+  wifiSvg.style.opacity = connected ? '1' : '0.4';
+}
 // ---- Utility: Format Time (HH:MM or HH:MM:SS) ----
 function formatTime(date, withSeconds = false) {
   if (!(date instanceof Date)) return '--';
@@ -7,50 +29,6 @@ function formatTime(date, withSeconds = false) {
   return withSeconds ? `${h}:${m}:${s}` : `${h}:${m}`;
 }
 
-// ---- Display Predicted End Time in UI ----
-function updatePredictedEndTimeDisplay(status) {
-  const el = document.getElementById('predictedEndTimeDisplay');
-  if (!el) return;
-
-  // Only show if we have predictedStageEndTimes and a program is selected
-  if (!status || !status.predictedStageEndTimes || !Array.isArray(status.predictedStageEndTimes) || status.predictedStageEndTimes.length === 0) {
-    el.textContent = '';
-    return;
-  }
-
-  // Determine the reference start time: now (if no scheduled start), or scheduled start time
-  let startAt = null;
-  const startAtInput = document.getElementById('startAt');
-  if (startAtInput && startAtInput.value) {
-    // Parse scheduled start time (HH:MM, local time)
-    const [hh, mm] = startAtInput.value.split(':').map(Number);
-    const now = new Date();
-    startAt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, 0, 0);
-    // If scheduled time is earlier than now, assume next day
-    if (startAt < now) startAt.setDate(startAt.getDate() + 1);
-  }
-
-  // The last predictedStageEndTime is the program end (UNIX timestamp, seconds)
-  const lastEndSec = status.predictedStageEndTimes[status.predictedStageEndTimes.length - 1];
-  if (typeof lastEndSec !== 'number' || isNaN(lastEndSec)) {
-    el.textContent = '';
-    return;
-  }
-
-  // Convert to JS Date (seconds to ms)
-  const predictedEnd = new Date(lastEndSec * 1000);
-  // Format with date and time
-  const dateStr = predictedEnd.toLocaleDateString();
-  const timeStr = formatTime(predictedEnd, true);
-  if (status && status.running) {
-    // If running, just show the predicted end time (program is in progress)
-    el.textContent = `Predicted End Time: ${dateStr} ${timeStr}`;
-  } else if (startAt) {
-    el.textContent = `Predicted End Time: ${dateStr} ${timeStr} (if started at ${formatTime(startAt)})`;
-  } else {
-    el.textContent = `Predicted End Time: ${dateStr} ${timeStr} (if started now)`;
-  }
-}
 // ---- Utility Functions ----
 function showStartAtStatus(msg) {
   let el = document.getElementById('startAtStatus');
@@ -295,17 +273,23 @@ function updateStageProgress(currentStage, statusData) {
     }
     // Add elapsed time for this stage if available
     if (actualStarts[i] && (i === activeIdx || i < activeIdx)) {
-      let elapsed = 0;
-      if (i < customStages.length - 1 && actualStarts[i+1]) {
-        elapsed = actualStarts[i+1] - actualStarts[i];
-      } else if (i === activeIdx && statusData.elapsed) {
-        elapsed = Math.floor((Date.now()/1000) - actualStarts[i]);
-      }
-      if (elapsed > 0) {
+      if (i === activeIdx && typeof statusData.timeLeft === 'number' && statusData.running) {
+        // Show time left for the active stage
         const span = document.createElement('span');
-        span.className = 'stage-elapsed';
-        span.textContent = ' (' + formatDuration(elapsed) + ')';
+        span.className = 'stage-timeleft';
+        span.textContent = ' (' + formatDuration(statusData.timeLeft) + ' left)';
         div.appendChild(span);
+      } else {
+        let elapsed = 0;
+        if (i < customStages.length - 1 && actualStarts[i+1]) {
+          elapsed = actualStarts[i+1] - actualStarts[i];
+        }
+        if (elapsed > 0) {
+          const span = document.createElement('span');
+          span.className = 'stage-elapsed';
+          span.textContent = ' (' + formatDuration(elapsed) + ')';
+          div.appendChild(span);
+        }
       }
     }
     cont.appendChild(div);
@@ -330,39 +314,38 @@ function populateProgramDropdown(s) {
     }
   }
 
-  if (select && programNames.length) {
-    if (!arraysEqual(lastProgramList, programNames)) {
-      lastProgramList = [...programNames];
-      const prevValue = select.value;
-      select.innerHTML = '';
-      programNames.forEach((name, idx) => {
-        let opt = document.createElement('option');
-        opt.value = idx;
-        opt.textContent = name;
-        select.appendChild(opt);
-      });
-      if (!select.hasChangeListener) {
-        select.onchange = function () {
-          fetch('/select?idx=' + this.value)
-            .then(r => {
-              // The /select endpoint returns plain text "Selected", not JSON
-              if (r.ok) {
-                // Fetch fresh status after selection
-                return fetch('/status').then(r => r.json());
-              }
-              throw new Error('Selection failed');
-            })
-            .then(s => {
-              window.updateStatus(s);
-              // Update stage dropdown when program changes
-              populateStageDropdown(this.value);
-              // Update combined button visibility
-              updateCombinedStartButton();
-            })
-            .catch(err => console.error('Program selection failed:', err));
-        };
-        select.hasChangeListener = true;
-      }
+  if (select) {
+    // Always clear and repopulate the dropdown to avoid stale options
+    const prevValue = select.value;
+    select.innerHTML = '';
+    programNames.forEach((name, idx) => {
+      let opt = document.createElement('option');
+      opt.value = idx;
+      opt.textContent = name;
+      select.appendChild(opt);
+    });
+    // Restore previous selection if possible
+    if (prevValue && select.options[prevValue]) {
+      select.selectedIndex = prevValue;
+    }
+    // Attach change listener only once
+    if (!select.hasChangeListener) {
+      select.onchange = function () {
+        fetch('/select?idx=' + this.value)
+          .then(r => {
+            if (r.ok) {
+              return fetch('/status').then(r => r.json());
+            }
+            throw new Error('Selection failed');
+          })
+          .then(s => {
+            window.updateStatus(s);
+            populateStageDropdown(this.value);
+            updateCombinedStartButton();
+          })
+          .catch(err => console.error('Program selection failed:', err));
+      };
+      select.hasChangeListener = true;
     }
     // Update selected index using programId from status if available
     let correctIdx = -1;
@@ -373,7 +356,6 @@ function populateProgramDropdown(s) {
     }
     if (correctIdx >= 0 && select.selectedIndex !== correctIdx) {
       select.selectedIndex = correctIdx;
-      // Update stage dropdown when program is set programmatically
       populateStageDropdown(correctIdx);
     }
   }
@@ -397,8 +379,10 @@ let lastStatusTime = 0;
 let countdownInterval = null;
 
 function updateStatusInternal(s) {
-  // Update predicted end time display
-  updatePredictedEndTimeDisplay(s);
+  // Update WiFi icon if present
+  if (s && typeof s.wifiRssi !== 'undefined') {
+    updateWifiIcon(s.wifiRssi, s.wifiConnected !== false);
+  }
   // If no status object provided, fetch it from server
   if (!s || typeof s !== 'object') {
     fetch('/status')
@@ -492,7 +476,7 @@ function updateStatusInternal(s) {
   if (document.getElementById('setTemp')) {
     let setTempText = '';
     if (typeof s.setTemp === 'number' && s.setTemp > 0) {
-      setTempText = 'Set: ' + s.setTemp.toFixed(1) + '°C';
+      setTempText = 'Set: ' + s.setTemp.toFixed(1) + '&deg;C';
       if (s.manualMode) {
         setTempText += ' (Manual)';
       }
@@ -572,18 +556,13 @@ function updateFermentationInfo(s) {
   fermentInfoEl.style.display = 'block';
   // Fermentation factor
   fermentFactorEl.textContent = (typeof s.fermentationFactor === 'number') ? s.fermentationFactor.toFixed(2) : '--';
-  // Predicted complete (use predictedStageEndTimes if available)
-  if (s.predictedStageEndTimes && Array.isArray(s.predictedStageEndTimes) && s.predictedStageEndTimes.length > 0) {
-    const lastEnd = s.predictedStageEndTimes[s.predictedStageEndTimes.length - 1];
-    predictedCompleteEl.textContent = formatDateTime(lastEnd * 1000);
-  } else {
-    predictedCompleteEl.textContent = '--';
-  }
+  // Remove predicted complete from UI
+  if (predictedCompleteEl) predictedCompleteEl.textContent = '';
   // Initial temp
   if (typeof s.initialFermentTemp === 'number') {
-    initialTempEl.textContent = s.initialFermentTemp.toFixed(1) + '°C';
+    initialTempEl.innerHTML = s.initialFermentTemp.toFixed(1) + '&deg;C';
   } else {
-    initialTempEl.textContent = '--°C';
+    initialTempEl.innerHTML = '--&deg;C';
   }
   // No extra closing brace here
 }
@@ -664,6 +643,7 @@ function updateCountdownDisplay() {
   let scheduledStart = (typeof s.scheduledStart === 'number') ? s.scheduledStart : 0;
   let programReadyAt = (typeof s.programReadyAt === 'number') ? s.programReadyAt : 0;
   let timeLeft = 0;
+
   // If scheduledStart is in the future, show countdown to scheduled start
   if (scheduledStart > Math.floor(now/1000)) {
     let schedLeft = Math.max(0, Math.round(scheduledStart - (now/1000)));
@@ -677,6 +657,7 @@ function updateCountdownDisplay() {
     }
     return;
   }
+
   if (stageReadyAt > 0) {
     timeLeft = Math.max(0, Math.round(stageReadyAt - (now / 1000)));
   } else if (typeof s.timeLeft === 'number') {
@@ -684,6 +665,16 @@ function updateCountdownDisplay() {
     let elapsed = Math.floor((now - lastStatusTime) / 1000);
     timeLeft = Math.max(0, s.timeLeft - elapsed);
   }
+
+  // UI logic fix: Only show "stage ready at" if current stage is active and stageReadyAt is valid (future or present)
+  let showStageReadyAt = false;
+  let stageReadyAtText = '';
+  if (s.stage !== "Idle" && s.running && stageReadyAt > 0 && timeLeft > 0) {
+    showStageReadyAt = true;
+    const stageReadyTs = stageReadyAt * 1000;
+    stageReadyAtText = "Stage ready at: " + formatDateTime(stageReadyTs);
+  }
+
   if (s.stage === "Idle" || !s.running || timeLeft <= 0) {
     document.getElementById('timeLeft').textContent = "--";
     document.getElementById('stageReadyAt').textContent = "";
@@ -691,8 +682,7 @@ function updateCountdownDisplay() {
     if (el) el.textContent = '';
   } else {
     document.getElementById('timeLeft').textContent = formatDuration(timeLeft);
-    const stageReadyTs = stageReadyAt * 1000; // Convert firmware's seconds to milliseconds
-    document.getElementById('stageReadyAt').textContent = "Stage ready at: " + formatDateTime(stageReadyTs);
+    document.getElementById('stageReadyAt').textContent = showStageReadyAt ? stageReadyAtText : "--";
     // Show program ready at if available
     if (programReadyAt > 0) {
       const progReadyTs = programReadyAt * 1000;
@@ -1039,7 +1029,7 @@ function renderProgramProgressBar(s) {
   html += '</div>';
   // Show total elapsed/remaining
   let remain = Math.max(0, totalSec - elapsed);
-  html += `<div style='margin-top:2px;font-size:0.95em;color:#232323;'>Elapsed: ${formatDuration(elapsed)} / ${formatDuration(totalSec)} &nbsp; Remaining: ${formatDuration(remain)}</div>`;
+  html += `<div style='margin-top:2px;font-size:0.95em;color:#ffd600;text-shadow:0 1px 2px #000;'>Elapsed: ${formatDuration(elapsed)} / ${formatDuration(totalSec)} &nbsp; Remaining: ${formatDuration(remain)}</div>`;
   elem.innerHTML = html;
 }
 
@@ -1136,8 +1126,6 @@ window.updateStatus = function(s) {
   updateStatusInternal(s);
   // Also ensure program dropdown is populated
   populateProgramDropdown(s);
-  // Update predicted end time display (in case status is updated outside updateStatusInternal)
-  updatePredictedEndTimeDisplay(s);
 };
 
 // ---- Event Listeners ----
@@ -1179,14 +1167,14 @@ window.addEventListener('DOMContentLoaded', () => {
     btnSetTemp.onclick = function() {
       const temp = parseFloat(manualTempInput.value);
       if (isNaN(temp) || temp < 0 || temp > 250) {
-        alert('Please enter a valid temperature between 0 and 250°C');
+        alert('Please enter a valid temperature between 0 and 250\xB0C');
         return;
       }
       fetch(`/api/temperature?setpoint=${temp}`)
         .then(r => r.json())
         .then(s => {
           window.updateStatus(s);
-          console.log(`Manual temperature set to ${temp}°C`);
+          console.log(`Manual temperature set to ${temp}\xB0C`);
         })
         .catch(err => console.error('Failed to set temperature:', err));
     };

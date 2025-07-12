@@ -1,3 +1,38 @@
+/* Top-right icon row for wifi and config cog */
+.top-right-icons {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 101;
+  display: flex;
+  flex-direction: row;
+  gap: 32px;
+  align-items: baseline;
+}
+#wifiStatusIcon {
+  display: flex;
+  align-items: baseline;
+  width: 36px;
+  height: 36px;
+  vertical-align: baseline;
+  margin-top: 6px;
+}
+#wifiStatusIcon svg {
+  display: block;
+  vertical-align: baseline;
+}
+}
+@media (max-width: 700px) {
+  .top-right-icons {
+    top: 8px;
+    right: 8px;
+    gap: 8px;
+  }
+  #wifiStatusIcon {
+    width: 28px;
+    height: 28px;
+  }
+}
 body {
   font-family: sans-serif;
   background: #232323;
@@ -206,14 +241,14 @@ select { background: #222; color: #fff; border: 1px solid #666; border-radius: 5
   margin: 0.12em;
 }
 .config-cog {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 100;
+  position: static;
   width: 36px;
   height: 36px;
   opacity: 0.78;
   transition: opacity 0.2s;
+  margin-left: 0;
+  margin-right: 32px;
+  margin-bottom: 6px;
 }
 .config-cog:hover {
   opacity: 1.0;
@@ -294,5 +329,20 @@ select { background: #222; color: #fff; border: 1px solid #666; border-radius: 5
   border-bottom: 1px dotted #e53935;
 }
 @media (max-width: 700px) {
-  .config-cog { top: 8px; right: 8px; width: 32px; height: 32px; }
+  .top-right-icons {
+    top: 10px;
+    right: 8px;
+    gap: 18px;
+  }
+  #wifiStatusIcon {
+    width: 28px;
+    height: 28px;
+    margin-top: 0;
+  }
+  .config-cog {
+    width: 28px;
+    height: 28px;
+    margin-right: 10px;
+    margin-bottom: 2px;
+  }
 }

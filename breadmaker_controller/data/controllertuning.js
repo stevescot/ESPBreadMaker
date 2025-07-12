@@ -1,5 +1,18 @@
 // --- Real-time chart update logic ---
 async function updateStatus() {
+    // PID P, I, D terms
+    if (document.getElementById('pidPTerm')) {
+      document.getElementById('pidPTerm').textContent =
+        (data.pid_p !== undefined ? data.pid_p.toFixed(3) : '--');
+    }
+    if (document.getElementById('pidITerm')) {
+      document.getElementById('pidITerm').textContent =
+        (data.pid_i !== undefined ? data.pid_i.toFixed(3) : '--');
+    }
+    if (document.getElementById('pidDTerm')) {
+      document.getElementById('pidDTerm').textContent =
+        (data.pid_d !== undefined ? data.pid_d.toFixed(3) : '--');
+    }
   try {
     const response = await fetchWithTimeout('/api/pid_debug', 5000);
     if (!response.ok) throw new Error('Failed to fetch status');
@@ -25,10 +38,221 @@ async function updateStatus() {
     chartData.datasets[3].data.push(data.output * 100);
     if (chartData.datasets[3].data.length > 300) chartData.datasets[3].data.shift();
 
+    // --- PID Component Chart ---
+    if (window.pidComponentChart && window.pidComponentData) {
+      window.pidComponentData.labels.push(elapsed);
+      if (window.pidComponentData.labels.length > 300) window.pidComponentData.labels.shift();
+      window.pidComponentData.datasets[0].data.push(data.pid_p);
+      if (window.pidComponentData.datasets[0].data.length > 300) window.pidComponentData.datasets[0].data.shift();
+      window.pidComponentData.datasets[1].data.push(data.pid_i);
+      if (window.pidComponentData.datasets[1].data.length > 300) window.pidComponentData.datasets[1].data.shift();
+      window.pidComponentData.datasets[2].data.push(data.pid_d);
+      if (window.pidComponentData.datasets[2].data.length > 300) window.pidComponentData.datasets[2].data.shift();
+      window.pidComponentChart.update();
+    }
+
+    // --- Update status display fields ---
+    // Current Temp
+    if (document.getElementById('currentTemp')) {
+      document.getElementById('currentTemp').textContent =
+        (data.current_temp !== undefined ? data.current_temp.toFixed(1) : '--.-') + '°C';
+    }
+    // Target Temp (Setpoint)
+    if (document.getElementById('targetTemp')) {
+      document.getElementById('targetTemp').textContent =
+        (data.setpoint !== undefined ? data.setpoint.toFixed(1) : '--.-') + '°C';
+    }
+    // Temperature Error
+    if (document.getElementById('tempError')) {
+      if (data.setpoint !== undefined && data.current_temp !== undefined) {
+        document.getElementById('tempError').textContent = (data.setpoint - data.current_temp).toFixed(1) + '°C';
+      } else {
+        document.getElementById('tempError').textContent = '--.-°C';
+      }
+    }
+    // PID Output
+    if (document.getElementById('pidOutput')) {
+      document.getElementById('pidOutput').textContent =
+        (data.output !== undefined ? (data.output * 100).toFixed(2) : '--.-------') + '%';
+    }
+    // Heater State
+    if (document.getElementById('heaterState')) {
+      document.getElementById('heaterState').textContent =
+        (data.heater_state === true ? 'ON' : data.heater_state === false ? 'OFF' : '--');
+    }
+    // Control Phase (show manual/auto/running)
+    if (document.getElementById('phaseStatus')) {
+      let phase = '--';
+      if (data.manual_mode === true) phase = 'Manual';
+      else if (data.is_running === true) phase = 'Program';
+      else if (data.manual_mode === false && data.is_running === false) phase = 'Idle';
+      document.getElementById('phaseStatus').textContent = phase;
+    }
+    // Window Progress
+    if (document.getElementById('windowStatus')) {
+      if (data.window_elapsed_ms !== undefined && data.window_size_ms !== undefined) {
+        document.getElementById('windowStatus').textContent =
+          `${data.window_elapsed_ms} / ${data.window_size_ms} ms`;
+      } else {
+        document.getElementById('windowStatus').textContent = '--';
+      }
+    }
+    // ON Time (calc)
+    if (document.getElementById('onTimeStatus')) {
+      document.getElementById('onTimeStatus').textContent =
+        (data.on_time_ms !== undefined ? data.on_time_ms + ' ms' : '--');
+    }
+    // Dynamic Restarts (not available, so show --)
+    if (document.getElementById('dynamicRestartStatus')) {
+      document.getElementById('dynamicRestartStatus').textContent = '--';
+    }
+    // Manual Mode
+    if (document.getElementById('manualMode')) {
+      document.getElementById('manualMode').textContent =
+        (data.manual_mode === true ? 'ON' : data.manual_mode === false ? 'OFF' : '--');
+    }
+    // PID Settings
+    if (document.getElementById('currentKp')) {
+      document.getElementById('currentKp').textContent =
+        (data.kp !== undefined ? data.kp.toFixed(6) : '--.------');
+    }
+    if (document.getElementById('currentKi')) {
+      document.getElementById('currentKi').textContent =
+        (data.ki !== undefined ? data.ki.toFixed(6) : '--.------');
+    }
+    if (document.getElementById('currentKd')) {
+      document.getElementById('currentKd').textContent =
+        (data.kd !== undefined ? data.kd.toFixed(6) : '--.------');
+    }
+    if (document.getElementById('currentSampleTime')) {
+      document.getElementById('currentSampleTime').textContent =
+        (data.sample_time_ms !== undefined ? data.sample_time_ms + ' ms' : '-- ms');
+    }
+    // Temperature Averaging Status
+    if (document.getElementById('currentTempSamples')) {
+      document.getElementById('currentTempSamples').textContent =
+        (data.temp_sample_count !== undefined ? data.temp_sample_count + ' samples' : '-- samples');
+    }
+    if (document.getElementById('currentTempReject')) {
+      document.getElementById('currentTempReject').textContent =
+        (data.temp_reject_count !== undefined ? data.temp_reject_count + ' each end' : '-- each end');
+    }
+    if (document.getElementById('currentTempInterval')) {
+      document.getElementById('currentTempInterval').textContent =
+        (data.temp_sample_interval_ms !== undefined ? data.temp_sample_interval_ms + ' ms' : '-- ms');
+    }
+    if (document.getElementById('currentTempEffective')) {
+      if (data.temp_sample_count !== undefined && data.temp_reject_count !== undefined) {
+        let eff = data.temp_sample_count - 2 * data.temp_reject_count;
+        document.getElementById('currentTempEffective').textContent = eff + ' used';
+      } else {
+        document.getElementById('currentTempEffective').textContent = '-- used';
+      }
+    }
     temperatureChart.update();
   } catch (err) {
     showMessage('Error updating chart: ' + err.message, 'error');
   }
+// ...existing code...
+// --- PID Component Chart Setup ---
+window.pidComponentData = {
+  labels: [],
+  datasets: [
+    {
+      label: 'P Term',
+      data: [],
+      borderColor: 'rgb(255, 99, 132)',
+      backgroundColor: 'rgba(255, 99, 132, 0.1)',
+      tension: 0.1,
+      fill: false,
+      pointRadius: 0,
+      borderWidth: 2
+    },
+    {
+      label: 'I Term',
+      data: [],
+      borderColor: 'rgb(54, 162, 235)',
+      backgroundColor: 'rgba(54, 162, 235, 0.1)',
+      tension: 0.1,
+      fill: false,
+      pointRadius: 0,
+      borderWidth: 2
+    },
+    {
+      label: 'D Term',
+      data: [],
+      borderColor: 'rgb(255, 206, 86)',
+      backgroundColor: 'rgba(255, 206, 86, 0.1)',
+      tension: 0.1,
+      fill: false,
+      pointRadius: 0,
+      borderWidth: 2
+    }
+  ]
+};
+
+window.pidComponentChart = null;
+
+function initPIDComponentChart() {
+  const ctx = document.getElementById('pidComponentChart').getContext('2d');
+  window.pidComponentChart = new Chart(ctx, {
+    type: 'line',
+    data: window.pidComponentData,
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false,
+      },
+      plugins: {
+        title: {
+          display: true,
+          text: 'PID Component Terms (P, I, D)',
+          font: { size: 16, weight: 'bold' }
+        },
+        legend: {
+          display: true,
+          position: 'top'
+        }
+      },
+      scales: {
+        x: {
+          display: true,
+          title: {
+            display: true,
+            text: 'Time (seconds)',
+            font: { weight: 'bold' }
+          },
+          grid: { color: 'rgba(0,0,0,0.1)' }
+        },
+        y: {
+          type: 'linear',
+          display: true,
+          position: 'left',
+          title: {
+            display: true,
+            text: 'Component Value',
+            font: { weight: 'bold' }
+          },
+          grid: { color: 'rgba(0,0,0,0.1)' }
+        }
+      },
+      animation: false,
+      elements: {
+        point: { radius: 0 }
+      }
+    }
+  });
+}
+
+function clearPIDGraph() {
+  window.pidComponentData.labels = [];
+  window.pidComponentData.datasets.forEach(dataset => {
+    dataset.data = [];
+  });
+  if (window.pidComponentChart) window.pidComponentChart.update();
+  showMessage('PID component graph cleared', 'info');
 }
 
 function startStatusUpdates() {
@@ -382,183 +606,10 @@ async function loadCurrentParams() {
     showMessage('Current PID parameters and settings loaded', 'success');
     console.log('Loaded PID params:', data);
   } catch (error) {
-    console.error('Error loading PID parameters:', error);
-    showMessage('Error loading PID parameters', 'error');
+    showMessage('Error loading PID parameters: ' + error.message, 'error');
   }
-}
 
-// Reset to conservative default values
-function resetToDefaults() {
-  document.getElementById('kpInput').value = '0.500000';
-  document.getElementById('kiInput').value = '0.010000';
-  document.getElementById('kdInput').value = '0.000000';
-  document.getElementById('sampleTimeInput').value = '1000';
-  document.getElementById('windowSizeInput').value = '30000';
-  document.getElementById('tempSampleCount').value = '10';
-  document.getElementById('tempRejectCount').value = '2';
-  document.getElementById('tempSampleInterval').value = '500';
-  validateTempAveraging();
-  showMessage('Reset to thermal system defaults', 'info');
 }
-
-// Start manual temperature test
-async function startManualTest() {
-  const targetTemp = parseFloat(document.getElementById('targetTempInput').value);
-  
-  if (isNaN(targetTemp) || targetTemp < 0 || targetTemp > 250) {
-    showMessage('Invalid target temperature (0-250°C)', 'error');
-    return;
-  }
-  
-  try {
-    console.log(`Starting manual test: Target ${targetTemp}°C`);
-    
-    // First ensure we have current PID parameters applied
-    console.log('Ensuring PID parameters are applied...');
-    await updatePIDParams();
-    
-    // Wait a moment for parameters to be applied
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    // Enable manual mode and set temperature
-    console.log('Setting manual mode ON...');
-    const manualResponse = await fetchWithTimeout('/api/manual_mode?on=1', 5000);
-    console.log('Manual mode response:', await manualResponse.text());
-    
-    console.log(`Setting temperature setpoint to ${targetTemp}°C...`);
-    const tempResponse = await fetchWithTimeout(`/api/temperature?setpoint=${targetTemp}`, 5000);
-    console.log('Temperature setpoint response:', await tempResponse.text());
-    
-    testStartTime = Date.now();
-    testStartTemp = null;
-    maxTemp = null;
-    
-    // Clear previous performance metrics
-    resetMetrics();
-    
-    // Stop any existing status updates to avoid conflicts
-    if (updateInterval) {
-      clearInterval(updateInterval);
-      updateInterval = null;
-    }
-    
-    // Start continuous updates
-    startStatusUpdates();
-    
-    showMessage(`Manual test started - Target: ${targetTemp}°C. Check status panel for updates.`, 'success');
-    console.log('Manual test initialization complete');
-    
-    // Force immediate status update to verify everything is working
-    setTimeout(() => {
-      console.log('Forcing immediate status update...');
-      updateStatus();
-    }, 1000);
-    
-  } catch (error) {
-    console.error('Error starting manual test:', error);
-    showMessage('Error starting test: ' + error.message, 'error');
-  }
-}
-
-// Stop temperature test
-async function stopTest() {
-  try {
-    await fetchWithTimeout('/api/temperature?setpoint=0', 5000);
-    await fetchWithTimeout('/api/manual_mode?on=0', 5000);
-    
-    if (updateInterval) {
-      clearInterval(updateInterval);
-      updateInterval = null;
-    }
-    
-    testStartTime = null;
-    showMessage('Test stopped - Manual mode disabled', 'info');
-  } catch (error) {
-    showMessage('Error stopping test: ' + error.message, 'error');
-  }
-}
-
-// Clear graph data
-function clearGraph() {
-  chartData.labels = [];
-  chartData.datasets.forEach(dataset => {
-    dataset.data = [];
-  });
-  temperatureChart.update();
-  resetMetrics();
-  showMessage('Graph cleared', 'info');
-}
-
-// Reset performance metrics
-function resetMetrics() {
-  document.getElementById('riseTime').textContent = '--';
-  document.getElementById('overshoot').textContent = '--';
-  document.getElementById('settlingTime').textContent = '--';
-  document.getElementById('steadyStateError').textContent = '--';
-}
-
-// Fetch with timeout wrapper
-async function fetchWithTimeout(url, timeout = 8000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-  
-  try {
-    const response = await fetch(url, { 
-      signal: controller.signal,
-      cache: 'no-cache'
-    });
-    clearTimeout(timeoutId);
-    return response;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    throw error;
-  }
-}
-
-// Show message to user
-function showMessage(message, type) {
-  console.log(`${type.toUpperCase()}: ${message}`);
-  
-  // Create toast notification
-  const toast = document.createElement('div');
-  toast.style.cssText = `
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    padding: 12px 20px;
-    border-radius: 6px;
-    color: white;
-    font-weight: bold;
-    z-index: 1000;
-    max-width: 300px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    transform: translateX(100%);
-    transition: transform 0.3s ease;
-  `;
-  
-  const colors = {
-    success: '#28a745',
-    error: '#dc3545',
-    warning: '#ffc107',
-    info: '#17a2b8'
-  };
-  
-  toast.style.background = colors[type] || colors.info;
-  if (type === 'warning') toast.style.color = '#212529';
-  
-  toast.textContent = message;
-  document.body.appendChild(toast);
-  
-  // Animate in
-  setTimeout(() => toast.style.transform = 'translateX(0)', 10);
-  
-  // Animate out and remove
-  setTimeout(() => {
-    toast.style.transform = 'translateX(100%)';
-    setTimeout(() => document.body.removeChild(toast), 300);
-  }, 4000);
-}
-
 // Validate temperature averaging parameters
 function validateTempAveraging() {
   const sampleCount = parseInt(document.getElementById('tempSampleCount').value);
@@ -600,6 +651,7 @@ function updateAutoTuneMethodDescription() {
 // Initialize page
 document.addEventListener('DOMContentLoaded', function() {
   initChart();
+  initPIDComponentChart();
   loadCurrentParams();
   
   // Add auto-tune method change handler

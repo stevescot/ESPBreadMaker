@@ -47,6 +47,31 @@
       </div>
     </div>
 
+    <!-- Live PID/Temp Control Monitoring -->
+    <div class="param-group" id="livePidStatus">
+      <h3>🛰️ Live PID & Control Status (from /status endpoint)</h3>
+      <div class="status-grid">
+        <div class="status-row"><span class="status-label">Kp:</span><span class="status-value" id="liveKp">--</span></div>
+        <div class="status-row"><span class="status-label">Ki:</span><span class="status-value" id="liveKi">--</span></div>
+        <div class="status-row"><span class="status-label">Kd:</span><span class="status-value" id="liveKd">--</span></div>
+        <div class="status-row"><span class="status-label">Setpoint:</span><span class="status-value" id="liveSetpoint">--</span></div>
+        <div class="status-row"><span class="status-label">Output:</span><span class="status-value" id="liveOutput">--</span></div>
+        <div class="status-row"><span class="status-label">Sample Time:</span><span class="status-value" id="liveSampleTime">--</span></div>
+        <div class="status-row"><span class="status-label">Window Size:</span><span class="status-value" id="liveWindowSize">--</span></div>
+        <div class="status-row"><span class="status-label">ON Time:</span><span class="status-value" id="liveOnTime">--</span></div>
+        <div class="status-row"><span class="status-label">Temp Sample Count:</span><span class="status-value" id="liveTempSampleCount">--</span></div>
+        <div class="status-row"><span class="status-label">Temp Reject Count:</span><span class="status-value" id="liveTempRejectCount">--</span></div>
+        <div class="status-row"><span class="status-label">Temp Sample Interval:</span><span class="status-value" id="liveTempSampleInterval">--</span></div>
+        <div class="status-row"><span class="status-label">Manual Mode:</span><span class="status-value" id="liveManualMode">--</span></div>
+        <div class="status-row"><span class="status-label">Phase:</span><span class="status-value" id="livePhase">--</span></div>
+        <div class="status-row"><span class="status-label">Heater State:</span><span class="status-value" id="liveHeater">--</span></div>
+        <div class="status-row"><span class="status-label">PID P Term:</span><span class="status-value" id="livePidP">--</span></div>
+        <div class="status-row"><span class="status-label">PID I Term:</span><span class="status-value" id="livePidI">--</span></div>
+        <div class="status-row"><span class="status-label">PID D Term:</span><span class="status-value" id="livePidD">--</span></div>
+      </div>
+      <div class="param-desc"><strong>All values are live from the controller, even during program operation.</strong></div>
+    </div>
+
     <div class="tuning-grid">
       <!-- Control Panel -->
       <div class="control-panel">
@@ -291,6 +316,33 @@
               <span class="status-label">Manual Mode:</span>
               <span class="status-value" id="manualMode">--</span>
             </div>
+            <div class="status-row">
+              <span class="status-label">P Term:</span>
+              <span class="status-value" id="pidPTerm">--</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">I Term:</span>
+              <span class="status-value" id="pidITerm">--</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">D Term:</span>
+              <span class="status-value" id="pidDTerm">--</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Time Left:</span>
+              <span class="status-value" id="timeLeft">--</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Stage Ready At:</span>
+              <span class="status-value" id="stageReadyAt"></span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Program Ready At:</span>
+              <span class="status-value" id="programReadyAt"></span>
+            </div>
+            <div class="status-row">
+              <button id="btnPauseResume" class="btn btn-secondary" style="width:100%;display:none;">Pause/Resume</button>
+            </div>
           </div>
         </div>
 
@@ -377,6 +429,19 @@
       </div>
       <canvas id="temperatureChart"></canvas>
     </div>
+
+    <!-- PID Component Graphs -->
+    <div class="chart-container">
+      <div class="chart-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <div class="chart-legend">
+          <small style="color: #666; font-style: italic;">
+            <strong>P, I, D Components</strong> — Shows how much each term contributes to the current output
+          </small>
+        </div>
+        <button class="btn btn-warning" onclick="clearPIDGraph()" style="margin-left: 20px;">🗑️ Clear PID Graph</button>
+      </div>
+      <canvas id="pidComponentChart"></canvas>
+    </div>
     
     <!-- Extra scrolling space -->
     <div style="height: 200px; padding: 20px; text-align: center; color: #999;">
@@ -387,5 +452,36 @@
   <!-- JavaScript Files -->
   <script src="script.js"></script>
   <script src="controllertuning.js"></script>
+  <script>
+  // Live PID/Temp Control Monitoring
+  async function pollLivePidStatus() {
+    try {
+      const resp = await fetch('/status');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      document.getElementById('liveKp').textContent = data.kp ?? '--';
+      document.getElementById('liveKi').textContent = data.ki ?? '--';
+      document.getElementById('liveKd').textContent = data.kd ?? '--';
+      document.getElementById('liveSetpoint').textContent = data.setTemp ?? '--';
+      document.getElementById('liveOutput').textContent = data.pid_output ?? '--';
+      document.getElementById('liveSampleTime').textContent = data.pid_sample_time ?? data.temp_sample_interval_ms ?? '--';
+      document.getElementById('liveWindowSize').textContent = data.window_size_ms ?? '--';
+      document.getElementById('liveOnTime').textContent = data.on_time ?? '--';
+      document.getElementById('liveTempSampleCount').textContent = data.temp_sample_count ?? '--';
+      document.getElementById('liveTempRejectCount').textContent = data.temp_reject_count ?? '--';
+      document.getElementById('liveTempSampleInterval').textContent = data.temp_sample_interval_ms ?? '--';
+      document.getElementById('liveManualMode').textContent = data.manualMode ?? '--';
+      document.getElementById('livePhase').textContent = data.phase ?? '--';
+      document.getElementById('liveHeater').textContent = data.heater ?? '--';
+      document.getElementById('livePidP').textContent = data.pidP ?? '--';
+      document.getElementById('livePidI').textContent = data.pidI ?? '--';
+      document.getElementById('livePidD').textContent = data.pidD ?? '--';
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+  setInterval(pollLivePidStatus, 1000);
+  window.addEventListener('DOMContentLoaded', pollLivePidStatus);
+  </script>
 </body>
 </html>

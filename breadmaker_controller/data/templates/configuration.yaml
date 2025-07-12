@@ -242,11 +242,58 @@ rest:
         state_class: measurement
         icon: "mdi:thermometer-lines"
 
+      - name: "Breadmaker PID Raw Input"
+        value_template: "{{ value_json.temperature_control.pid_input }}"
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+        icon: "mdi:thermometer"
+
       - name: "Breadmaker PID Output"
         value_template: "{{ value_json.temperature_control.output }}"
         unit_of_measurement: "%"
         state_class: measurement
         icon: "mdi:percent"
+
+      - name: "Breadmaker PID Raw Output"
+        value_template: "{{ value_json.temperature_control.pid_output }}"
+        unit_of_measurement: "1"
+        state_class: measurement
+        icon: "mdi:percent"
+
+      - name: "Breadmaker PID Kp"
+        value_template: "{{ value_json.temperature_control.kp }}"
+        icon: "mdi:alpha-p-circle"
+
+      - name: "Breadmaker PID Ki"
+        value_template: "{{ value_json.temperature_control.ki }}"
+        icon: "mdi:alpha-i-circle"
+
+
+      - name: "Breadmaker PID Kd"
+        value_template: "{{ value_json.temperature_control.kd }}"
+        icon: "mdi:alpha-d-circle"
+
+      # --- PID Component Sensors ---
+      - name: "Breadmaker PID P Term"
+        value_template: "{{ value_json.temperature_control.pid_p }}"
+        icon: "mdi:alpha-p-box"
+        unit_of_measurement: "output units"
+
+      - name: "Breadmaker PID I Term"
+        value_template: "{{ value_json.temperature_control.pid_i }}"
+        icon: "mdi:alpha-i-box"
+        unit_of_measurement: "output units"
+
+      - name: "Breadmaker PID D Term"
+        value_template: "{{ value_json.temperature_control.pid_d }}"
+        icon: "mdi:alpha-d-box"
+        unit_of_measurement: "output units"
+
+      - name: "Breadmaker PID Sample Time"
+        value_template: "{{ value_json.temperature_control.sample_time_ms }}"
+        unit_of_measurement: "ms"
+        icon: "mdi:timer"
 
       - name: "Breadmaker Raw Temperature"
         value_template: "{{ value_json.temperature_control.raw_temp | round(1) }}"

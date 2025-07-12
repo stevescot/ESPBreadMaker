@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <nav style="background:#181818; padding:0.7em 0 0.7em 0; text-align:center; border-radius:0 0 10px 10px; margin-bottom:2em;">
+    <a href="/" style="margin:0 1.2em; color:#ffb366; text-decoration:none; font-weight:bold;">&#8962; Home</a>
+    <a href="/config.html" style="margin:0 1.2em; color:#ffb366; text-decoration:none; font-weight:bold;">&#9881; Config</a>
+    <a href="/programs.html" style="margin:0 1.2em; color:#ffb366; text-decoration:none; font-weight:bold;">&#9998; Programs</a>
+    <a href="/calibration.html" style="margin:0 1.2em; color:#ffb366; text-decoration:none; font-weight:bold;">&#127777; Calibration</a>
+    <a href="/controllertuning.html" style="margin:0 1.2em; color:#ffb366; text-decoration:none; font-weight:bold;">&#128293; PID Tuning</a>
+    <a href="/update.html" style="margin:0 1.2em; color:#ffb366; text-decoration:none; font-weight:bold;">&#8593; Update</a>
+    <a href="/home_assistant.html" style="margin:0 1.2em; color:#ffd600; text-decoration:underline; font-weight:bold;">🏠 Home Assistant</a>
+  </nav>
+  <meta charset="UTF-8">
+  <title>Home Assistant Integration - Breadmaker Controller</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .container { max-width: 700px; margin: 2em auto; background: #232323; color: #ffe; border-radius: 10px; box-shadow: 0 2px 12px #1118; padding: 2em; }
+    h1, h2, h3 { color: #ffb366; }
+    code, pre { background: #181818; color: #ffd; border-radius: 4px; padding: 0.2em 0.4em; }
+    .download-link { display: inline-block; margin: 0.5em 0; padding: 0.5em 1em; background: #4caf50; color: #fff; border-radius: 6px; text-decoration: none; font-weight: bold; }
+    .download-link:hover { background: #388e3c; }
+    .instructions { margin-bottom: 2em; }
+    .template-section { margin-bottom: 2em; }
+    .template-section h3 { margin-bottom: 0.3em; }
+    .template-section ul { margin: 0.5em 0 0 1.5em; }
+    .template-section li { margin-bottom: 0.3em; }
+    .highlight { color: #ffd600; font-weight: bold; }
+    .template-section a {
+      color: #4cafef;
+      text-decoration: underline;
+      font-weight: bold;
+      transition: color 0.2s;
+    }
+    .template-section a:hover {
+      color: #ffb366;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Home Assistant Integration</h1>
+    <div class="instructions">
+      <p><strong>Click below to download a configuration file for your Home Assistant.</strong></p>
+      <p>The downloaded YAML will automatically use the address of this page (<span class="highlight" id="detectedAddress"></span>) in place of <code>192.168.250.125</code> so you can use it directly in your Home Assistant setup.</p>
+    </div>
+    <div class="template-section">
+      <h2>Download Configuration Templates</h2>
+      <ul>
+        <li><a class="download-link" href="#" onclick="downloadTemplate('configuration.yaml')">Download configuration.yaml</a></li>
+        <li><a class="download-link" href="#" onclick="downloadTemplate('automations.yaml')">Download automations.yaml</a></li>
+        <li><a class="download-link" href="#" onclick="downloadTemplate('scripts.yaml')">Download scripts.yaml</a></li>
+        <li><a class="download-link" href="#" onclick="downloadTemplate('dashboard.yaml')">Download dashboard.yaml</a></li>
+      </ul>
+    </div>
+    <div class="template-section">
+      <h2>Preview and Copy</h2>
+      <label for="templateSelect"><strong>Select a template:</strong></label>
+      <select id="templateSelect" onchange="showTemplate()">
+        <option value="configuration.yaml">configuration.yaml</option>
+        <option value="automations.yaml">automations.yaml</option>
+        <option value="scripts.yaml">scripts.yaml</option>
+        <option value="dashboard.yaml">dashboard.yaml</option>
+      </select>
+      <button onclick="copyTemplate()">Copy to Clipboard</button>
+      <pre id="templatePreview" style="margin-top:1em; max-height:400px; overflow:auto;"></pre>
+    </div>
+    <div class="template-section">
+      <h2>More Resources</h2>
+      <ul>
+        <li><a href="https://www.home-assistant.io/getting-started/" target="_blank">Home Assistant Getting Started Guide</a></li>
+        <li><a href="/index.html">Back to Breadmaker UI</a></li>
+      </ul>
+    </div>
+  </div>
+  <script>
+    // Template file names and their URLs (to be updated to /data/templates/)
+    const templateFiles = {
+      'configuration.yaml': '/data/templates/configuration.yaml',
+      'automations.yaml': '/data/templates/automations.yaml',
+      'scripts.yaml': '/data/templates/scripts.yaml',
+      'dashboard.yaml': '/data/templates/dashboard.yaml',
+    };
+    let templateCache = {};
+    function getBreadmakerAddress() {
+      // Use the current page's hostname (with port if present)
+      let host = window.location.hostname;
+      let port = window.location.port;
+      let proto = window.location.protocol;
+      let address = host;
+      if (port && port !== '80' && port !== '443') address += ':' + port;
+      // If it's a local IP or .local, use as is; otherwise fallback
+      if (!host) address = '192.168.250.125';
+      return address;
+    }
+    function replaceTemplateVars(text) {
+      // Replace both {{BREADMAKER_IP}} and 192.168.250.125 with the detected address
+      let addr = getBreadmakerAddress();
+      return text.replace(/\{\{BREADMAKER_IP\}\}/g, addr).replace(/192\.168\.250\.125/g, addr);
+    }
+    async function fetchTemplate(name) {
+      if (templateCache[name]) return templateCache[name];
+      let url = templateFiles[name];
+      let resp = await fetch(url);
+      let text = await resp.text();
+      templateCache[name] = text;
+      return text;
+    }
+    async function showTemplate() {
+      let name = document.getElementById('templateSelect').value;
+      let text = await fetchTemplate(name);
+      document.getElementById('templatePreview').textContent = replaceTemplateVars(text);
+    }
+    async function copyTemplate() {
+      let name = document.getElementById('templateSelect').value;
+      let text = await fetchTemplate(name);
+      await navigator.clipboard.writeText(replaceTemplateVars(text));
+      alert('Template copied to clipboard!');
+    }
+    async function downloadTemplate(name) {
+      let text = await fetchTemplate(name);
+      let replaced = replaceTemplateVars(text);
+      let blob = new Blob([replaced], {type: 'text/yaml'});
+      let a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+    // Show detected address in instructions
+    document.addEventListener('DOMContentLoaded', function() {
+      document.getElementById('detectedAddress').textContent = getBreadmakerAddress();
+      showTemplate();
+    });
+  </script>
+</body>
+</html>

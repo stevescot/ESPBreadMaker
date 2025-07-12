@@ -24,7 +24,7 @@ bool loadWiFiCreds(String &ssid, String &pass) {
 }
 
 void startCaptivePortal() {
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA); // Enable both AP and STA
   WiFi.softAP(apSSID);
   dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
 

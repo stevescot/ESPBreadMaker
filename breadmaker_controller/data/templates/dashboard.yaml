@@ -6,7 +6,6 @@ views:
         entity: sensor.breadmaker_program
         name: Current Program
         icon: mdi:format-list-numbered
-        
       - type: horizontal-stack
         cards:
           - type: entity
@@ -17,7 +16,6 @@ views:
             entity: sensor.breadmaker_stage
             name: Current Stage
             icon: mdi:progress-clock
-
       - type: horizontal-stack
         cards:
           - type: gauge
@@ -40,36 +38,6 @@ views:
               yellow: 100
               red: 200
             needle: true
-
-      - type: entities
-        title: System Information (Alternative)
-        entities:
-          - entity: sensor.breadmaker_free_heap
-            name: Free Memory
-            icon: mdi:memory
-            secondary_info: "{{ states('sensor.breadmaker_free_heap') }} bytes"
-          - entity: sensor.breadmaker_wifi_rssi
-            name: WiFi Signal  
-            icon: mdi:wifi
-            secondary_info: "{{ states('sensor.breadmaker_wifi_rssi') }} dBm"
-          - entity: sensor.breadmaker_uptime
-            name: Uptime
-            icon: mdi:clock-outline
-            secondary_info: "{{ (states('sensor.breadmaker_uptime') | int / 60) | round(1) }} minutes"
-
-      - type: entities
-        title: System Information
-        entities:
-          - entity: sensor.breadmaker_free_heap
-            name: Free Memory
-            icon: mdi:memory
-          - entity: sensor.breadmaker_wifi_rssi
-            name: WiFi Signal
-            icon: mdi:wifi
-          - entity: sensor.breadmaker_uptime
-            name: Uptime
-            icon: mdi:clock-outline
-
       - type: entities
         title: Output Status
         entities:
@@ -85,11 +53,9 @@ views:
           - entity: binary_sensor.breadmaker_buzzer_active
             name: Buzzer
             icon: mdi:volume-high
-
       - type: markdown
         content: |
           ## Quick Actions
-
       - type: horizontal-stack
         cards:
           - type: button
@@ -110,7 +76,6 @@ views:
             tap_action:
               action: call-service
               service: rest_command.breadmaker_resume
-
       - type: horizontal-stack
         cards:
           - type: button
@@ -131,15 +96,13 @@ views:
             tap_action:
               action: call-service
               service: rest_command.breadmaker_beep
-
       - type: markdown
         content: |
           ## Manual Control
-
       - type: conditional
         conditions:
           - entity: binary_sensor.breadmaker_manual_mode
-            state: "off"
+            state: 'off'
         card:
           type: button
           name: Enable Manual Mode
@@ -147,11 +110,10 @@ views:
           tap_action:
             action: call-service
             service: rest_command.breadmaker_manual_mode_on
-
       - type: conditional
         conditions:
           - entity: binary_sensor.breadmaker_manual_mode
-            state: "on"
+            state: 'on'
         card:
           type: button
           name: Disable Manual Mode
@@ -159,11 +121,10 @@ views:
           tap_action:
             action: call-service
             service: rest_command.breadmaker_manual_mode_off
-
       - type: conditional
         conditions:
           - entity: binary_sensor.breadmaker_manual_mode
-            state: "on"
+            state: 'on'
         card:
           type: vertical-stack
           cards:
@@ -172,7 +133,7 @@ views:
                 - type: conditional
                   conditions:
                     - entity: binary_sensor.breadmaker_motor_active
-                      state: "off"
+                      state: 'off'
                   card:
                     type: button
                     name: Turn Motor On
@@ -183,7 +144,7 @@ views:
                 - type: conditional
                   conditions:
                     - entity: binary_sensor.breadmaker_motor_active
-                      state: "on"
+                      state: 'on'
                   card:
                     type: button
                     name: Turn Motor Off
@@ -191,13 +152,12 @@ views:
                     tap_action:
                       action: call-service
                       service: rest_command.breadmaker_motor_off
-
             - type: horizontal-stack
               cards:
                 - type: conditional
                   conditions:
                     - entity: binary_sensor.breadmaker_heater_active
-                      state: "off"
+                      state: 'off'
                   card:
                     type: button
                     name: Turn Heater On
@@ -208,7 +168,7 @@ views:
                 - type: conditional
                   conditions:
                     - entity: binary_sensor.breadmaker_heater_active
-                      state: "on"
+                      state: 'on'
                   card:
                     type: button
                     name: Turn Heater Off
@@ -216,13 +176,12 @@ views:
                     tap_action:
                       action: call-service
                       service: rest_command.breadmaker_heater_off
-
             - type: horizontal-stack
               cards:
                 - type: conditional
                   conditions:
                     - entity: binary_sensor.breadmaker_light_on
-                      state: "off"
+                      state: 'off'
                   card:
                     type: button
                     name: Turn Light On
@@ -233,7 +192,7 @@ views:
                 - type: conditional
                   conditions:
                     - entity: binary_sensor.breadmaker_light_on
-                      state: "on"
+                      state: 'on'
                   card:
                     type: button
                     name: Turn Light Off
@@ -241,7 +200,6 @@ views:
                     tap_action:
                       action: call-service
                       service: rest_command.breadmaker_light_off
-
       - type: history-graph
         title: Temperature History
         entities:
@@ -249,27 +207,55 @@ views:
           - sensor.breadmaker_setpoint
         hours_to_show: 6
         refresh_interval: 30
-
+      - type: gauge
+        entity: sensor.breadmaker_stage_time_left
+      - type: gauge
+        entity: sensor.breadmaker_average_loop_time
+      - type: gauge
+        entity: sensor.breadmaker_heap_fragmentation
+      - type: gauge
+        entity: sensor.breadmaker_free_heap
+      - type: entity
+        entity: sensor.breadmaker_build_date
+      - type: entity
+        entity: sensor.breadmaker_loop_count
       - type: history-graph
-        title: Motor Activity History
         entities:
-          - binary_sensor.breadmaker_motor_active
-        hours_to_show: 6
-        refresh_interval: 30
-
-      - type: markdown
-        title: Debug Information
-        content: |
-          **Sensor Values Debug:**
-          
-          - Free Heap: {{ states('sensor.breadmaker_free_heap') }}
-          - WiFi RSSI: {{ states('sensor.breadmaker_wifi_rssi') }}  
-          - Uptime: {{ states('sensor.breadmaker_uptime') }}
-          
-          **Raw Sensor Attributes:**
-          
-          Free Heap Unit: {{ state_attr('sensor.breadmaker_free_heap', 'unit_of_measurement') }}
-          
-          WiFi RSSI Unit: {{ state_attr('sensor.breadmaker_wifi_rssi', 'unit_of_measurement') }}
-          
-          Uptime Unit: {{ state_attr('sensor.breadmaker_uptime', 'unit_of_measurement') }}
+          - entity: sensor.breadmaker_stage
+      - type: sensor
+        entity: sensor.breadmaker_uptime
+        graph: line
+      - graph: line
+        type: sensor
+        entity: sensor.breadmaker_pid_output
+        name: PID Output (%)
+        detail: 1
+      - graph: line
+        type: sensor
+        entity: sensor.breadmaker_pid_input
+        name: PID Input (Averaged)
+        detail: 1
+      - type: sensor
+        entity: sensor.breadmaker_pid_raw_input
+        name: PID Raw Input
+        detail: 1
+      - type: sensor
+        entity: sensor.breadmaker_pid_raw_output
+        name: PID Raw Output
+        detail: 1
+      - type: sensor
+        entity: sensor.breadmaker_pid_kp
+        name: PID Kp
+        detail: 1
+      - type: sensor
+        entity: sensor.breadmaker_pid_ki
+        name: PID Ki
+        detail: 1
+      - type: sensor
+        entity: sensor.breadmaker_pid_kd
+        name: PID Kd
+        detail: 1
+      - type: sensor
+        entity: sensor.breadmaker_pid_sample_time
+        name: PID Sample Time (ms)
+        detail: 1

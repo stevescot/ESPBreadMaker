@@ -3,7 +3,6 @@
 ## attitude
 if you have made changes, recompile to confirm they are succesful
 if there are compile errors attempt a fix first, do this a maximum 3 times before asking for confirmation
-always add stubs of fuctions at the top of ino files and variables at the top
 
 ## Project Overview
 This project is an ESP8266-based breadmaker controller with a web UI, stage-based breadmaking logic, and persistent storage using LittleFS. It supports program editing, calibration, OTA firmware updates, and live status monitoring.
@@ -27,11 +26,14 @@ This project is an ESP8266-based breadmaker controller with a web UI, stage-base
 - `/programs.html`: Program editor page
 - `/calibration.html`: Temperature calibration page
 - `/index.html`: Main UI
+## Testing
+The breadmaker is on 192.168.250.125 you can perform any tests that do not change temperature, querying the status, ha endpoints, pulling pages etc.
 
 ## UI/UX
 - All navigation to static pages should use `.html` extensions (e.g., `/programs.html`, `/calibration.html`, `/update.html`)
 - The plan summary in the UI must use the backend-provided `stageStartTimes` for all stage start times
 - The program editor (`programs.html`/`programs.js`) must treat programs as an array, not an object
+as symbols may be used add a utf8 charset to the header of html files to ensure they are displayed correctly
 
 ## Timing Logic
 - All stage start times are calculated and provided by the backend in `stageStartTimes`

@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>Configuration</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="style.css">
@@ -60,6 +61,7 @@
     <a href="/calibration.html">&#127777; Calibration</a>
     <a href="/controllertuning.html">&#128293; PID Tuning</a>
     <a href="/update.html">&#8593; Update</a>
+    <a href="/home_assistant.html" style="color:#ffd600; text-decoration:underline; font-weight:bold;">🏠 Home Assistant</a>
   </nav>
   <div class="container">
     <h2>Configuration</h2>
@@ -69,13 +71,14 @@
       <button class="config-link-btn" onclick="location.href='/controllertuning.html'">&#128293; PID Controller Tuning</button>
       <button class="config-link-btn" onclick="location.href='/update.html'">&#8593; Firmware Update</button>
       <button class="config-link-btn" onclick="toggleFileManager()">&#128193; File Manager</button>
+      <button class="config-link-btn" onclick="location.href='/home_assistant.html'" style="background:#ffb366; color:#232323;">🏠 Home Assistant Config Guide</button>
     </div>
     
     <!-- File Manager Section -->
     <div id="fileManager" style="display:none; margin-top:2em; padding:1.5em; border:1px solid #555; border-radius:8px; background:#333;">
       <h3 style="margin-top:0;">File Manager</h3>
-      
-      <!-- File Upload -->
+      <div id="currentFolderPath" style="color:#ffd600; font-size:0.98em; margin-bottom:0.7em;">/</div>
+      <!-- File Upload & Folder Create -->
       <div style="margin-bottom:2em;">
         <h4>Upload File</h4>
         <div style="margin-bottom:0.5em; color:#bbb; font-size:0.9em; font-style:italic;">
@@ -83,12 +86,15 @@
         </div>
         <input type="file" id="fileInput" multiple style="margin:0.5em 0; padding:0.5em; border-radius:4px; background:#444; color:#fff; border:1px solid #666;">
         <button onclick="uploadFiles()" style="margin-left:1em; padding:0.5em 1em; border-radius:4px; background:#4CAF50; color:#fff; border:none; cursor:pointer;">Upload</button>
+        <div style="margin-top:1em;">
+          <input type="text" id="newFolderName" placeholder="New folder name" style="padding:0.4em; border-radius:4px; border:1px solid #666; background:#444; color:#fff; width: 180px;">
+          <button onclick="createFolder()" style="margin-left:0.5em; padding:0.4em 1em; border-radius:4px; background:#2196f3; color:#fff; border:none; cursor:pointer;">Create Folder</button>
+        </div>
         <div id="uploadStatus" style="margin-top:0.5em; color:#ffd600;"></div>
       </div>
-      
       <!-- File List -->
       <div>
-        <h4>Files on Device</h4>
+        <h4>Files & Folders</h4>
         <button onclick="refreshFileList()" style="margin-bottom:1em; padding:0.3em 1em; border-radius:4px; background:#666; color:#fff; border:none; cursor:pointer;">Refresh</button>
         <div id="fileList" style="max-height:300px; overflow-y:auto; background:#222; padding:1em; border-radius:4px; border:1px solid #555;">
           Loading...
@@ -154,71 +160,66 @@
     fetchOutputMode();
     
     // File Manager functionality
+    // --- Folder support logic ---
+    let currentFolder = '/';
+    function updateFolderPathDisplay() {
+      document.getElementById('currentFolderPath').textContent = currentFolder;
+    }
     function toggleFileManager() {
       const fileManager = document.getElementById('fileManager');
       if (fileManager.style.display === 'none') {
         fileManager.style.display = 'block';
+        currentFolder = '/';
+        updateFolderPathDisplay();
         refreshFileList();
       } else {
         fileManager.style.display = 'none';
       }
     }
-    
     async function uploadFiles() {
       const fileInput = document.getElementById('fileInput');
       const uploadStatus = document.getElementById('uploadStatus');
       const files = fileInput.files;
-      
       if (files.length === 0) {
         uploadStatus.textContent = 'Please select files to upload';
         uploadStatus.style.color = '#ff6666';
         return;
       }
-      
       uploadStatus.textContent = 'Uploading files sequentially...';
       uploadStatus.style.color = '#ffd600';
-      
       let successCount = 0;
       let errorCount = 0;
-      
-      // Upload files one by one to prevent memory issues and corruption
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const formData = new FormData();
         formData.append('file', file);
-        
+        formData.append('folder', currentFolder);
         uploadStatus.textContent = `Uploading ${i + 1}/${files.length}: ${file.name}...`;
-        
         try {
           const response = await fetch('/api/upload', {
             method: 'POST',
             body: formData
           });
-          
           if (response.ok) {
             successCount++;
             uploadStatus.textContent = `✅ Uploaded ${i + 1}/${files.length}: ${file.name} (${successCount} success, ${errorCount} errors)`;
             uploadStatus.style.color = '#4CAF50';
-            
-            // Small delay between uploads to prevent overwhelming the ESP32
             if (i < files.length - 1) {
-              await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
+              await new Promise(resolve => setTimeout(resolve, 500));
             }
           } else {
             errorCount++;
             uploadStatus.textContent = `❌ Error uploading ${file.name}: HTTP ${response.status}`;
             uploadStatus.style.color = '#ff6666';
-            break; // Stop on first error
+            break;
           }
         } catch (error) {
           errorCount++;
           uploadStatus.textContent = `❌ Error uploading ${file.name}: ${error.message}`;
           uploadStatus.style.color = '#ff6666';
-          break; // Stop on first error
+          break;
         }
       }
-      
-      // Final status
       if (errorCount === 0) {
         uploadStatus.textContent = `✅ Successfully uploaded all ${successCount} file(s)`;
         uploadStatus.style.color = '#4CAF50';
@@ -229,34 +230,49 @@
         uploadStatus.style.color = '#ffc107';
       }
     }
-    
     function refreshFileList() {
       const fileList = document.getElementById('fileList');
+      updateFolderPathDisplay();
       fileList.innerHTML = 'Loading...';
-      
-      fetch('/api/files')
+      fetch(`/api/files?folder=${encodeURIComponent(currentFolder)}`)
         .then(response => response.json())
         .then(data => {
-          if (data.files.length === 0) {
-            fileList.innerHTML = '<em>No files found</em>';
+          if ((!data.folders || data.folders.length === 0) && (!data.files || data.files.length === 0)) {
+            fileList.innerHTML = '<em>No files or folders found</em>';
             return;
           }
-          
           let html = '<table style="width:100%; border-collapse:collapse;">';
           html += '<thead><tr><th style="text-align:left; padding:0.5em; border-bottom:1px solid #555;">Name</th><th style="text-align:right; padding:0.5em; border-bottom:1px solid #555;">Size</th><th style="text-align:center; padding:0.5em; border-bottom:1px solid #555;">Actions</th></tr></thead>';
           html += '<tbody>';
-          
-          data.files.forEach(file => {
-            html += '<tr>';
-            html += `<td style="padding:0.5em; border-bottom:1px solid #333;">${file.name}</td>`;
-            html += `<td style="padding:0.5em; border-bottom:1px solid #333; text-align:right;">${formatBytes(file.size)}</td>`;
-            html += `<td style="padding:0.5em; border-bottom:1px solid #333; text-align:center;">`;
-            html += `<button onclick="downloadFile('${file.name}')" style="margin-right:0.5em; padding:0.2em 0.5em; border-radius:3px; background:#4CAF50; color:#fff; border:none; cursor:pointer; font-size:0.8em;">Download</button>`;
-            html += `<button onclick="deleteFile('${file.name}')" style="padding:0.2em 0.5em; border-radius:3px; background:#f44336; color:#fff; border:none; cursor:pointer; font-size:0.8em;">Delete</button>`;
-            html += '</td>';
-            html += '</tr>';
-          });
-          
+          // Parent folder link
+          if (currentFolder !== '/' && currentFolder !== '') {
+            html += `<tr><td colspan="3"><button onclick="goUpFolder()" style="background:#444;color:#ffd600;border:none;padding:0.3em 1em;border-radius:4px;cursor:pointer;">⬆️ Up</button></td></tr>`;
+          }
+          // Folders
+          if (data.folders) {
+            data.folders.forEach(folder => {
+              html += '<tr>';
+              html += `<td style="padding:0.5em; border-bottom:1px solid #333; color:#ffd600; cursor:pointer;" onclick="enterFolder('${folder}')">📁 ${folder}</td>`;
+              html += `<td style="padding:0.5em; border-bottom:1px solid #333; text-align:right;">-</td>`;
+              html += `<td style="padding:0.5em; border-bottom:1px solid #333; text-align:center;">`;
+              html += `<button onclick="deleteFolder(event, '${folder}')" style="padding:0.2em 0.5em; border-radius:3px; background:#f44336; color:#fff; border:none; cursor:pointer; font-size:0.8em;">Delete</button>`;
+              html += '</td>';
+              html += '</tr>';
+            });
+          }
+          // Files
+          if (data.files) {
+            data.files.forEach(file => {
+              html += '<tr>';
+              html += `<td style="padding:0.5em; border-bottom:1px solid #333;">${file.name}</td>`;
+              html += `<td style="padding:0.5em; border-bottom:1px solid #333; text-align:right;">${formatBytes(file.size)}</td>`;
+              html += `<td style="padding:0.5em; border-bottom:1px solid #333; text-align:center;">`;
+              html += `<button onclick="downloadFile('${file.name}')" style="margin-right:0.5em; padding:0.2em 0.5em; border-radius:3px; background:#4CAF50; color:#fff; border:none; cursor:pointer; font-size:0.8em;">Download</button>`;
+              html += `<button onclick="deleteFile('${file.name}')" style="padding:0.2em 0.5em; border-radius:3px; background:#f44336; color:#fff; border:none; cursor:pointer; font-size:0.8em;">Delete</button>`;
+              html += '</td>';
+              html += '</tr>';
+            });
+          }
           html += '</tbody></table>';
           fileList.innerHTML = html;
         })
@@ -264,7 +280,19 @@
           fileList.innerHTML = `<em>Error loading files: ${error.message}</em>`;
         });
     }
-    
+    function goUpFolder() {
+      if (currentFolder === '/' || currentFolder === '') return;
+      let parts = currentFolder.split('/').filter(Boolean);
+      parts.pop();
+      currentFolder = '/' + parts.join('/');
+      if (!currentFolder.endsWith('/') && currentFolder !== '/') currentFolder += '/';
+      refreshFileList();
+    }
+    function enterFolder(folderName) {
+      if (!currentFolder.endsWith('/')) currentFolder += '/';
+      currentFolder = currentFolder + folderName + '/';
+      refreshFileList();
+    }
     function formatBytes(bytes) {
       if (bytes === 0) return '0 Bytes';
       const k = 1024;
@@ -272,20 +300,19 @@
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
-    
     function downloadFile(filename) {
-      window.open('/' + filename, '_blank');
+      let path = currentFolder;
+      if (!path.endsWith('/')) path += '/';
+      window.open(path + filename, '_blank');
     }
-    
     function deleteFile(filename) {
       if (!confirm(`Are you sure you want to delete "${filename}"?`)) {
         return;
       }
-      
       fetch('/api/delete', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({filename: filename})
+        body: JSON.stringify({filename: filename, folder: currentFolder})
       })
       .then(response => response.json())
       .then(data => {
@@ -297,6 +324,53 @@
       })
       .catch(error => {
         alert(`Error deleting file: ${error.message}`);
+      });
+    }
+    function deleteFolder(event, folderName) {
+      event.stopPropagation();
+      if (!confirm(`Are you sure you want to delete the folder "${folderName}" and all its contents?`)) {
+        return;
+      }
+      fetch('/api/delete_folder', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({folder: currentFolder, name: folderName})
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === 'deleted') {
+          refreshFileList();
+        } else {
+          alert(`Error deleting folder: ${data.error}`);
+        }
+      })
+      .catch(error => {
+        alert(`Error deleting folder: ${error.message}`);
+      });
+    }
+    function createFolder() {
+      const folderInput = document.getElementById('newFolderName');
+      const folderName = folderInput.value.trim();
+      if (!folderName) {
+        alert('Please enter a folder name.');
+        return;
+      }
+      fetch('/api/create_folder', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({parent: currentFolder, name: folderName})
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.status === 'created') {
+          folderInput.value = '';
+          refreshFileList();
+        } else {
+          alert(`Error creating folder: ${data.error}`);
+        }
+      })
+      .catch(error => {
+        alert(`Error creating folder: ${error.message}`);
       });
     }
   </script>
