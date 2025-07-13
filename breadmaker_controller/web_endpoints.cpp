@@ -307,6 +307,24 @@ void stateMachineEndpoints(AsyncWebServer& server)
     if (debugSerial) Serial.println(F("[ACTION] /back called"));
     updateActiveProgramVars();
     // Robust null and bounds checks
+    // If current program is a dummy slot, clamp to first valid program
+    if (programState.activeProgramId >= programs.size() || programs[programState.activeProgramId].id == -1) {
+        // Find first valid program
+        size_t firstValid = 0;
+        for (size_t i = 0; i < programs.size(); ++i) {
+            if (programs[i].id != -1) { firstValid = i; break; }
+        }
+        programState.activeProgramId = firstValid;
+        updateActiveProgramVars();
+        if (!programState.customProgram) {
+            Serial.println(F("[ERROR] /back: customProgram is null after clamping"));
+            stopBreadmaker();
+            AsyncResponseStream *response = req->beginResponseStream("application/json");
+            streamStatusJson(*response);
+            req->send(response);
+            return;
+        }
+    }
     if (!programState.customProgram) {
         Serial.println(F("[ERROR] /back: customProgram is null"));
         stopBreadmaker();
@@ -315,15 +333,6 @@ void stateMachineEndpoints(AsyncWebServer& server)
         req->send(response);
         return;
     }
-    if (programState.activeProgramId >= programs.size()) {
-        Serial.printf_P(PSTR("[ERROR] /back: activeProgramId %u out of range\n"), (unsigned)programState.activeProgramId);
-        stopBreadmaker();
-        AsyncResponseStream *response = req->beginResponseStream("application/json");
-        streamStatusJson(*response);
-        req->send(response);
-        return;
-    }
-    if (programState.activeProgramId >= programs.size() || programs[programState.activeProgramId].id == -1) { stopBreadmaker(); AsyncResponseStream *response = req->beginResponseStream("application/json"); streamStatusJson(*response); req->send(response); return; }
     Program &p = programs[programState.activeProgramId];
     size_t numStages = p.customStages.size();
     if (numStages == 0) {

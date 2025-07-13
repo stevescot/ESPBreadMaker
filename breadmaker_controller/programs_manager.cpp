@@ -69,6 +69,10 @@ void loadPrograms() {
       programs[p.id] = p;
     }
   }
+  // Remove trailing dummy slots (id==-1) at the end for cleaner save
+  while (!programs.empty() && programs.back().id == -1) {
+    programs.pop_back();
+  }
 }
 
 // Save programs to LittleFS (including id)
@@ -76,6 +80,7 @@ void savePrograms() {
   DynamicJsonDocument doc(8192);
   JsonArray arr = doc.to<JsonArray>();
   for (const Program& p : programs) {
+    if (p.id == -1) continue; // skip dummy slots
     JsonObject pobj = arr.createNestedObject();
     pobj["id"] = p.id;
     pobj["name"] = p.name;

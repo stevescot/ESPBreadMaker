@@ -355,7 +355,7 @@ void loadResumeState() {
   if (err) return;
   // Restore program by id (id is now the index in the programs vector, but may be a dummy slot)
   int progIdx = doc["programIdx"] | -1;
-  if (progIdx >= 0 && progIdx < (int)programs.size() && programs[progIdx].id == progIdx) {
+  if (progIdx >= 0 && progIdx < (int)programs.size() && programs[progIdx].id == progIdx && programs[progIdx].id != -1) {
     activeProgramId = progIdx;
     updateActiveProgramVars(); // Update program variables after loading
   } else {
@@ -372,7 +372,7 @@ void loadResumeState() {
   unsigned long elapsedMixSec = doc["elapsedMixSec"] | 0;
   programStartTime = doc["programStartTime"] | 0;
   bool wasRunning = doc["isRunning"] | false;
-  
+
   // Check startup delay before resuming
   if (wasRunning && !isStartupDelayComplete()) {
     // Don't resume immediately - wait for startup delay
@@ -384,7 +384,7 @@ void loadResumeState() {
   } else {
     isRunning = wasRunning;
   }
-  
+
   // Load actual stage start times
   for (int i = 0; i < 20; i++) actualStageStartTimes[i] = 0;
   if (doc.containsKey("actualStageStartTimes") && doc["actualStageStartTimes"].is<JsonArray>()) {
@@ -393,6 +393,22 @@ void loadResumeState() {
       actualStageStartTimes[i] = stageStartArray[i];
     }
   }
+
+  // Ensure indices are always valid after resume
+  if (activeProgramId < programs.size() && programs[activeProgramId].id != -1) {
+    Program &p = programs[activeProgramId];
+    if (customStageIdx >= p.customStages.size()) customStageIdx = 0;
+    if (!p.customStages.empty()) {
+      CustomStage &st = p.customStages[customStageIdx];
+      if (!st.mixPattern.empty() && customMixIdx >= st.mixPattern.size()) customMixIdx = 0;
+    } else {
+      customMixIdx = 0;
+    }
+  } else {
+    customStageIdx = 0;
+    customMixIdx = 0;
+  }
+
   // Fast-forward logic: if elapsed time > stage/mix durations, advance indices
   if (isRunning && activeProgramId < programs.size() && programs[activeProgramId].id != -1) {
     Program &p = programs[activeProgramId];
@@ -421,7 +437,7 @@ void loadResumeState() {
     // Fast-forward mix steps if mixPattern exists
     CustomStage &st = p.customStages[customStageIdx];
     if (!st.mixPattern.empty()) {
-      size_t mixIdx = 0;
+      size_t mixIdx = customMixIdx;
       unsigned long remainMixSec = elapsedMixSec;
       while (mixIdx < st.mixPattern.size()) {
         unsigned long mixDurSec = st.mixPattern[mixIdx].mixSec + st.mixPattern[mixIdx].waitSec;
