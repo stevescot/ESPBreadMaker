@@ -1,3 +1,21 @@
+#include <functional>
+
+// Helper function to send a JSON error response
+void sendJsonError(AsyncWebServerRequest* req, const String& error, const String& message, int code = 400) {
+  AsyncResponseStream *response = req->beginResponseStream("application/json");
+  response->print("{");
+  response->print("\"error\":\"");
+  response->print(error);
+  response->print("\",");
+  response->print("\"message\":\"");
+  response->print(message);
+  response->print("\"}");
+  req->send(response);
+}
+// Maximum number of program stages supported
+#ifndef MAX_PROGRAM_STAGES
+#define MAX_PROGRAM_STAGES 20
+#endif
 
 
 // (Predicted times will be moved to the status endpoint instead)
@@ -78,7 +96,7 @@ size_t customMixIdx = 0;           // Index of current mix step within stage
 unsigned long customStageStart = 0;    // Start time (ms) of current custom stage
 unsigned long customMixStepStart = 0;  // Start time (ms) of current mix step
 time_t programStartTime = 0;           // Absolute program start time (seconds since epoch)
-time_t actualStageStartTimes[20];      // Array to store actual start times of each stage (max 20 stages)
+time_t actualStageStartTimes[MAX_PROGRAM_STAGES];      // Array to store actual start times of each stage (max 20 stages)
 
 // --- Active program variables ---
 Program* customProgram = nullptr;  // Pointer to current active program
@@ -385,7 +403,7 @@ void setup() {
     customMixStepStart = 0;
     programStartTime = time(nullptr);
     // Initialize actual stage start times array
-    for (int i = 0; i < 20; i++) actualStageStartTimes[i] = 0;
+    for (int i = 0; i < MAX_PROGRAM_STAGES; i++) actualStageStartTimes[i] = 0;
     actualStageStartTimes[0] = programStartTime; // Record actual start of first stage
 
     // --- Fermentation tracking: set immediately if first stage is fermentation ---
@@ -437,7 +455,7 @@ void setup() {
     isRunning = true;
     // Do NOT reset actualStageStartTimes[customStageIdx] on resume if it was already set.
     // Only set it if it was never set (i.e., just started this stage for the first time).
-    if (customStageIdx < 20 && actualStageStartTimes[customStageIdx] == 0) {
+    if (customStageIdx < MAX_PROGRAM_STAGES && actualStageStartTimes[customStageIdx] == 0) {
       actualStageStartTimes[customStageIdx] = time(nullptr);
       if (debugSerial) Serial.printf_P(PSTR("[RESUME PATCH] Set actualStageStartTimes[%u] to now (%ld) on /resume (first entry to this stage).\n"), (unsigned)customStageIdx, (long)actualStageStartTimes[customStageIdx]);
     } else {
@@ -462,7 +480,7 @@ void setup() {
     isRunning = true;
     if (customStageIdx == 0) programStartTime = time(nullptr);
     // Record actual start time of this stage
-    if (customStageIdx < 20) actualStageStartTimes[customStageIdx] = time(nullptr);
+    if (customStageIdx < MAX_PROGRAM_STAGES) actualStageStartTimes[customStageIdx] = time(nullptr);
 
     // --- Fermentation tracking: set immediately if new stage is fermentation ---
     initialFermentTemp = 0.0;
@@ -541,7 +559,7 @@ void setup() {
     isRunning = true;
     if (customStageIdx == 0) programStartTime = time(nullptr);
     // Record actual start time of this stage when going back
-    if (customStageIdx < numStages && customStageIdx < 20) actualStageStartTimes[customStageIdx] = time(nullptr);
+    if (customStageIdx < numStages && customStageIdx < MAX_PROGRAM_STAGES) actualStageStartTimes[customStageIdx] = time(nullptr);
     saveResumeState();
     Serial.printf_P(PSTR("[STAGE] Entering custom stage: %d\n"), customStageIdx);
     AsyncResponseStream *response = req->beginResponseStream("application/json");
@@ -1448,23 +1466,33 @@ server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
   server.on("/start_at_stage", HTTP_GET, [](AsyncWebServerRequest* req){
     if (debugSerial) Serial.println(F("[ACTION] /start_at_stage called"));
 
-    AsyncResponseStream *response = req->beginResponseStream("application/json");
-    response->print("{");
+
 
     if (!req->hasParam("stage")) {
-      response->print("\"error\":\"Missing stage parameter\",");
-      response->print("\"message\":\"Please specify ?stage=N\"");
-      response->print("}");
-      req->send(response);
+      sendJsonError(req, "Missing stage parameter", "Please specify ?stage=N");
       return;
     }
 
-    int stageIdx = req->getParam("stage")->value().toInt();
+    String stageStr = req->getParam("stage")->value();
+    bool validStage = true;
+    for (size_t i = 0; i < stageStr.length(); ++i) {
+      if (!isDigit(stageStr[i]) && !(i == 0 && stageStr[i] == '-')) {
+        validStage = false;
+        break;
+      }
+    }
+    if (!validStage || stageStr.length() == 0) {
+      sendJsonError(req, "Invalid stage parameter", "Stage must be an integer");
+      return;
+    }
+    int stageIdx = stageStr.toInt();
 
     // Check if startup delay has completed
     if (!isStartupDelayComplete()) {
       unsigned long remaining = STARTUP_DELAY_MS - (millis() - startupTime);
       if (debugSerial) Serial.printf("[START_AT_STAGE] Startup delay: %lu ms remaining\n", remaining);
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      response->print("{");
       response->print("\"error\":\"Startup delay active\",");
       response->print("\"message\":\"Please wait for temperature sensor to stabilize\",");
       response->printf("\"remainingMs\":%lu", remaining);
@@ -1477,29 +1505,20 @@ server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
     updateActiveProgramVars();
     // Ensure a program is selected and customProgram is valid
     if (!customProgram) {
-      response->print("\"error\":\"No program selected\",");
-      response->print("\"message\":\"Please select a program before starting at a stage.\"");
-      response->print("}");
-      req->send(response);
+      sendJsonError(req, "No program selected", "Please select a program before starting at a stage.");
       return;
     }
 
     size_t numStages = customProgram->customStages.size();
     if (numStages == 0) {
-      response->print("\"error\":\"No stages defined\",");
-      response->print("\"message\":\"The selected program has no stages.\"");
-      response->print("}");
-      req->send(response);
+      sendJsonError(req, "No stages defined", "The selected program has no stages.");
       return;
     }
 
     // Validate stage index against actual number of stages
     if (stageIdx < 0 || (size_t)stageIdx >= numStages) {
-      response->print("\"error\":\"Invalid stage index\",");
-      response->print("\"message\":\"Stage index must be between 0 and ");
-      response->print(String(numStages - 1));
-      response->print("\"}");
-      req->send(response);
+      String msg = "Stage index must be between 0 and " + String(numStages - 1);
+      sendJsonError(req, "Invalid stage index", msg);
       return;
     }
 
@@ -1513,7 +1532,7 @@ server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
     programStartTime = time(nullptr);
 
     // Patch: Do NOT reset all actualStageStartTimes. Mark previous as completed, set current if not set.
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < MAX_PROGRAM_STAGES; i++) {
       if (i < stageIdx) {
         // Mark previous stages as completed (set to a nonzero dummy value, e.g., programStartTime - 1000 * (stageIdx - i))
         if (actualStageStartTimes[i] == 0) actualStageStartTimes[i] = programStartTime - 1000 * (stageIdx - i);
