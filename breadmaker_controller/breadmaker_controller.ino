@@ -2260,14 +2260,27 @@ void loop() {
         stageComplete = true;
       }
     }
+    // --- Stage advancement logic (now in correct scope) ---
+if (stageComplete) {
+  customStageIdx++;
+  customStageStart = millis();
+  customMixIdx = 0;
+  customMixStepStart = 0;
+  saveResumeState();
+  stageJustAdvanced = true;
+  if (debugSerial) Serial.printf("[ADVANCE] Stage advanced to %d\n", customStageIdx);
+  temp = getAveragedTemperature(); // Update temp instead of declaring new one
+  yield(); delay(1);
+  return;
+}
   // (Fermentation timing handled at top of loop; nothing needed here)
-  }else {
-      yield(); delay(100);
-      return;
-    }
-    // (Fermentation timing handled at top of loop; nothing needed here)
-    // ...existing code...
+  } else {
+    yield(); delay(100);
+    return;
+  }
+
   
+
   temp = getAveragedTemperature(); // Update temp instead of declaring new one
   yield(); delay(1);
 }
