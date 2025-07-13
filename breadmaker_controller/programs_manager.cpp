@@ -21,8 +21,16 @@ void loadPrograms() {
   DeserializationError err = deserializeJson(doc, f);
   f.close();
   if (err) return;
+  int nextId = 0;
   for (JsonObject pobj : doc.as<JsonArray>()) {
     Program p;
+    // Read id if present, else assign sequentially
+    if (pobj.containsKey("id")) {
+      p.id = pobj["id"];
+      if (p.id >= nextId) nextId = p.id + 1;
+    } else {
+      p.id = nextId++;
+    }
     p.name = pobj["name"].as<String>();
     p.notes = pobj["notes"] | String("");
     p.icon = pobj["icon"] | String("");
@@ -51,5 +59,45 @@ void loadPrograms() {
     }
     programs.push_back(p);
   }
+}
+
+// Save programs to LittleFS (including id)
+void savePrograms() {
+  DynamicJsonDocument doc(8192);
+  JsonArray arr = doc.to<JsonArray>();
+  for (const Program& p : programs) {
+    JsonObject pobj = arr.createNestedObject();
+    pobj["id"] = p.id;
+    pobj["name"] = p.name;
+    pobj["notes"] = p.notes;
+    pobj["icon"] = p.icon;
+    pobj["fermentBaselineTemp"] = p.fermentBaselineTemp;
+    pobj["fermentQ10"] = p.fermentQ10;
+    JsonArray stages = pobj.createNestedArray("customStages");
+    for (const CustomStage& cs : p.customStages) {
+      JsonObject st = stages.createNestedObject();
+      st["label"] = cs.label;
+      st["min"] = cs.min;
+      st["temp"] = cs.temp;
+      st["noMix"] = cs.noMix;
+      st["isFermentation"] = cs.isFermentation;
+      st["instructions"] = cs.instructions;
+      st["light"] = cs.light;
+      st["buzzer"] = cs.buzzer;
+      JsonArray mixArr = st.createNestedArray("mixPattern");
+      for (const MixStep& ms : cs.mixPattern) {
+        JsonObject m = mixArr.createNestedObject();
+        m["mixSec"] = ms.mixSec;
+        m["waitSec"] = ms.waitSec;
+        m["durationSec"] = ms.durationSec;
+      }
+    }
+  }
+  File f = LittleFS.open("/programs.json", "w");
+  if (f) {
+    serializeJsonPretty(doc, f);
+    f.close();
+  }
+}
 }
 

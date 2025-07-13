@@ -1,5 +1,6 @@
 [
     {
+        "id": 0,
         "name": "Bread - Sourdough Basic",
         "fermentBaselineTemp": 20,
         "fermentQ10": 2,
@@ -61,6 +62,7 @@
         ]
     },
     {
+        "id": 1,
         "name": "Bread - Sourdough In-Machine",
         "customStages": [
             {
@@ -179,6 +181,7 @@
         ]
     },
     {
+        "id": 2,
         "name": "Bread - Sourdough Pizza Dough",
         "customStages": [
             {
@@ -233,6 +236,7 @@
         ]
     },
     {
+        "id": 3,
         "name": "Bread - White Basic",
         "fermentBaselineTemp": 20,
         "fermentQ10": 2,
@@ -290,6 +294,7 @@
         ]
     },
     {
+        "id": 4,
         "name": "Bread - Whole Wheat",
         "customStages": [
             {
@@ -343,6 +348,7 @@
         ]
     },
     {
+        "id": 5,
         "name": "Bread - Enriched Sweet",
         "customStages": [
             {
@@ -397,6 +403,7 @@
         ]
     },
     {
+        "id": 6,
         "name": "Bread - Rye",
         "customStages": [
             {
@@ -451,6 +458,7 @@
         ]
     },
     {
+        "id": 7,
         "name": "Dairy - Yogurt Making",
         "customStages": [
             {
@@ -469,6 +477,7 @@
         ]
     },
     {
+        "id": 8,
         "name": "Dairy - Soft Cheese",
         "customStages": [
             {
@@ -487,6 +496,7 @@
         ]
     },
     {
+        "id": 9,
         "name": "Dessert - Chocolate Tempering",
         "customStages": [
             {
@@ -517,6 +527,7 @@
         ]
     },
     {
+        "id": 10,
         "name": "Dessert - Soft Caramel",
         "customStages": [
             {
@@ -574,6 +585,7 @@
         ]
     },
     {
+        "id": 11,
         "name": "Utility - Sous Vide",
         "customStages": [
             {
@@ -592,6 +604,7 @@
         ]
     },
     {
+        "id": 12,
         "name": "Utility - Herb Drying",
         "customStages": [
             {
@@ -610,6 +623,7 @@
         ]
     },
     {
+        "id": 13,
         "name": "Utility - Butter Melting",
         "customStages": [
             {
@@ -641,6 +655,7 @@
         ]
     },
     {
+        "id": 14,
         "name": "Utility - Sanitize Container",
         "customStages": [
             {
@@ -672,6 +687,7 @@
         ]
     },
     {
+        "id": 15,
         "name": "Utility - Proof Box",
         "customStages": [
             {

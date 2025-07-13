@@ -28,6 +28,7 @@ struct CustomStage {
 
 // --- Program struct ---
 struct Program {
+    int id = -1; // Unique program ID
     String name;
     String notes;
     String icon; // optional, can be empty

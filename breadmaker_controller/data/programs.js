@@ -269,11 +269,17 @@ function renderPrograms(progs) {
     });
   }
   // Add program
-  if(document.getElementById('addProg'))
+  if(document.getElementById('addProg')) {
     document.getElementById('addProg').onclick = () => {
       const name = prompt('New program name:');
       if (name && !progs.some(p => p.name === name)) {
+        // Find the next available id (max id + 1)
+        let nextId = 0;
+        if (progs.length > 0) {
+          nextId = Math.max(...progs.map(p => typeof p.id === 'number' ? p.id : -1)) + 1;
+        }
         progs.push({
+          id: nextId,
           name,
           autolyseTime: 0, mixTime: 5, bulkTemp: 25, bulkTime: 60, knockDownTime: 2,
           riseTemp: 30, riseTime: 40, bake1Temp: 170, bake1Time: 15,
@@ -283,6 +289,9 @@ function renderPrograms(progs) {
         renderPrograms(progs);
       }
     };
+  }
+    // Render id as a hidden, non-editable field
+    html += `<input type="hidden" data-idx="${idx}" data-field="id" value="${typeof p.id === 'number' ? p.id : ''}" readonly>`;
   // Save all
   if(document.getElementById('saveAll'))
     document.getElementById('saveAll').onclick = async () => {

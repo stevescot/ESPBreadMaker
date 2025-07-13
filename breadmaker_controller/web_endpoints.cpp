@@ -359,38 +359,43 @@ void stateMachineEndpoints(AsyncWebServer& server)
     req->send(response);
   });
   server.on("/select", HTTP_GET, [](AsyncWebServerRequest* req){
+    // Select by id (preferred)
     if (req->hasParam("idx")) {
-      int idx = req->getParam("idx")->value().toInt();
-      if (idx >= 0 && idx < (int)programs.size()) {
-        programState.activeProgramId = idx;
-        updateActiveProgramVars(); // Update program variables
+      int id = req->getParam("idx")->value().toInt();
+      int foundIdx = -1;
+      for (size_t i = 0; i < programs.size(); ++i) {
+        if (programs[i].id == id) { foundIdx = i; break; }
+      }
+      if (foundIdx >= 0) {
+        programState.activeProgramId = foundIdx;
+        updateActiveProgramVars();
         programState.isRunning = false;
         saveSettings();
-        saveResumeState(); // <--- Save resume state on program select (by idx)
+        saveResumeState();
         req->send(200, "text/plain", "Selected");
         return;
       }
-      req->send(400, "text/plain", "Bad program index");
+      req->send(400, "text/plain", "Bad program id");
       return;
     }
+    // Fallback: select by name (legacy)
     if (req->hasParam("name")) {
       const char* name = req->getParam("name")->value().c_str();
-      // Find index by name
       int foundIdx = -1;
       for (size_t i = 0; i < programs.size(); ++i) {
         if (programs[i].name == name) { foundIdx = i; break; }
       }
       if (foundIdx >= 0) {
         programState.activeProgramId = foundIdx;
-        updateActiveProgramVars(); // Update program variables
+        updateActiveProgramVars();
         programState.isRunning = false;
         saveSettings();
-        saveResumeState(); // <--- Save resume state on program select (by name)
+        saveResumeState();
         req->send(200, "text/plain", "Selected");
         return;
       }
     }
-    req->send(400, "text/plain", "Bad program name or index");
+    req->send(400, "text/plain", "Bad program name or id");
   });
     server.on("/setStartAt", HTTP_GET, [](AsyncWebServerRequest* req){
   if (req->hasParam("time")) {
@@ -972,10 +977,11 @@ void homeAssistantEndpoint(AsyncWebServer& server)
     response->print("\",");
     if (programState.activeProgramId < programs.size()) {
       response->printf("\"program\":\"%s\",", programs[programState.activeProgramId].name.c_str());
+      response->printf("\"programId\":%d,", programs[programState.activeProgramId].id);
     } else {
       response->print("\"program\":\"\",");
+      response->print("\"programId\":-1,");
     }
-    response->printf("\"programId\":%u,", (unsigned)programState.activeProgramId);
     response->printf("\"temperature\":%.2f,", tempAvg.averagedTemperature);
     response->printf("\"setpoint\":%.2f,", pid.Setpoint);
     response->printf("\"heater\":%s,", heaterState ? "true" : "false");

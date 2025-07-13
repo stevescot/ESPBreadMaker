@@ -302,38 +302,27 @@ function updateStageProgress(currentStage, statusData) {
 let lastProgramList = [];
 function populateProgramDropdown(s) {
   let select = document.getElementById('progSelect');
-  // Only use window.cachedPrograms for program list
-  let programNames = [];
-  if (window.cachedPrograms) {
-    if (Array.isArray(window.cachedPrograms)) {
-      if (window.cachedPrograms.length > 0 && typeof window.cachedPrograms[0] === 'object' && window.cachedPrograms[0].name) {
-        programNames = window.cachedPrograms.map(p => p.name);
-      } else {
-        programNames = window.cachedPrograms;
-      }
-    } else if (typeof window.cachedPrograms === 'object') {
-      programNames = Object.keys(window.cachedPrograms);
-    }
-  }
-
+  // Use window.cachedPrograms for program list
+  let programs = Array.isArray(window.cachedPrograms) ? window.cachedPrograms : [];
   if (select) {
     // Always clear and repopulate the dropdown to avoid stale options
     const prevValue = select.value;
     select.innerHTML = '';
-    programNames.forEach((name, idx) => {
+    programs.forEach((p, idx) => {
       let opt = document.createElement('option');
-      opt.value = idx;
-      opt.textContent = name;
+      opt.value = (typeof p.id === 'number') ? p.id : idx;
+      opt.textContent = p.name || `Program ${idx+1}`;
       select.appendChild(opt);
     });
     // Restore previous selection if possible
-    if (prevValue && select.options[prevValue]) {
-      select.selectedIndex = prevValue;
+    if (prevValue && select.querySelector(`option[value="${prevValue}"]`)) {
+      select.value = prevValue;
     }
     // Attach change listener only once
     if (!select.hasChangeListener) {
       select.onchange = function () {
-        fetch('/select?idx=' + this.value)
+        const selectedId = this.value;
+        fetch('/select?id=' + encodeURIComponent(selectedId))
           .then(r => {
             if (r.ok) {
               return fetch('/status').then(r => r.json());
@@ -342,23 +331,29 @@ function populateProgramDropdown(s) {
           })
           .then(s => {
             window.updateStatus(s);
-            populateStageDropdown(this.value);
+            // Find program index by id for stage dropdown
+            const idx = programs.findIndex(p => String(p.id) === String(selectedId));
+            populateStageDropdown(idx);
             updateCombinedStartButton();
           })
           .catch(err => console.error('Program selection failed:', err));
       };
       select.hasChangeListener = true;
     }
-    // Update selected index using programId from status if available
-    let correctIdx = -1;
+    // Update selected option using programId from status if available
+    let correctId = null;
     if (s && typeof s.programId === 'number') {
-      correctIdx = s.programId;
+      correctId = s.programId;
     } else if (s && typeof s.program === 'string') {
-      correctIdx = programNames.indexOf(s.program);
+      // Find by name fallback
+      const found = programs.find(p => p.name === s.program);
+      if (found) correctId = found.id;
     }
-    if (correctIdx >= 0 && select.selectedIndex !== correctIdx) {
-      select.selectedIndex = correctIdx;
-      populateStageDropdown(correctIdx);
+    if (correctId !== null && select.value !== String(correctId)) {
+      select.value = String(correctId);
+      // Find program index by id for stage dropdown
+      const idx = programs.findIndex(p => String(p.id) === String(correctId));
+      populateStageDropdown(idx);
     }
   }
   let curProg = document.getElementById('currentProg');

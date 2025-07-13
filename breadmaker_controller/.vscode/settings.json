@@ -24,7 +24,8 @@
         "algorithm": "cpp",
         "iterator": "cpp",
         "utility": "cpp",
-        "rope": "cpp"
+        "rope": "cpp",
+        "thread": "cpp"
     },
     
     // Exclude build and temporary files from file explorer
