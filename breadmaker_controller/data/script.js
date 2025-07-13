@@ -41,11 +41,13 @@ function formatDuration(seconds) {
   seconds = Math.round(seconds);
   let h = Math.floor(seconds / 3600);
   let m = Math.floor((seconds % 3600) / 60);
-  // Only show hours and minutes, never seconds
+  let s = seconds % 60;
   if (h > 0) {
     return h + 'h ' + (m < 10 ? '0' : '') + m + 'm';
-  } else {
+  } else if (m > 0) {
     return m + 'm';
+  } else {
+    return s + 's';
   }
 }
 
@@ -550,21 +552,17 @@ function updateFermentationInfo(s) {
   const fermentInfoEl = document.getElementById('fermentationInfo');
   const fermentFactorEl = document.getElementById('fermentFactor');
   const predictedCompleteEl = document.getElementById('predictedComplete');
-  const initialTempEl = document.getElementById('initialTemp');
+  // Remove initial fermentation temperature from display
   if (!fermentInfoEl) return;
-  // Always show fermentation info
   fermentInfoEl.style.display = 'block';
   // Fermentation factor
-  fermentFactorEl.textContent = (typeof s.fermentationFactor === 'number') ? s.fermentationFactor.toFixed(2) : '--';
+  if (fermentFactorEl) fermentFactorEl.textContent = (typeof s.fermentationFactor === 'number') ? s.fermentationFactor.toFixed(2) : '--';
   // Remove predicted complete from UI
   if (predictedCompleteEl) predictedCompleteEl.textContent = '';
-  // Initial temp
-  if (typeof s.initialFermentTemp === 'number') {
-    initialTempEl.innerHTML = s.initialFermentTemp.toFixed(1) + '&deg;C';
-  } else {
-    initialTempEl.innerHTML = '--&deg;C';
-  }
-  // No extra closing brace here
+  // Do not display initial fermentation temperature
+  // If you want to remove the element from the DOM, you can do so here:
+  const initialTempEl = document.getElementById('initialTemp');
+  if (initialTempEl) initialTempEl.style.display = 'none';
 }
 
 // ---- Program Ready At (Custom Stages Only) ----

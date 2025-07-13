@@ -12,7 +12,7 @@ FEATURES:
  - Manual icon toggles (motor, heater, light, buzzer)
  - LittleFS for persistent storage (programs, UI)
  - Status shows stage, time left (d:h:m:s), state of outputs, temperature (RTD analog input on A0)
- - OTA update page at /update (ESPAsyncHTTPUpdateServer)
+
 */
 
 #include <Arduino.h>
@@ -21,7 +21,7 @@ FEATURES:
 #include <LittleFS.h>
 //#include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include <ESPAsyncHTTPUpdateServer.h>
+
 #include <ArduinoJson.h>
 #include <PID_v1.h>
 #include <map>
@@ -40,7 +40,7 @@ FEATURES:
 
 // --- Web server and OTA ---
 AsyncWebServer server(80); // Main web server
-ESPAsyncHTTPUpdateServer httpUpdater; // OTA update server
+
 //WebSocketsServer wsStatusServer = WebSocketsServer(81); // WebSocket server for status changes
 
 // --- Pin assignments ---
@@ -1724,8 +1724,6 @@ server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
   req->send(200, "text/html", out);
 });
 server.serveStatic("/", LittleFS, "/");
-  // Register OTA update handler for /update endpoint
-  httpUpdater.setup(&server);
   server.begin();
   Serial.println(F("HTTP server started"));
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
