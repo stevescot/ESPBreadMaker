@@ -46,15 +46,15 @@ AsyncWebServer server(80); // Main web server
 // PIN_RTD now defined in globals.cpp
 // (Output pins are defined in outputs_manager.cpp)
 
-// --- PID parameters for temperature control ---
-double Setpoint, Input, Output;
-double Kp=2.0, Ki=5.0, Kd=1.0;
-unsigned long pidSampleTime = 1000;  // PID sample time in milliseconds
-PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
-// --- PID component terms for debug/graphing ---
-double pidP = 0.0, pidI = 0.0, pidD = 0.0;
-double lastInput = 0.0; // For D calculation
-double lastITerm = 0.0; // For I calculation
+
+// --- PID control struct instance ---
+PIDControl pid;
+
+// --- Program state struct instance (needed for web_endpoints.cpp extern reference) ---
+ProgramState programState;
+
+// In setup(), initialize the PID controller:
+// pid.controller = new PID(&pid.Input, &pid.Output, &pid.Setpoint, pid.Kp, pid.Ki, pid.Kd, DIRECT);
 
 // --- Time-proportional control variables ---
 unsigned long windowStartTime = 0;
@@ -310,16 +310,18 @@ void setup() {
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   
   // --- Initialize PID controller ---
-  myPID.SetMode(AUTOMATIC);
-  myPID.SetOutputLimits(0, 1);  // Output range: 0 (0% duty) to 1 (100% duty)
-  myPID.SetSampleTime(pidSampleTime);    // Use loaded sample time (relay-friendly)
-  Setpoint = 0;  // Default to no heating
+  if (pid.controller) {
+    pid.controller->SetMode(AUTOMATIC);
+    pid.controller->SetOutputLimits(0, 1);  // Output range: 0 (0% duty) to 1 (100% duty)
+    pid.controller->SetSampleTime(pid.sampleTime);    // Use loaded sample time (relay-friendly)
+  }
+  pid.Setpoint = 0;  // Default to no heating
   windowStartTime = millis();   // Initialize time-proportional control
   lastPIDOutput = 0.0;          // Initialize last PID output for dynamic window adjustment
   
   if (debugSerial) {
     Serial.printf("[PID] Initialized with Kp=%.6f, Ki=%.6f, Kd=%.6f, SampleTime=%lums\n", 
-                  Kp, Ki, Kd, pidSampleTime);
+                  pid.Kp, pid.Ki, pid.Kd, pid.sampleTime);
   }
   
   // --- Initialize temperature averaging system ---
@@ -579,18 +581,18 @@ void checkDelayedResume() {
 
 // Handles manual mode operation, including direct PID and output control.
 void handleManualMode() {
-  if (manualMode && Setpoint > 0) {
-    Input = getAveragedTemperature();
-    double error = Setpoint - Input;
-    double dInput = Input - lastInput;
-    double kpUsed = Kp, kiUsed = Ki, kdUsed = Kd;
-    double sampleTimeSec = pidSampleTime / 1000.0;
-    pidP = kpUsed * error;
-    lastITerm += kiUsed * error * sampleTimeSec;
-    pidI = lastITerm;
-    pidD = -kdUsed * dInput / sampleTimeSec;
-    lastInput = Input;
-    myPID.Compute();
+  if (manualMode && pid.Setpoint > 0) {
+    pid.Input = getAveragedTemperature();
+    double error = pid.Setpoint - pid.Input;
+    double dInput = pid.Input - pid.lastInput;
+    double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
+    double sampleTimeSec = pid.sampleTime / 1000.0;
+    pid.pidP = kpUsed * error;
+    pid.lastITerm += kiUsed * error * sampleTimeSec;
+    pid.pidI = pid.lastITerm;
+    pid.pidD = -kdUsed * dInput / sampleTimeSec;
+    pid.lastInput = pid.Input;
+    if (pid.controller) pid.controller->Compute();
     updateTimeProportionalHeater();
     setMotor(false);
     setLight(false);
@@ -644,8 +646,8 @@ void handleCustomStages(bool &stageJustAdvanced) {
       return;
     }
     CustomStage &st = p.customStages[customStageIdx];
-    Setpoint = st.temp;
-    Input = getAveragedTemperature();
+    pid.Setpoint = st.temp;
+    pid.Input = getAveragedTemperature();
     if (st.isFermentation) {
       // Already handled at top of loop
     } else {
@@ -684,30 +686,30 @@ void handleCustomStages(bool &stageJustAdvanced) {
       predictedCompleteTime = (unsigned long)(programStartTime + (unsigned long)(cumulativePredictedSec));
     }
     if (st.temp > 0 || manualMode) {
-      if (manualMode && Setpoint > 0) {
-        Input = getAveragedTemperature();
-        double error = Setpoint - Input;
-        double dInput = Input - lastInput;
-        double kpUsed = Kp, kiUsed = Ki, kdUsed = Kd;
-        double sampleTimeSec = pidSampleTime / 1000.0;
-        pidP = kpUsed * error;
-        lastITerm += kiUsed * error * sampleTimeSec;
-        pidI = lastITerm;
-        pidD = -kdUsed * dInput / sampleTimeSec;
-        lastInput = Input;
-        myPID.Compute();
+      if (manualMode && pid.Setpoint > 0) {
+        pid.Input = getAveragedTemperature();
+        double error = pid.Setpoint - pid.Input;
+        double dInput = pid.Input - pid.lastInput;
+        double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
+        double sampleTimeSec = pid.sampleTime / 1000.0;
+        pid.pidP = kpUsed * error;
+        pid.lastITerm += kiUsed * error * sampleTimeSec;
+        pid.pidI = pid.lastITerm;
+        pid.pidD = -kdUsed * dInput / sampleTimeSec;
+        pid.lastInput = pid.Input;
+        if (pid.controller) pid.controller->Compute();
         updateTimeProportionalHeater();
       } else if (!manualMode && st.temp > 0) {
-        double error = Setpoint - Input;
-        double dInput = Input - lastInput;
-        double kpUsed = Kp, kiUsed = Ki, kdUsed = Kd;
-        double sampleTimeSec = pidSampleTime / 1000.0;
-        pidP = kpUsed * error;
-        lastITerm += kiUsed * error * sampleTimeSec;
-        pidI = lastITerm;
-        pidD = -kdUsed * dInput / sampleTimeSec;
-        lastInput = Input;
-        myPID.Compute();
+        double error = pid.Setpoint - pid.Input;
+        double dInput = pid.Input - pid.lastInput;
+        double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
+        double sampleTimeSec = pid.sampleTime / 1000.0;
+        pid.pidP = kpUsed * error;
+        pid.lastITerm += kiUsed * error * sampleTimeSec;
+        pid.pidI = pid.lastITerm;
+        pid.pidD = -kdUsed * dInput / sampleTimeSec;
+        pid.lastInput = pid.Input;
+        if (pid.controller) pid.controller->Compute();
         updateTimeProportionalHeater();
       } else {
         setHeater(false);
@@ -957,7 +959,7 @@ void updateTimeProportionalHeater() {
   // Initialize window start time if not set
   if (windowStartTime == 0) {
     windowStartTime = nowMs;
-    lastPIDOutput = Output; // Initialize last PID output
+    lastPIDOutput = pid.Output; // Initialize last PID output
   }
   
   // Check for dynamic window restart conditions
@@ -967,28 +969,28 @@ void updateTimeProportionalHeater() {
   // Dynamic window restart logic:
   // If PID output changes significantly AND we've been in this window for at least MIN_WINDOW_TIME
   if (elapsed >= MIN_WINDOW_TIME) {
-    double outputChange = fabs(Output - lastPIDOutput);
+    double outputChange = fabs(pid.Output - lastPIDOutput);
     
     // Case 1: Large increase in output (e.g., needs more heat quickly)
-    if (outputChange >= PID_CHANGE_THRESHOLD && Output > lastPIDOutput) {
+    if (outputChange >= PID_CHANGE_THRESHOLD && pid.Output > lastPIDOutput) {
       // If we're currently in the OFF part of the window and need much more heat
-      if (elapsed >= onTime && Output > 0.7) { // Need >70% output but heater is OFF
+      if (elapsed >= onTime && pid.Output > 0.7) { // Need >70% output but heater is OFF
         shouldRestartWindow = true;
         if (debugSerial) {
           Serial.printf("[PID-DYNAMIC] Restarting window: Output jumped from %.2f to %.2f (need more heat)\n", 
-                       lastPIDOutput, Output);
+                       lastPIDOutput, pid.Output);
         }
       }
     }
     
     // Case 2: Large decrease in output (e.g., overheating, need to turn off quickly)
-    else if (outputChange >= PID_CHANGE_THRESHOLD && Output < lastPIDOutput) {
+    else if (outputChange >= PID_CHANGE_THRESHOLD && pid.Output < lastPIDOutput) {
       // If we're currently in the ON part of the window and need much less heat
-      if (elapsed < onTime && Output < 0.3) { // Need <30% output but heater is ON
+      if (elapsed < onTime && pid.Output < 0.3) { // Need <30% output but heater is ON
         shouldRestartWindow = true;
         if (debugSerial) {
           Serial.printf("[PID-DYNAMIC] Restarting window: Output dropped from %.2f to %.2f (reduce heat)\n", 
-                       lastPIDOutput, Output);
+                       lastPIDOutput, pid.Output);
         }
       }
     }
@@ -1002,12 +1004,12 @@ void updateTimeProportionalHeater() {
       dynamicRestartCount++;
       
       // Determine restart reason
-      if (Output > lastPIDOutput && Output > 0.7) {
-        lastDynamicRestartReason = "Need more heat (output increased to " + String((Output*100), 1) + "%)";
-      } else if (Output < lastPIDOutput && Output < 0.3) {
-        lastDynamicRestartReason = "Reduce heat (output decreased to " + String((Output*100), 1) + "%)";
+      if (pid.Output > lastPIDOutput && pid.Output > 0.7) {
+        lastDynamicRestartReason = "Need more heat (output increased to " + String((pid.Output*100), 1) + "%)";
+      } else if (pid.Output < lastPIDOutput && pid.Output < 0.3) {
+        lastDynamicRestartReason = "Reduce heat (output decreased to " + String((pid.Output*100), 1) + "%)";
       } else {
-        lastDynamicRestartReason = "Output change (from " + String((lastPIDOutput*100), 1) + "% to " + String((Output*100), 1) + "%)";
+        lastDynamicRestartReason = "Output change (from " + String((lastPIDOutput*100), 1) + "% to " + String((pid.Output*100), 1) + "%)";
       }
       
       if (debugSerial) {
@@ -1017,10 +1019,10 @@ void updateTimeProportionalHeater() {
     }
     
     windowStartTime = nowMs;
-    lastPIDOutput = Output; // Update the last known PID output
+    lastPIDOutput = pid.Output; // Update the last known PID output
     
     // Calculate ON time for this window based on PID output (0.0 to 1.0)
-    onTime = (unsigned long)(Output * windowSize);
+    onTime = (unsigned long)(pid.Output * windowSize);
     
     // Relay protection: smart minimum ON/OFF times
     const unsigned long minOnTime = 1000;   // Minimum 1 second ON (was 5s - too aggressive!)
@@ -1028,11 +1030,11 @@ void updateTimeProportionalHeater() {
     const float minOutputThreshold = 0.02;  // Below 2% output, turn OFF completely
 \
     // If output is very low, just turn OFF completely (avoid excessive short cycling)
-    if (Output < minOutputThreshold) {
+    if (pid.Output < minOutputThreshold) {
       onTime = 0;  // Complete OFF
     }
     // If output is 100% (or very close), force ON for entire window
-    else if (Output >= 0.999f) {
+    else if (pid.Output >= 0.999f) {
       onTime = windowSize;
     }
     // Otherwise apply minimum ON/OFF time logic
@@ -1048,7 +1050,7 @@ void updateTimeProportionalHeater() {
     
     if (debugSerial && millis() % 15000 < 50) {  // Debug every 15 seconds
       Serial.printf("[PID-RELAY] Setpoint: %.1f°C, Input: %.1f°C, Output: %.2f, OnTime: %lums/%lums (%.1f%%) %s\n", 
-                   Setpoint, Input, Output, onTime, windowSize, (onTime * 100.0 / windowSize),
+                   pid.Setpoint, pid.Input, pid.Output, onTime, windowSize, (onTime * 100.0 / windowSize),
                    shouldRestartWindow ? "[DYNAMIC]" : "[NORMAL]");
     }
   }
@@ -1068,17 +1070,17 @@ void streamHeaterDebugStatus(Print& out) {
   float onTimePercent = (windowSize > 0) ? ((float)onTime / windowSize) * 100 : 0;
 
   bool canRestartNow = (elapsed >= MIN_WINDOW_TIME);
-  bool significantChange = (abs(Output - lastPIDOutput) >= PID_CHANGE_THRESHOLD);
-  bool needMoreHeat = (Output > lastPIDOutput && elapsed >= onTime && Output > 0.7);
-  bool needLessHeat = (Output < lastPIDOutput && elapsed < onTime && Output < 0.3);
-  unsigned long theoreticalOnTime = (unsigned long)(Output * windowSize);
+  bool significantChange = (abs(pid.Output - lastPIDOutput) >= PID_CHANGE_THRESHOLD);
+  bool needMoreHeat = (pid.Output > lastPIDOutput && elapsed >= onTime && pid.Output > 0.7);
+  bool needLessHeat = (pid.Output < lastPIDOutput && elapsed < onTime && pid.Output < 0.3);
+  unsigned long theoreticalOnTime = (unsigned long)(pid.Output * windowSize);
   unsigned long minOffTime =  5000;
   bool relayProtectionActive = (theoreticalOnTime > 0 && (windowSize - theoreticalOnTime) < minOffTime);
 
   out.print("{");
   out.printf("\"heater_physical_state\":%s,", heaterState ? "true" : "false");
-  out.printf("\"pid_output_percent\":%.2f,", Output * 100);
-  out.printf("\"setpoint\":%.2f,", Setpoint);
+  out.printf("\"pid_output_percent\":%.2f,", pid.Output * 100);
+  out.printf("\"setpoint\":%.2f,", pid.Setpoint);
   out.printf("\"manual_mode\":%s,", manualMode ? "true" : "false");
   out.printf("\"is_running\":%s,", isRunning ? "true" : "false");
   out.printf("\"window_size_ms\":%lu,", windowSize);
@@ -1091,13 +1093,13 @@ void streamHeaterDebugStatus(Print& out) {
   out.printf("\"last_restart_reason\":\"%s\",", lastDynamicRestartReason.c_str());
   out.printf("\"last_restart_ago_ms\":%lu,", (lastDynamicRestart > 0) ? (nowMs - lastDynamicRestart) : 0);
   out.printf("\"last_pid_output\":%.2f,", lastPIDOutput);
-  out.printf("\"pid_output_change\":%.2f,", abs(Output - lastPIDOutput));
+  out.printf("\"pid_output_change\":%.2f,", abs(pid.Output - lastPIDOutput));
   out.printf("\"change_threshold\":%.2f,", PID_CHANGE_THRESHOLD);
   out.printf("\"can_restart_now\":%s,", canRestartNow ? "true" : "false");
   out.printf("\"significant_change\":%s,", significantChange ? "true" : "false");
   out.printf("\"restart_condition_more_heat\":%s,", needMoreHeat ? "true" : "false");
   out.printf("\"restart_condition_less_heat\":%s,", needLessHeat ? "true" : "false");
-  out.printf("\"setpoint_override\":%s,", (Setpoint <= 0) ? "true" : "false");
+  out.printf("\"setpoint_override\":%s,", (pid.Setpoint <= 0) ? "true" : "false");
   out.printf("\"running_override\":%s,", !isRunning ? "true" : "false");
   out.printf("\"manual_override\":%s,", manualMode ? "true" : "false");
   out.printf("\"relay_protection_active\":%s,", relayProtectionActive ? "true" : "false");
@@ -1148,18 +1150,19 @@ void loadSettings() {
   
   // Load PID parameters
   if (doc.containsKey("pidKp")) {
-    Kp = doc["pidKp"] | 2.0;
-    Ki = doc["pidKi"] | 5.0;
-    Kd = doc["pidKd"] | 1.0;
-    pidSampleTime = doc["pidSampleTime"] | 1000;
+    pid.Kp = doc["pidKp"] | 2.0;
+    pid.Ki = doc["pidKi"] | 5.0;
+    pid.Kd = doc["pidKd"] | 1.0;
+    pid.sampleTime = doc["pidSampleTime"] | 1000;
     windowSize = doc["pidWindowSize"] | 30000;
     
     // Apply loaded PID parameters
-    myPID.SetTunings(Kp, Ki, Kd);
-    myPID.SetSampleTime(pidSampleTime);
-    
-    Serial.printf("[loadSettings] PID parameters loaded: Kp=%.6f, Ki=%.6f, Kd=%.6f\n", Kp, Ki, Kd);
-    Serial.printf("[loadSettings] Timing parameters loaded: SampleTime=%lums, WindowSize=%lums\n", pidSampleTime, windowSize);
+    if (pid.controller) {
+      pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
+      pid.controller->SetSampleTime(pid.sampleTime);
+    }
+    Serial.printf("[loadSettings] PID parameters loaded: Kp=%.6f, Ki=%.6f, Kd=%.6f\n", pid.Kp, pid.Ki, pid.Kd);
+    Serial.printf("[loadSettings] Timing parameters loaded: SampleTime=%lums, WindowSize=%lums\n", pid.sampleTime, windowSize);
   }
   
   // Load temperature averaging parameters
@@ -1225,10 +1228,10 @@ void saveSettings() {
     doc["lastProgram"] = programs[activeProgramId].name; // Deprecated, for backward compatibility
   }
   // Save PID parameters
-  doc["pidKp"] = Kp;
-  doc["pidKi"] = Ki;
-  doc["pidKd"] = Kd;
-  doc["pidSampleTime"] = pidSampleTime;
+  doc["pidKp"] = pid.Kp;
+  doc["pidKi"] = pid.Ki;
+  doc["pidKd"] = pid.Kd;
+  doc["pidSampleTime"] = pid.sampleTime;
   doc["pidWindowSize"] = windowSize;
   // Save temperature averaging parameters
   doc["tempSampleCount"] = tempSampleCount;
