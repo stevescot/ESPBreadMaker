@@ -2014,7 +2014,6 @@ void loop() {
 
     // Only trigger scheduled start ONCE per schedule
     if (scheduledStart && time(nullptr) >= scheduledStart && !scheduledStartTriggered) {
-      scheduledStart = 0;
       scheduledStartTriggered = true;
       isRunning = true;
 
@@ -2026,7 +2025,6 @@ void loop() {
         customStageIdx = 0;
         if (debugSerial) Serial.printf("[SCHEDULED] Starting from beginning\n");
       }
-      scheduledStartStage = -1; // Reset after use
 
       customMixIdx = 0;
       customStageStart = millis();
@@ -2038,6 +2036,10 @@ void loop() {
       actualStageStartTimes[customStageIdx] = programStartTime; // Record start time for the actual starting stage
 
       saveResumeState(); // Save on scheduled start
+
+      // --- Clear scheduled start to prevent retriggering ---
+      scheduledStart = 0;
+      scheduledStartStage = -1;
     }
     // Reset the trigger if a new schedule is set
     if (!scheduledStart) scheduledStartTriggered = false;
