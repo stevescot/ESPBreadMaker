@@ -147,6 +147,7 @@ void stopBreadmaker();
 bool isStartupDelayComplete();
 
 // --- Delete Folder API endpoint ---
+// Recursively deletes a folder and all its contents from the LittleFS filesystem.
 void deleteFolderRecursive(const String& path) {
   Dir dir = LittleFS.openDir(path);
   while (dir.next()) {
@@ -161,6 +162,7 @@ void deleteFolderRecursive(const String& path) {
 }
 
 // Helper function to send a JSON error response
+// Sends a JSON-formatted error message to the client with a specified HTTP status code.
 void sendJsonError(AsyncWebServerRequest* req, const String& error, const String& message, int code = 400) {
   AsyncResponseStream *response = req->beginResponseStream("application/json");
   response->print("{");
@@ -173,6 +175,8 @@ void sendJsonError(AsyncWebServerRequest* req, const String& error, const String
   req->send(response);
 }
 
+// Initializes all hardware, outputs, file systems, and loads configuration and calibration data.
+// Also sets up WiFi, mDNS, and captive portal as needed.
 void initialState(){
   // --- Ensure all outputs are OFF immediately on boot/reset ---
   setHeater(false);
@@ -293,6 +297,8 @@ void initialState(){
 }
 
 
+// Arduino setup function. Initializes system state, registers web endpoints, starts the web server,
+// configures PID and temperature averaging, and waits for NTP time sync.
 void setup() {
   initialState();
   registerWebEndpoints(server);
@@ -335,6 +341,7 @@ void setup() {
 const char* RESUME_FILE = "/resume.json";
 unsigned long lastResumeSave = 0;
 
+// Saves the current breadmaker state (program, stage, timing, etc.) to LittleFS for resume after reboot.
 void saveResumeState() {
   File f = LittleFS.open(RESUME_FILE, "w");
   if (!f) return;
@@ -355,10 +362,12 @@ void saveResumeState() {
   f.close();
 }
 
+// Removes the saved resume state file from LittleFS.
 void clearResumeState() {
   LittleFS.remove(RESUME_FILE);
 }
 
+// Loads the breadmaker's previous state from LittleFS and restores program, stage, and timing.
 void loadResumeState() {
   File f = LittleFS.open(RESUME_FILE, "r");
   if (!f) return;
@@ -456,6 +465,7 @@ void loadResumeState() {
 }
 
 // Helper to reset fermentation tracking variables
+// Resets all fermentation tracking variables to initial values for a new fermentation stage.
 void resetFermentationTracking(float temp) {
   initialFermentTemp = 0.0;
   fermentationFactor = 1.0;
@@ -468,12 +478,19 @@ void resetFermentationTracking(float temp) {
 }
 
 // --- Helper function declarations ---
+// Updates fermentation timing and advances stage if weighted time is met.
 void updateFermentationTiming(bool &stageJustAdvanced);
+// Checks if a delayed resume is needed after startup delay.
 void checkDelayedResume();
+// Handles manual mode operation (direct user control).
 void handleManualMode();
+// Handles scheduled program start logic.
 void handleScheduledStart(bool &scheduledStartTriggered);
+// Handles the main custom stage logic for the breadmaker program.
 void handleCustomStages(bool &stageJustAdvanced);
 
+// Arduino main loop. Handles temperature sampling, fermentation, manual mode, scheduled start,
+// and custom stage logic for breadmaker operation.
 void loop() {
   updateTemperatureSampling();
   updateBuzzerTone();
@@ -501,6 +518,7 @@ void loop() {
 }
 
 // --- Helper function definitions ---
+// Updates fermentation timing, calculates weighted time, and advances stage if needed.
 void updateFermentationTiming(bool &stageJustAdvanced) {
   if (programs.size() > 0 && activeProgramId < programs.size() && customStageIdx < programs[activeProgramId].customStages.size()) {
     Program &p = programs[activeProgramId];
@@ -541,6 +559,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
   }
 }
 
+// Checks if the breadmaker should resume a previous program after the startup delay.
 void checkDelayedResume() {
   static bool delayedResumeChecked = false;
   if (!delayedResumeChecked && isStartupDelayComplete()) {
@@ -558,6 +577,7 @@ void checkDelayedResume() {
   }
 }
 
+// Handles manual mode operation, including direct PID and output control.
 void handleManualMode() {
   if (manualMode && Setpoint > 0) {
     Input = getAveragedTemperature();
@@ -583,6 +603,7 @@ void handleManualMode() {
   }
 }
 
+// Handles logic for starting a scheduled program at a specific time and stage.
 void handleScheduledStart(bool &scheduledStartTriggered) {
   if (scheduledStart && time(nullptr) >= scheduledStart && !scheduledStartTriggered) {
     scheduledStartTriggered = true;
@@ -607,6 +628,7 @@ void handleScheduledStart(bool &scheduledStartTriggered) {
   if (!scheduledStart) scheduledStartTriggered = false;
 }
 
+// Handles the execution and advancement of custom program stages, including mixing and fermentation.
 void handleCustomStages(bool &stageJustAdvanced) {
   Program &p = programs[activeProgramId];
   if (!p.customStages.empty()) {
@@ -810,6 +832,7 @@ void handleCustomStages(bool &stageJustAdvanced) {
 }
 
 // --- Update active program variables ---
+// Updates pointers and counters for the currently active breadmaker program.
 void updateActiveProgramVars() {
   if (programs.size() > 0 && activeProgramId < programs.size()) {
     customProgram = &programs[activeProgramId];
@@ -821,6 +844,7 @@ void updateActiveProgramVars() {
 }
 
 // --- Temperature averaging functions ---
+// Samples the temperature sensor, applies outlier rejection and weighted averaging, and updates the global temperature value.
 void updateTemperatureSampling() {
   unsigned long nowMs = millis();
   
@@ -920,11 +944,13 @@ void updateTemperatureSampling() {
   }
 }
 
+// Returns the most recently calculated averaged temperature.
 float getAveragedTemperature() {
   return averagedTemperature;
 }
 
 // --- Time-proportional PID control function ---
+// Implements time-proportional relay control for the heater using PID output and dynamic windowing.
 void updateTimeProportionalHeater() {
   unsigned long nowMs = millis();
   
@@ -1034,6 +1060,7 @@ void updateTimeProportionalHeater() {
 }
 
 // --- Enhanced heater status reporting for debugging ---
+// Streams detailed heater and PID status as JSON for debugging purposes.
 void streamHeaterDebugStatus(Print& out) {
   unsigned long nowMs = millis();
   unsigned long elapsed = (windowStartTime > 0) ? (nowMs - windowStartTime) : 0;
@@ -1080,11 +1107,13 @@ void streamHeaterDebugStatus(Print& out) {
 }
 
 // --- Startup delay check for temperature sensor stabilization ---
+// Returns true if the startup delay for temperature sensor stabilization has elapsed.
 bool isStartupDelayComplete() {
   unsigned long elapsed = millis() - startupTime;
   return elapsed >= STARTUP_DELAY_MS;
 }
 
+// Stops the breadmaker, turns off all outputs, and saves state.
 void stopBreadmaker() {
   if (debugSerial) Serial.println("[ACTION] stopBreadmaker() called");
   isRunning = false;
@@ -1095,6 +1124,7 @@ void stopBreadmaker() {
   clearResumeState();
 }
 
+// Loads breadmaker settings (PID, temperature, program selection, etc.) from LittleFS.
 void loadSettings() {
   Serial.println("[loadSettings] Loading settings...");
   File f = LittleFS.open(SETTINGS_FILE, "r");
@@ -1184,6 +1214,7 @@ void loadSettings() {
   f.close();
   Serial.println("[loadSettings] Settings loaded.");
 }
+// Saves breadmaker settings (PID, temperature, program selection, etc.) to LittleFS.
 void saveSettings() {
   Serial.println("[saveSettings] Saving settings...");
   DynamicJsonDocument doc(768);
