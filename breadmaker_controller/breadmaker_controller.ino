@@ -1565,6 +1565,9 @@ server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
     }
 
     saveResumeState();
+    // --- Clear any pending scheduled start to prevent repeated retriggering ---
+    scheduledStart = 0;
+    scheduledStartStage = -1;
   });
 
   // --- Combined timed start at stage endpoint ---
