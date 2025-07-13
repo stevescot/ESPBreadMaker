@@ -73,7 +73,75 @@ void homeAssistantEndpoint(AsyncWebServer& server);
 void calibrationEndpoints(AsyncWebServer& server);
 void fileEndPoints(AsyncWebServer& server);
 
+// Core endpoints previously in setup()
+void coreEndpoints(AsyncWebServer& server) {
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest* req){
+        req->send(LittleFS, "/index.html", "text/html");
+    });
+    server.on("/status", HTTP_GET, [](AsyncWebServerRequest* req){
+        if (debugSerial) Serial.println(F("[DEBUG] /status requested (streaming)"));
+        AsyncResponseStream *response = req->beginResponseStream("application/json");
+        streamStatusJson(*response);
+        req->send(response);
+    });
+    server.on("/api/firmware_info", HTTP_GET, [](AsyncWebServerRequest* req){
+        AsyncResponseStream *response = req->beginResponseStream("application/json");
+        response->print("{");
+        response->print("\"build\":\"");
+        response->print(FIRMWARE_BUILD_DATE);
+        response->print("\"}");
+        req->send(response);
+    });
+    server.on("/api/restart", HTTP_POST, [](AsyncWebServerRequest* req){
+        req->send(200, "application/json", "{\"status\":\"restarting\"}");
+        delay(200);
+        ESP.restart();
+    });
+    server.on("/api/output_mode", HTTP_GET, [](AsyncWebServerRequest* req){
+        AsyncResponseStream *response = req->beginResponseStream("application/json");
+        response->print("{");
+        response->printf("\"mode\":\"%s\"", (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog");
+        response->print("}");
+        req->send(response);
+    });
+    server.on("/api/output_mode", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+        [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+            DynamicJsonDocument doc(128);
+            if (deserializeJson(doc, data, len)) { req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); return; }
+            const char* mode = doc["mode"] | "analog";
+            outputMode = (strcmp(mode, "digital") == 0) ? OUTPUT_DIGITAL : OUTPUT_ANALOG;
+            saveSettings();
+            AsyncResponseStream *response = req->beginResponseStream("application/json");
+            response->print("{");
+            response->printf("\"mode\":\"%s\"", (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog");
+            response->print("}");
+            req->send(response);
+        }
+    );
+    server.on("/api/settings", HTTP_GET, [](AsyncWebServerRequest* req){
+        AsyncResponseStream *response = req->beginResponseStream("application/json");
+        response->print("{");
+        response->printf("\"debugSerial\":%s", debugSerial ? "true" : "false");
+        response->print("}");
+        req->send(response);
+    });
+    server.on("/api/settings", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+        [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+            DynamicJsonDocument doc(128);
+            if (deserializeJson(doc, data, len)) { req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); return; }
+            if (doc.containsKey("debugSerial")) debugSerial = doc["debugSerial"];
+            saveSettings();
+            AsyncResponseStream *response = req->beginResponseStream("application/json");
+            response->print("{");
+            response->printf("\"debugSerial\":%s", debugSerial ? "true" : "false");
+            response->print("}");
+            req->send(response);
+        }
+    );
+}
+
 void registerWebEndpoints(AsyncWebServer& server) {
+    coreEndpoints(server);
     stateMachineEndpoints(server);
     manualOutputEndpoints(server);
     pidControlEndpoints(server);
