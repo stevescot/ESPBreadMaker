@@ -2260,6 +2260,11 @@ void loop() {
         stageComplete = true;
       }
     }
+  // (Fermentation timing handled at top of loop; nothing needed here)
+  }else {
+      yield(); delay(100);
+      return;
+    }
     // (Fermentation timing handled at top of loop; nothing needed here)
     // ...existing code...
   
