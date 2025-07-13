@@ -2261,29 +2261,7 @@ void loop() {
       }
     }
     // (Fermentation timing handled at top of loop; nothing needed here)
-      if (scheduledStartStage >= 0 && scheduledStartStage < maxCustomStages) {
-        customStageIdx = scheduledStartStage;
-        if (debugSerial) Serial.printf("[SCHEDULED] Starting at stage %d\n", scheduledStartStage);
-      } else {
-        customStageIdx = 0;
-        if (debugSerial) Serial.printf("[SCHEDULED] Starting from beginning\n");
-      }
-      scheduledStartStage = -1; // Reset after use
-      
-      customMixIdx = 0;
-      customStageStart = millis();
-      customMixStepStart = 0;
-      programStartTime = time(nullptr);
-      
-      // Initialize actual stage start times array for scheduled start
-      for (int i = 0; i < 20; i++) actualStageStartTimes[i] = 0;
-      actualStageStartTimes[customStageIdx] = programStartTime; // Record start time for the actual starting stage
-      
-      saveResumeState(); // Save on scheduled start
-    } else {
-      yield(); delay(100);
-      return;
-    }
+    // ...existing code...
   
   temp = getAveragedTemperature(); // Update temp instead of declaring new one
   yield(); delay(1);
