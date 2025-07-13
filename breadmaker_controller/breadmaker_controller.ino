@@ -108,11 +108,6 @@ unsigned long startupTime = 0;           // Time when system started (millis())
 // --- Temperature averaging system (encapsulated) ---
 TemperatureAveragingState tempAvg;
 
-// --- Dynamic restart tracking struct ---
-DynamicRestartState dynamicRestart;
-
-// --- Fermentation tracking struct ---
-FermentationState fermentState;
 
 // --- Function prototypes ---
 void loadSettings();
@@ -524,7 +519,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
       unsigned long nowMs = millis();
       if (fermentState.fermentLastUpdateMs == 0) {
         fermentState.fermentLastTemp = actualTemp;
-        fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
+        fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0); // Q10: factor < 1 means faster at higher temp
         fermentState.fermentLastUpdateMs = nowMs;
         fermentState.fermentWeightedSec = 0.0;
       } else if (isRunning) {
@@ -534,7 +529,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
         fermentState.fermentLastUpdateMs = nowMs;
       }
-      fermentState.fermentationFactor = fermentState.fermentLastFactor;
+      fermentState.fermentationFactor = fermentState.fermentLastFactor; // For reference: multiply planned time by this factor for Q10
       double plannedStageSec = (double)st.min * 60.0;
       double epsilon = 0.05;
       if (!stageJustAdvanced && (fermentState.fermentWeightedSec + epsilon >= plannedStageSec)) {
@@ -659,23 +654,28 @@ void handleCustomStages(bool &stageJustAdvanced) {
             float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
             float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
             float temp = fermentState.fermentLastTemp;
-            float factor = pow(q10, (baseline - temp) / 10.0);
-            cumulativePredictedSec += plannedStageSec * factor;
+            float factor = pow(q10, (baseline - temp) / 10.0); // Q10: factor < 1 means faster at higher temp
+            cumulativePredictedSec += plannedStageSec * factor; // Multiply: higher temp = less time
           } else if (i == customStageIdx) {
             double elapsedSec = fermentState.fermentWeightedSec;
             double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
             elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
-            double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor);
+            // For current fermentation stage, estimate remaining time:
+            // elapsedSec is already weighted (i.e., elapsed * factor), so to get the equivalent real elapsed time at the current temperature,
+            // we divide by the factor. This is the only place division is correct: it "unweights" the elapsed time so we can subtract from planned.
+            // All future/remaining time is then multiplied by the factor for Q10 logic.
+            double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor); // Division: unweight elapsed, then multiply remaining by factor
             if (remainSec < 0) remainSec = 0;
-            cumulativePredictedSec += elapsedSec + remainSec * fermentState.fermentLastFactor;
+            // Add elapsed (weighted) plus remaining (multiply by factor for Q10 logic)
+            cumulativePredictedSec += elapsedSec + remainSec * fermentState.fermentLastFactor; // Multiply: remaining time is shorter at higher temp
           } else {
-            cumulativePredictedSec += plannedStageSec * fermentState.fermentLastFactor;
+            cumulativePredictedSec += plannedStageSec * fermentState.fermentLastFactor; // Multiply: higher temp = less time
           }
         } else {
           cumulativePredictedSec += plannedStageSec;
         }
       }
-      fermentState.predictedCompleteTime = (unsigned long)(programStartTime + (unsigned long)(cumulativePredictedSec));
+      fermentState.predictedCompleteTime = (unsigned long)(programStartTime + (unsigned long)(cumulativePredictedSec)); // All predicted times use Q10 multiply logic
     }
     if (st.temp > 0 || manualMode) {
       if (manualMode && pid.Setpoint > 0) {
@@ -801,11 +801,38 @@ void handleCustomStages(bool &stageJustAdvanced) {
         Serial.printf("[FERMENT] Not yet advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentState.fermentWeightedSec, fermentTargetSec, st.min);
       }
     } else {
-      if (millis() - customStageStart >= (unsigned long)st.min * 60000UL) {
+      unsigned long elapsedMs = millis() - customStageStart;
+      unsigned long stageMs = (unsigned long)st.min * 60000UL;
+      if (elapsedMs >= stageMs) {
+        stageComplete = true;
+      } else if (stageMs > 0 && elapsedMs >= stageMs - 1000 && !stageComplete) {
+        // Safety: If time left is 0 but not advancing, log warning
+        if (debugSerial) Serial.printf("[WARN] Time left is 0 for non-fermentation stage %d but not advancing (elapsed=%lu, stageMs=%lu)\n", (int)customStageIdx, elapsedMs, stageMs);
+      }
+    }
+    // Extra safety: If time left is 0 for non-fermentation and not advancing, force advancement
+    if (!st.isFermentation) {
+      unsigned long elapsedMs = millis() - customStageStart;
+      unsigned long stageMs = (unsigned long)st.min * 60000UL;
+      if (stageMs > 0 && elapsedMs > stageMs + 2000 && !stageComplete) {
+        if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of non-fermentation stage %d after time expired (elapsed=%lu, stageMs=%lu)\n", (int)customStageIdx, elapsedMs, stageMs);
         stageComplete = true;
       }
     }
     if (stageComplete) {
+      // If this was a fermentation stage, update predictedCompleteTime to now (or recalculate for next stage)
+      if (st.isFermentation) {
+        // Estimate remaining time for this stage (should be near zero if just advanced, but recalc for next stage)
+        double plannedStageSec = (double)st.min * 60.0;
+        double epsilon = 0.05;
+        double remainWeightedSec = plannedStageSec - fermentState.fermentWeightedSec;
+        if (remainWeightedSec < 0) remainWeightedSec = 0;
+        double factor = fermentState.fermentLastFactor > 0 ? fermentState.fermentLastFactor : 1.0; // Q10: factor < 1 means faster
+        time_t now = time(nullptr);
+        time_t predicted = now + (time_t)(remainWeightedSec * factor); // Multiply: higher temp = less time
+        fermentState.predictedCompleteTime = predicted;
+        if (debugSerial) Serial.printf("[FERMENT] Stage advanced, predictedCompleteTime set to %lu (now=%lu, remainWeightedSec=%.2f, factor=%.3f) [MULTIPLY]\n", (unsigned long)predicted, (unsigned long)now, remainWeightedSec, factor);
+      }
       customStageIdx++;
       customStageStart = millis();
       customMixIdx = 0;

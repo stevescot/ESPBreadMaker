@@ -21,11 +21,9 @@ extern ProgramState programState;
 #include "globals.h" // For PIDControl struct
 extern PIDControl pid;
 extern unsigned long windowSize, onTime, startupTime;
-extern float averagedTemperature;
-extern int tempSampleCount, tempRejectCount;
-extern unsigned long tempSampleInterval;
-extern float fermentationFactor, initialFermentTemp;
-extern unsigned long lastFermentAdjust, predictedCompleteTime;
+// Use tempAvg and fermentState structs from globals.h
+extern TemperatureAveragingState tempAvg;
+extern FermentationState fermentState;
 extern bool thermalRunawayDetected, sensorFaultDetected;
 extern time_t scheduledStart;
 extern int scheduledStartStage;
@@ -52,13 +50,10 @@ extern unsigned long lightOnTime;
 extern unsigned long windowStartTime;
 // Now accessed via pid.pidP, pid.pidI, pid.pidD, pid.lastInput, pid.lastITerm
 extern OutputStates outputStates;
-extern float fermentLastTemp, fermentLastFactor;
-extern unsigned long fermentLastUpdateMs;
-extern double fermentWeightedSec;
+// Use fermentState struct fields
 
 // Now accessed via pid.controller
-extern bool tempSamplesReady;
-extern int tempSampleIndex;
+// Use tempAvg struct fields
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 #endif
@@ -204,22 +199,22 @@ void stateMachineEndpoints(AsyncWebServer& server)
     programState.actualStageStartTimes[0] = programState.programStartTime; // Record actual start of first stage
 
     // --- Fermentation tracking: set immediately if first stage is fermentation ---
-    initialFermentTemp = 0.0;
-    fermentationFactor = 1.0;
-    predictedCompleteTime = 0;
-    lastFermentAdjust = 0;
+    fermentState.initialFermentTemp = 0.0;
+    fermentState.fermentationFactor = 1.0;
+    fermentState.predictedCompleteTime = 0;
+    fermentState.lastFermentAdjust = 0;
     if (programState.customProgram && !programState.customProgram->customStages.empty()) {
       CustomStage &st = programState.customProgram->customStages[0];
       if (st.isFermentation) {
         float baseline = programState.customProgram->fermentBaselineTemp > 0 ? programState.customProgram->fermentBaselineTemp : 20.0;
         float q10 = programState.customProgram->fermentQ10 > 0 ? programState.customProgram->fermentQ10 : 2.0;
         float actualTemp = getAveragedTemperature();
-        initialFermentTemp = actualTemp;
-        fermentationFactor = pow(q10, (baseline - actualTemp) / 10.0);
+        fermentState.initialFermentTemp = actualTemp;
+        fermentState.fermentationFactor = pow(q10, (baseline - actualTemp) / 10.0);
         unsigned long plannedStageMs = (unsigned long)st.min * 60000UL;
-        unsigned long adjustedStageMs = plannedStageMs * fermentationFactor;
-        predictedCompleteTime = millis() + adjustedStageMs;
-        lastFermentAdjust = millis();
+        unsigned long adjustedStageMs = plannedStageMs * fermentState.fermentationFactor;
+        fermentState.predictedCompleteTime = millis() + adjustedStageMs;
+        fermentState.lastFermentAdjust = millis();
       }
     }
     saveResumeState();
@@ -280,10 +275,10 @@ void stateMachineEndpoints(AsyncWebServer& server)
     if (programState.customStageIdx < MAX_PROGRAM_STAGES) programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
 
     // --- Fermentation tracking: set immediately if new stage is fermentation ---
-    initialFermentTemp = 0.0;
-    fermentationFactor = 1.0;
-    predictedCompleteTime = 0;
-    lastFermentAdjust = 0;
+    fermentState.initialFermentTemp = 0.0;
+    fermentState.fermentationFactor = 1.0;
+    fermentState.predictedCompleteTime = 0;
+    fermentState.lastFermentAdjust = 0;
     if (programState.activeProgramId < programs.size()) {
       Program &p = programs[programState.activeProgramId];
       if (programState.customStageIdx < p.customStages.size()) {
@@ -292,12 +287,12 @@ void stateMachineEndpoints(AsyncWebServer& server)
           float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
           float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
           float actualTemp = getAveragedTemperature();
-          initialFermentTemp = actualTemp;
-          fermentationFactor = pow(q10, (baseline - actualTemp) / 10.0);
+          fermentState.initialFermentTemp = actualTemp;
+          fermentState.fermentationFactor = pow(q10, (baseline - actualTemp) / 10.0);
           unsigned long plannedStageMs = (unsigned long)st.min * 60000UL;
-          unsigned long adjustedStageMs = plannedStageMs * fermentationFactor;
-          predictedCompleteTime = millis() + adjustedStageMs;
-          lastFermentAdjust = millis();
+          unsigned long adjustedStageMs = plannedStageMs * fermentState.fermentationFactor;
+          fermentState.predictedCompleteTime = millis() + adjustedStageMs;
+          fermentState.lastFermentAdjust = millis();
         }
       }
     }
@@ -495,22 +490,22 @@ server.on("/start_at_stage", HTTP_GET, [](AsyncWebServerRequest* req){
     }
 
     // --- Fermentation tracking: set immediately if this stage is fermentation ---
-    initialFermentTemp = 0.0;
-    fermentationFactor = 1.0;
-    predictedCompleteTime = 0;
-    lastFermentAdjust = 0;
+    fermentState.initialFermentTemp = 0.0;
+    fermentState.fermentationFactor = 1.0;
+    fermentState.predictedCompleteTime = 0;
+    fermentState.lastFermentAdjust = 0;
     if (programState.customProgram && (size_t)stageIdx < programState.customProgram->customStages.size()) {
       CustomStage &st = programState.customProgram->customStages[stageIdx];
       float baseline = programState.customProgram->fermentBaselineTemp > 0 ? programState.customProgram->fermentBaselineTemp : 20.0;
       float q10 = programState.customProgram->fermentQ10 > 0 ? programState.customProgram->fermentQ10 : 2.0;
       if (st.isFermentation) {
         float actualTemp = getAveragedTemperature();
-        initialFermentTemp = actualTemp;
-        fermentationFactor = pow(q10, (baseline - actualTemp) / 10.0);
+        fermentState.initialFermentTemp = actualTemp;
+        fermentState.fermentationFactor = pow(q10, (baseline - actualTemp) / 10.0);
         unsigned long plannedStageMs = (unsigned long)st.min * 60000UL;
-        unsigned long adjustedStageMs = plannedStageMs * fermentationFactor;
-        predictedCompleteTime = millis() + adjustedStageMs;
-        lastFermentAdjust = millis();
+        unsigned long adjustedStageMs = plannedStageMs * fermentState.fermentationFactor;
+        fermentState.predictedCompleteTime = millis() + adjustedStageMs;
+        fermentState.lastFermentAdjust = millis();
       }
     }
 
@@ -692,9 +687,9 @@ void manualOutputEndpoints(AsyncWebServer& server)
       response->printf("\"ki\":%.6f,", pid.Ki);
       response->printf("\"kd\":%.6f,", pid.Kd);
       response->printf("\"sample_time_ms\":%lu,", pid.sampleTime);
-      response->printf("\"temp_sample_count\":%d,", tempSampleCount);
-      response->printf("\"temp_reject_count\":%d,", tempRejectCount);
-      response->printf("\"temp_sample_interval_ms\":%lu,", tempSampleInterval);
+      response->printf("\"temp_sample_count\":%d,", tempAvg.tempSampleCount);
+      response->printf("\"temp_reject_count\":%d,", tempAvg.tempRejectCount);
+      response->printf("\"temp_sample_interval_ms\":%lu,", tempAvg.tempSampleInterval);
       unsigned long nowMs = millis();
       unsigned long elapsed = (windowStartTime > 0) ? (nowMs - windowStartTime) : 0;
       response->printf("\"window_size_ms\":%lu,", windowSize);
@@ -807,30 +802,30 @@ void pidControlEndpoints(AsyncWebServer& server)
     if (req->hasParam("temp_samples")) {
       int newTempSamples = req->getParam("temp_samples")->value().toInt();
       if (newTempSamples >= 5 && newTempSamples <= MAX_TEMP_SAMPLES) {
-        int oldTempSamples = tempSampleCount;
-        tempSampleCount = newTempSamples;
+        int oldTempSamples = tempAvg.tempSampleCount;
+        tempAvg.tempSampleCount = newTempSamples;
         updated = true;
         
         // Intelligent reset logic - only reset if necessary
         if (newTempSamples != oldTempSamples) {
           if (newTempSamples < oldTempSamples) {
             // Reducing sample count - keep existing data if we have enough
-            if (tempSamplesReady && tempSampleIndex >= newTempSamples) {
+            if (tempAvg.tempSamplesReady && tempAvg.tempSampleIndex >= newTempSamples) {
               // We have enough samples, just adjust the count
               if (debugSerial) Serial.printf("[TEMP] Sample count reduced %d→%d, keeping existing data\n", oldTempSamples, newTempSamples);
             } else {
               // Not enough samples yet, reset to rebuild with new count
-              tempSamplesReady = false;
-              tempSampleIndex = 0;
+              tempAvg.tempSamplesReady = false;
+              tempAvg.tempSampleIndex = 0;
               if (debugSerial) Serial.printf("[TEMP] Sample count reduced %d→%d, reset required\n", oldTempSamples, newTempSamples);
             }
           } else {
             // Increasing sample count - keep existing data, just need more samples
             if (debugSerial) Serial.printf("[TEMP] Sample count increased %d→%d, keeping existing data\n", oldTempSamples, newTempSamples);
-            tempSamplesReady = false; // Need to fill the larger array
+            tempAvg.tempSamplesReady = false; // Need to fill the larger array
           }
         } else {
-          if (debugSerial) Serial.printf("[TEMP] Sample count unchanged (%d), preserving data\n", tempSampleCount);
+          if (debugSerial) Serial.printf("[TEMP] Sample count unchanged (%d), preserving data\n", tempAvg.tempSampleCount);
         }
       } else {
         errors += String("Temp samples out of range (5-") + MAX_TEMP_SAMPLES + "); ";
@@ -840,10 +835,10 @@ void pidControlEndpoints(AsyncWebServer& server)
       int newTempReject = req->getParam("temp_reject")->value().toInt();
       if (newTempReject >= 0 && newTempReject <= 10) {
         // Ensure we have at least 3 samples after rejection
-        int effectiveSamples = tempSampleCount - (2 * newTempReject);
+        int effectiveSamples = tempAvg.tempSampleCount - (2 * newTempReject);
         if (effectiveSamples >= 3) {
-          int oldTempReject = tempRejectCount;
-          tempRejectCount = newTempReject;
+          int oldTempReject = tempAvg.tempRejectCount;
+          tempAvg.tempRejectCount = newTempReject;
           updated = true;
           
           // Intelligent reset - only if reject count actually changed
@@ -851,7 +846,7 @@ void pidControlEndpoints(AsyncWebServer& server)
             if (debugSerial) Serial.printf("[TEMP] Reject count changed %d→%d, data preserved\n", oldTempReject, newTempReject);
             // No reset needed - rejection is applied during calculation, not storage
           } else {
-            if (debugSerial) Serial.printf("[TEMP] Reject count unchanged (%d), data preserved\n", tempRejectCount);
+            if (debugSerial) Serial.printf("[TEMP] Reject count unchanged (%d), data preserved\n", tempAvg.tempRejectCount);
           }
         } else {
           errors += "Temp reject count too high (would leave <3 effective samples); ";
@@ -863,17 +858,17 @@ void pidControlEndpoints(AsyncWebServer& server)
     if (req->hasParam("temp_interval")) {
       int newTempInterval = req->getParam("temp_interval")->value().toInt();
       if (newTempInterval >= 100 && newTempInterval <= 5000) {
-        unsigned long oldTempInterval = tempSampleInterval;
-        tempSampleInterval = (unsigned long)newTempInterval;
+        unsigned long oldTempInterval = tempAvg.tempSampleInterval;
+        tempAvg.tempSampleInterval = (unsigned long)newTempInterval;
         updated = true;
         
         // Intelligent reset - timing change affects sample collection rhythm
         if (newTempInterval != oldTempInterval) {
-          if (debugSerial) Serial.printf("[TEMP] Sample interval changed %lums→%lums, preserving existing data\n", oldTempInterval, tempSampleInterval);
+          if (debugSerial) Serial.printf("[TEMP] Sample interval changed %lums→%lums, preserving existing data\n", oldTempInterval, tempAvg.tempSampleInterval);
           // Keep existing data - new interval will apply to future samples
           // No reset needed unless we want to maintain exact timing consistency
         } else {
-          if (debugSerial) Serial.printf("[TEMP] Sample interval unchanged (%lums), data preserved\n", tempSampleInterval);
+          if (debugSerial) Serial.printf("[TEMP] Sample interval unchanged (%lums), data preserved\n", tempAvg.tempSampleInterval);
         }
       } else {
         errors += "Temp interval out of range (100-5000ms); ";
@@ -892,9 +887,9 @@ void pidControlEndpoints(AsyncWebServer& server)
     response->printf("\"kd\":%.6f,", pid.Kd);
     response->printf("\"sample_time_ms\":%lu,", pid.sampleTime);
     response->printf("\"window_size_ms\":%lu,", windowSize);
-    response->printf("\"temp_sample_count\":%d,", tempSampleCount);
-    response->printf("\"temp_reject_count\":%d,", tempRejectCount);
-    response->printf("\"temp_sample_interval_ms\":%lu,", tempSampleInterval);
+      response->printf("\"temp_sample_count\":%d,", tempAvg.tempSampleCount);
+      response->printf("\"temp_reject_count\":%d,", tempAvg.tempRejectCount);
+      response->printf("\"temp_sample_interval_ms\":%lu,", tempAvg.tempSampleInterval);
     response->printf("\"updated\":%s,", updated ? "true" : "false");
     // Add intelligent update status information
     String updateDetails = "";
@@ -934,7 +929,7 @@ void pidControlEndpoints(AsyncWebServer& server)
         updateDetails = "Settings verified";
       }
       response->printf("\"update_details\":\"%s\",", updateDetails.c_str());
-      if (tempSamplesReady && !tempStructuralChange) {
+      if (tempAvg.tempSamplesReady && !tempStructuralChange) {
         response->print("\"data_preservation\":\"Temperature history preserved\",");
       } else if (tempStructuralChange) {
         response->print("\"data_preservation\":\"Intelligent data preservation applied\",");
@@ -981,7 +976,7 @@ void homeAssistantEndpoint(AsyncWebServer& server)
       response->print("\"program\":\"\",");
     }
     response->printf("\"programId\":%u,", (unsigned)programState.activeProgramId);
-    response->printf("\"temperature\":%.2f,", averagedTemperature);
+    response->printf("\"temperature\":%.2f,", tempAvg.averagedTemperature);
     response->printf("\"setpoint\":%.2f,", pid.Setpoint);
     response->printf("\"heater\":%s,", heaterState ? "true" : "false");
     response->printf("\"motor\":%s,", motorState ? "true" : "false");
@@ -1000,25 +995,25 @@ void homeAssistantEndpoint(AsyncWebServer& server)
         CustomStage &st = p.customStages[programState.customStageIdx];
         if (st.isFermentation) {
             double plannedStageSec = (double)st.min * 60.0;
-            double elapsedSec = fermentWeightedSec;
-            double realElapsedSec = (nowMs - fermentLastUpdateMs) / 1000.0;
-            elapsedSec += realElapsedSec * fermentLastFactor;
-            double remainSec = plannedStageSec - (elapsedSec / fermentLastFactor);
+            double elapsedSec = fermentState.fermentWeightedSec;
+            double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
+            elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
+            double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor);
             if (remainSec < 0) remainSec = 0;
-            stageReadyAt = now + (unsigned long)(remainSec * fermentLastFactor);
+            stageReadyAt = now + (unsigned long)(remainSec * fermentState.fermentLastFactor);
         } else if (programState.actualStageStartTimes[programState.customStageIdx] > 0) {
             stageReadyAt = programState.actualStageStartTimes[programState.customStageIdx] + (time_t)st.min * 60;
         }
         // Program ready at: predictedCompleteTime if running
-        programReadyAt = (unsigned long)predictedCompleteTime;
+        programReadyAt = (unsigned long)fermentState.predictedCompleteTime;
     }
     response->printf("\"stage_time_left\":%ld,", 0L); // TODO: implement if needed
     response->printf("\"stage_ready_at\":%lu,", stageReadyAt);
     response->printf("\"program_ready_at\":%lu,", programReadyAt);
     response->printf("\"startupDelayComplete\":%s,", isStartupDelayComplete() ? "true" : "false");
     response->printf("\"startupDelayRemainingMs\":%lu,", isStartupDelayComplete() ? 0UL : (STARTUP_DELAY_MS - (millis() - startupTime)));
-    response->printf("\"fermentationFactor\":%.2f,", fermentationFactor);
-    response->printf("\"initialFermentTemp\":%.2f,", initialFermentTemp);
+    response->printf("\"fermentationFactor\":%.2f,", fermentState.fermentationFactor);
+    response->printf("\"initialFermentTemp\":%.2f,", fermentState.initialFermentTemp);
     // Health info
     response->print("\"health\":{");
     response->printf("\"uptime_sec\":%lu,", millis() / 1000UL);
@@ -1067,7 +1062,7 @@ void homeAssistantEndpoint(AsyncWebServer& server)
     response->print("\"error_counts\":[0,0,0,0,0,0],");
     // Temperature control info
     response->print("\"temperature_control\":{");
-    response->printf("\"input\":%.2f,", averagedTemperature); // Averaged temp for legacy
+    response->printf("\"input\":%.2f,", tempAvg.averagedTemperature); // Averaged temp for legacy
     response->printf("\"pid_input\":%.2f,", pid.Input); // PID input (raw value used by PID)
     response->printf("\"output\":%.2f,", pid.Output * 100.0); // Output as percent
     response->printf("\"pid_output\":%.6f,", pid.Output); // PID output (0-1 float)
@@ -1085,9 +1080,9 @@ void homeAssistantEndpoint(AsyncWebServer& server)
     response->printf("\"ki\":%.6f,", pid.Ki);
     response->printf("\"kd\":%.6f,", pid.Kd);
     response->printf("\"sample_time_ms\":%lu,", pid.sampleTime);
-    response->printf("\"temp_sample_count\":%d,", tempSampleCount);
-    response->printf("\"temp_reject_count\":%d,", tempRejectCount);
-    response->printf("\"temp_sample_interval_ms\":%lu", tempSampleInterval);
+    response->printf("\"temp_sample_count\":%d,", tempAvg.tempSampleCount);
+    response->printf("\"temp_reject_count\":%d,", tempAvg.tempRejectCount);
+    response->printf("\"temp_sample_interval_ms\":%lu", tempAvg.tempSampleInterval);
     response->print("}");
     // --- Add any missing properties for Home Assistant integration ---
     // Add any additional properties here as needed for HA sensors
@@ -1112,7 +1107,7 @@ void homeAssistantEndpoint(AsyncWebServer& server)
       response->print("\"program\":\"\",");
     }
     response->printf("\"programId\":%u,", (unsigned)programState.activeProgramId);
-    response->printf("\"temperature\":%.2f,", averagedTemperature);
+    response->printf("\"temperature\":%.2f,", tempAvg.averagedTemperature);
     response->printf("\"setpoint\":%.2f,", pid.Setpoint);
     response->printf("\"heater\":%s,", heaterState ? "true" : "false");
     response->printf("\"motor\":%s,", motorState ? "true" : "false");
@@ -1131,25 +1126,25 @@ void homeAssistantEndpoint(AsyncWebServer& server)
         CustomStage &st = p.customStages[programState.customStageIdx];
         if (st.isFermentation) {
             double plannedStageSec = (double)st.min * 60.0;
-            double elapsedSec = fermentWeightedSec;
-            double realElapsedSec = (nowMs - fermentLastUpdateMs) / 1000.0;
-            elapsedSec += realElapsedSec * fermentLastFactor;
-            double remainSec = plannedStageSec - (elapsedSec / fermentLastFactor);
+            double elapsedSec = fermentState.fermentWeightedSec;
+            double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
+            elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
+            double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor);
             if (remainSec < 0) remainSec = 0;
-            stageReadyAt = now + (unsigned long)(remainSec * fermentLastFactor);
+            stageReadyAt = now + (unsigned long)(remainSec * fermentState.fermentLastFactor);
         } else if (programState.actualStageStartTimes[programState.customStageIdx] > 0) {
             stageReadyAt = programState.actualStageStartTimes[programState.customStageIdx] + (time_t)st.min * 60;
         }
         // Program ready at: predictedCompleteTime if running
-        programReadyAt = (unsigned long)predictedCompleteTime;
+        programReadyAt = (unsigned long)fermentState.predictedCompleteTime;
     }
     response->printf("\"stage_time_left\":%ld,", 0L); // TODO: implement if needed
     response->printf("\"stage_ready_at\":%lu,", stageReadyAt);
     response->printf("\"program_ready_at\":%lu,", programReadyAt);
     response->printf("\"startupDelayComplete\":%s,", isStartupDelayComplete() ? "true" : "false");
     response->printf("\"startupDelayRemainingMs\":%lu,", isStartupDelayComplete() ? 0UL : (STARTUP_DELAY_MS - (millis() - startupTime)));
-    response->printf("\"fermentationFactor\":%.2f,", fermentationFactor);
-    response->printf("\"initialFermentTemp\":%.2f,", initialFermentTemp);
+    response->printf("\"fermentationFactor\":%.2f,", fermentState.fermentationFactor);
+    response->printf("\"initialFermentTemp\":%.2f,", fermentState.initialFermentTemp);
     // Health info
     response->print("\"health\":{");
     response->printf("\"uptime_sec\":%lu,", millis() / 1000UL);
@@ -1198,7 +1193,7 @@ void homeAssistantEndpoint(AsyncWebServer& server)
     response->print("\"error_counts\":[0,0,0,0,0,0],");
     // Temperature control info
     response->print("\"temperature_control\":{");
-    response->printf("\"input\":%.2f,", averagedTemperature); // Averaged temp for legacy
+    response->printf("\"input\":%.2f,", tempAvg.averagedTemperature); // Averaged temp for legacy
     response->printf("\"pid_input\":%.2f,", pid.Input); // PID input (raw value used by PID)
     response->printf("\"output\":%.2f,", pid.Output * 100.0); // Output as percent
     response->printf("\"pid_output\":%.6f,", pid.Output); // PID output (0-1 float)
@@ -1216,9 +1211,9 @@ void homeAssistantEndpoint(AsyncWebServer& server)
     response->printf("\"ki\":%.6f,", pid.Ki);
     response->printf("\"kd\":%.6f,", pid.Kd);
     response->printf("\"sample_time_ms\":%lu,", pid.sampleTime);
-    response->printf("\"temp_sample_count\":%d,", tempSampleCount);
-    response->printf("\"temp_reject_count\":%d,", tempRejectCount);
-    response->printf("\"temp_sample_interval_ms\":%lu", tempSampleInterval);
+    response->printf("\"temp_sample_count\":%d,", tempAvg.tempSampleCount);
+    response->printf("\"temp_reject_count\":%d,", tempAvg.tempRejectCount);
+    response->printf("\"temp_sample_interval_ms\":%lu", tempAvg.tempSampleInterval);
     response->print("}");
     // --- Add any missing properties for Home Assistant integration ---
     // Add any additional properties here as needed for HA sensors
@@ -1670,7 +1665,7 @@ void streamStatusJson(Print& out) {
     }
     out.print("],");
     // Always report the program's fermentation factor (for display in UI)
-    fermentationFactor = fermentationFactorForProgram;
+    fermentState.fermentationFactor = fermentationFactorForProgram;
     // --- Predicted (temperature-adjusted) program end time ---
     out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)(programStartUnix + (unsigned long)(cumulativePredictedSec)));
     // --- Legacy: stageStartTimes array (planned, not adjusted) ---
@@ -1693,12 +1688,12 @@ void streamStatusJson(Print& out) {
       if (st.isFermentation) {
         // Calculate temperature-adjusted time left for fermentation stage
         double plannedStageSec = (double)st.min * 60.0;
-        double elapsedSec = fermentWeightedSec;
-        double realElapsedSec = (nowMs - fermentLastUpdateMs) / 1000.0;
-        elapsedSec += realElapsedSec * fermentLastFactor;
-        double remainSec = plannedStageSec - (elapsedSec / fermentLastFactor);
+        double elapsedSec = fermentState.fermentWeightedSec;
+        double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
+        elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
+        double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor);
         if (remainSec < 0) remainSec = 0;
-        fermentationStageTimeLeft = remainSec * fermentLastFactor;
+        fermentationStageTimeLeft = remainSec * fermentState.fermentLastFactor;
         stageLeft = (int)fermentationStageTimeLeft;
       } else {
         if (programState.actualStageStartTimes[programState.customStageIdx] > 0) {
@@ -1733,7 +1728,7 @@ void streamStatusJson(Print& out) {
   out.printf("\"timeLeft\":%d,", stageLeft);
   out.printf("\"stageReadyAt\":%lu,", (unsigned long)stageReadyAt);
   out.printf("\"programReadyAt\":%lu,", (unsigned long)programReadyAt);
-  out.printf("\"temp\":%.2f,", averagedTemperature);
+  out.printf("\"temp\":%.2f,", tempAvg.averagedTemperature);
   out.printf("\"motor\":%s,", motorState ? "true" : "false");
   out.printf("\"light\":%s,", lightState ? "true" : "false");
   out.printf("\"buzzer\":%s,", buzzerState ? "true" : "false");
@@ -1767,15 +1762,15 @@ void streamStatusJson(Print& out) {
   out.printf("\"heater\":%s,", heaterState ? "true" : "false");
   out.printf("\"buzzer\":%s,", buzzerState ? "true" : "false");
   // fermentation info
-  out.printf("\"fermentationFactor\":%.2f,", fermentationFactor);
-  out.printf("\"predictedCompleteTime\":%lu,", (unsigned long)predictedCompleteTime);
+  out.printf("\"fermentationFactor\":%.2f,", fermentState.fermentationFactor);
+  out.printf("\"predictedCompleteTime\":%lu,", (unsigned long)fermentState.predictedCompleteTime);
   // Also update programReadyAt to match predictedCompleteTime if running
   if (programState.isRunning) {
-    out.printf("\"programReadyAt\":%lu,", (unsigned long)predictedCompleteTime);
+    out.printf("\"programReadyAt\":%lu,", (unsigned long)fermentState.predictedCompleteTime);
   }
   // --- WiFi signal strength ---
   out.printf("\"wifiRssi\":%d,", WiFi.RSSI());
   out.printf("\"wifiConnected\":%s,", (WiFi.status() == WL_CONNECTED) ? "true" : "false");
-  out.printf("\"initialFermentTemp\":%.2f", initialFermentTemp);
+  out.printf("\"initialFermentTemp\":%.2f", fermentState.initialFermentTemp);
   out.print("}");
 }
