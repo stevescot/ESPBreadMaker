@@ -148,7 +148,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
   // --- Core state machine endpoints ---
   server.on("/start", HTTP_GET, [](AsyncWebServerRequest*req){
     if (debugSerial) Serial.println(F("[ACTION] /start called"));
-    
+    updateActiveProgramVars();
     // Debug: print active program info
     if (debugSerial && programState.activeProgramId < programs.size()) Serial.printf_P(PSTR("[START] activeProgram='%s' (id=%u), customProgram=%p\n"), programs[programState.activeProgramId].name.c_str(), (unsigned)programState.activeProgramId, (void*)programState.customProgram);
 
