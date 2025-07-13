@@ -7,8 +7,7 @@
 // --- Temperature safety flags ---
 bool thermalRunawayDetected = false;
 bool sensorFaultDetected = false;
-// --- Active program index (ID) ---
-unsigned int activeProgramId = 0; // Index of the active program in programNamesOrdered
+// --- Active program index (ID) now in programState ---
 /*
 FEATURES:
  - Replaces breadmaker logic board: controls motor, heater, light
@@ -71,17 +70,10 @@ int scheduledStartStage = -1; // Stage to start at when scheduled (-1 = start fr
 bool isRunning = false;           // Is the breadmaker running?
 // Removed activeProgramName and programNamesOrdered; use activeProgramId and programs[activeProgramId].name instead
 
-// --- Custom stage state variables (global, for customStages logic) ---
-size_t customStageIdx = 0;         // Index of current custom stage
-size_t customMixIdx = 0;           // Index of current mix step within stage
-unsigned long customStageStart = 0;    // Start time (ms) of current custom stage
-unsigned long customMixStepStart = 0;  // Start time (ms) of current mix step
-time_t programStartTime = 0;           // Absolute program start time (seconds since epoch)
-time_t actualStageStartTimes[MAX_PROGRAM_STAGES];      // Array to store actual start times of each stage (max 20 stages)
-
-// --- Active program variables ---
-Program* customProgram = nullptr;  // Pointer to current active program
-size_t maxCustomStages = 0;        // Number of stages in current program
+// --- Custom stage state variables now in programState ---
+// Use programState.customStageIdx, programState.customMixIdx, programState.customStageStart, programState.customMixStepStart, programState.programStartTime, programState.actualStageStartTimes, etc.
+// --- Active program variables now in programState ---
+// Use programState.activeProgramId, programState.customProgram, programState.maxCustomStages
 
 // --- Light/Buzzer management ---
 unsigned long lightOnTime = 0;    // When was the light turned on?
@@ -324,16 +316,16 @@ void saveResumeState() {
   File f = LittleFS.open(RESUME_FILE, "w");
   if (!f) return;
   f.print("{\n");
-  f.printf("  \"programIdx\":%u,\n", (unsigned)activeProgramId);
-  f.printf("  \"customStageIdx\":%u,\n", (unsigned)customStageIdx);
-  f.printf("  \"customMixIdx\":%u,\n", (unsigned)customMixIdx);
-  f.printf("  \"elapsedStageSec\":%lu,\n", (customStageStart > 0) ? (millis() - customStageStart) / 1000UL : 0UL);
-  f.printf("  \"elapsedMixSec\":%lu,\n", (customMixStepStart > 0) ? (millis() - customMixStepStart) / 1000UL : 0UL);
-  f.printf("  \"programStartTime\":%lu,\n", (unsigned long)programStartTime);
-  f.printf("  \"isRunning\":%s,\n", isRunning ? "true" : "false");
+  f.printf("  \"programIdx\":%u,\n", (unsigned)programState.activeProgramId);
+  f.printf("  \"customStageIdx\":%u,\n", (unsigned)programState.customStageIdx);
+  f.printf("  \"customMixIdx\":%u,\n", (unsigned)programState.customMixIdx);
+  f.printf("  \"elapsedStageSec":%lu,\n", (programState.customStageStart > 0) ? (millis() - programState.customStageStart) / 1000UL : 0UL);
+  f.printf("  \"elapsedMixSec":%lu,\n", (programState.customMixStepStart > 0) ? (millis() - programState.customMixStepStart) / 1000UL : 0UL);
+  f.printf("  \"programStartTime":%lu,\n", (unsigned long)programState.programStartTime);
+  f.printf("  \"isRunning":%s,\n", programState.isRunning ? "true" : "false");
    f.print("  \"actualStageStartTimes\":[");
   for (int i = 0; i < 20; i++) {
-    f.printf("%s%lu", (i > 0) ? "," : "", (unsigned long)actualStageStartTimes[i]);
+    f.printf("%s%lu", (i > 0) ? "," : "", (unsigned long)programState.actualStageStartTimes[i]);
   }
   f.print("]\n");
   f.print("}\n");
@@ -356,64 +348,64 @@ void loadResumeState() {
   // Restore program by id (id is now the index in the programs vector, but may be a dummy slot)
   int progIdx = doc["programIdx"] | -1;
   if (progIdx >= 0 && progIdx < (int)programs.size() && programs[progIdx].id == progIdx && programs[progIdx].id != -1) {
-    activeProgramId = progIdx;
+    programState.activeProgramId = progIdx;
     updateActiveProgramVars(); // Update program variables after loading
   } else {
     // Fallback: select first valid program (id!=-1) or 0 if none
-    activeProgramId = 0;
+    programState.activeProgramId = 0;
     for (size_t i = 0; i < programs.size(); ++i) {
-      if (programs[i].id != -1) { activeProgramId = i; break; }
+      if (programs[i].id != -1) { programState.activeProgramId = i; break; }
     }
     updateActiveProgramVars();
   }
-  customStageIdx = doc["customStageIdx"] | 0;
-  customMixIdx = doc["customMixIdx"] | 0;
+  programState.customStageIdx = doc["customStageIdx"] | 0;
+  programState.customMixIdx = doc["customMixIdx"] | 0;
   unsigned long elapsedStageSec = doc["elapsedStageSec"] | 0;
   unsigned long elapsedMixSec = doc["elapsedMixSec"] | 0;
-  programStartTime = doc["programStartTime"] | 0;
+  programState.programStartTime = doc["programStartTime"] | 0;
   bool wasRunning = doc["isRunning"] | false;
 
   // Check startup delay before resuming
   if (wasRunning && !isStartupDelayComplete()) {
     // Don't resume immediately - wait for startup delay
-    isRunning = false;
+    programState.isRunning = false;
     if (debugSerial) {
       unsigned long remaining = STARTUP_DELAY_MS - (millis() - startupTime);
       Serial.printf("[RESUME] Delaying resume for %lu ms (temperature sensor stabilization)\n", remaining);
     }
   } else {
-    isRunning = wasRunning;
+    programState.isRunning = wasRunning;
   }
 
   // Load actual stage start times
-  for (int i = 0; i < 20; i++) actualStageStartTimes[i] = 0;
+  for (int i = 0; i < 20; i++) programState.actualStageStartTimes[i] = 0;
   if (doc.containsKey("actualStageStartTimes") && doc["actualStageStartTimes"].is<JsonArray>()) {
     JsonArray stageStartArray = doc["actualStageStartTimes"];
     for (int i = 0; i < min(20, (int)stageStartArray.size()); i++) {
-      actualStageStartTimes[i] = stageStartArray[i];
+      programState.actualStageStartTimes[i] = stageStartArray[i];
     }
   }
 
   // Ensure indices are always valid after resume
-  if (activeProgramId < programs.size() && programs[activeProgramId].id != -1) {
-    Program &p = programs[activeProgramId];
-    if (customStageIdx >= p.customStages.size()) customStageIdx = 0;
+  if (programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
+    Program &p = programs[programState.activeProgramId];
+    if (programState.customStageIdx >= p.customStages.size()) programState.customStageIdx = 0;
     if (!p.customStages.empty()) {
-      CustomStage &st = p.customStages[customStageIdx];
-      if (!st.mixPattern.empty() && customMixIdx >= st.mixPattern.size()) customMixIdx = 0;
+      CustomStage &st = p.customStages[programState.customStageIdx];
+      if (!st.mixPattern.empty() && programState.customMixIdx >= st.mixPattern.size()) programState.customMixIdx = 0;
     } else {
-      customMixIdx = 0;
+      programState.customMixIdx = 0;
     }
   } else {
-    customStageIdx = 0;
-    customMixIdx = 0;
+    programState.customStageIdx = 0;
+    programState.customMixIdx = 0;
   }
 
   // Fast-forward logic: if elapsed time > stage/mix durations, advance indices
-  if (isRunning && activeProgramId < programs.size() && programs[activeProgramId].id != -1) {
-    Program &p = programs[activeProgramId];
+  if (programState.isRunning && programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
+    Program &p = programs[programState.activeProgramId];
     // Fast-forward stages
-    size_t stageIdx = customStageIdx;
+    size_t stageIdx = programState.customStageIdx;
     unsigned long remainStageSec = elapsedStageSec;
     while (stageIdx < p.customStages.size()) {
       unsigned long stageDurSec = p.customStages[stageIdx].min * 60UL;

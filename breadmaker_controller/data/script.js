@@ -322,7 +322,7 @@ function populateProgramDropdown(s) {
     if (!select.hasChangeListener) {
       select.onchange = function () {
         const selectedId = this.value;
-        fetch('/select?id=' + encodeURIComponent(selectedId))
+        fetch('/select?idx=' + encodeURIComponent(selectedId))
           .then(r => {
             if (r.ok) {
               return fetch('/status').then(r => r.json());
