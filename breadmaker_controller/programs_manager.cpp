@@ -21,16 +21,17 @@ void loadPrograms() {
   DeserializationError err = deserializeJson(doc, f);
   f.close();
   if (err) return;
-  int nextId = 0;
+  int maxId = -1;
+  std::vector<Program> loadedPrograms;
   for (JsonObject pobj : doc.as<JsonArray>()) {
     Program p;
     // Read id if present, else assign sequentially
     if (pobj.containsKey("id")) {
       p.id = pobj["id"];
-      if (p.id >= nextId) nextId = p.id + 1;
     } else {
-      p.id = nextId++;
+      continue; // skip programs without id
     }
+    if (p.id > maxId) maxId = p.id;
     p.name = pobj["name"].as<String>();
     p.notes = pobj["notes"] | String("");
     p.icon = pobj["icon"] | String("");
@@ -57,7 +58,16 @@ void loadPrograms() {
       }
       p.customStages.push_back(cs);
     }
-    programs.push_back(p);
+    loadedPrograms.push_back(p);
+  }
+  // Now, create a vector sized to maxId+1, fill with dummy programs (id=-1)
+  programs.clear();
+  programs.resize(maxId+1);
+  for (auto& p : programs) p.id = -1;
+  for (const auto& p : loadedPrograms) {
+    if (p.id >= 0 && p.id < (int)programs.size()) {
+      programs[p.id] = p;
+    }
   }
 }
 

@@ -150,7 +150,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
     if (debugSerial) Serial.println(F("[ACTION] /start called"));
     updateActiveProgramVars();
     // Debug: print active program info
-    if (debugSerial && programState.activeProgramId < programs.size()) Serial.printf_P(PSTR("[START] activeProgram='%s' (id=%u), customProgram=%p\n"), programs[programState.activeProgramId].name.c_str(), (unsigned)programState.activeProgramId, (void*)programState.customProgram);
+    if (debugSerial && programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) Serial.printf_P(PSTR("[START] activeProgram='%s' (id=%u), customProgram=%p\n"), programs[programState.activeProgramId].name.c_str(), (unsigned)programState.activeProgramId, (void*)programState.customProgram);
 
     // Check if startup delay has completed
     if (!isStartupDelayComplete()) {
@@ -323,6 +323,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
         req->send(response);
         return;
     }
+    if (programState.activeProgramId >= programs.size() || programs[programState.activeProgramId].id == -1) { stopBreadmaker(); AsyncResponseStream *response = req->beginResponseStream("application/json"); streamStatusJson(*response); req->send(response); return; }
     Program &p = programs[programState.activeProgramId];
     size_t numStages = p.customStages.size();
     if (numStages == 0) {
@@ -362,12 +363,8 @@ void stateMachineEndpoints(AsyncWebServer& server)
     // Select by id (preferred)
     if (req->hasParam("idx")) {
       int id = req->getParam("idx")->value().toInt();
-      int foundIdx = -1;
-      for (size_t i = 0; i < programs.size(); ++i) {
-        if (programs[i].id == id) { foundIdx = i; break; }
-      }
-      if (foundIdx >= 0) {
-        programState.activeProgramId = foundIdx;
+      if (id >= 0 && id < (int)programs.size() && programs[id].id == id) {
+        programState.activeProgramId = id;
         updateActiveProgramVars();
         programState.isRunning = false;
         saveSettings();
@@ -970,14 +967,23 @@ void homeAssistantEndpoint(AsyncWebServer& server)
     response->printf("\"state\":\"%s\",", programState.isRunning ? "on" : "off");
     response->printf("\"stage\":\"");
     if (programState.activeProgramId < programs.size() && programState.isRunning && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-      response->print(programs[programState.activeProgramId].customStages[programState.customStageIdx].label.c_str());
+      if (programs[programState.activeProgramId].id != -1)
+        response->print(programs[programState.activeProgramId].customStages[programState.customStageIdx].label.c_str());
+      else
+        response->print("Idle");
     } else {
       response->print("Idle");
     }
     response->print("\",");
+    // NOTE: The index (activeProgramId) is NOT the same as the id property. The id is a unique field in each Program.
+    // All JSON output for programId uses the id property, not the index.
     if (programState.activeProgramId < programs.size()) {
-      response->printf("\"program\":\"%s\",", programs[programState.activeProgramId].name.c_str());
-      response->printf("\"programId\":%d,", programs[programState.activeProgramId].id);
+      if (programs[programState.activeProgramId].id != -1) {
+        response->printf("\"program\":\"%s\",", programs[programState.activeProgramId].name.c_str());
+        response->printf("\"programId\":%d,", programs[programState.activeProgramId].id);
+      } else {
+        response->print("\"program\":\"\",\"programId\":-1,");
+      }
     } else {
       response->print("\"program\":\"\",");
       response->print("\"programId\":-1,");
@@ -1109,10 +1115,11 @@ void homeAssistantEndpoint(AsyncWebServer& server)
     response->print("\",");
     if (programState.activeProgramId < programs.size()) {
       response->printf("\"program\":\"%s\",", programs[programState.activeProgramId].name.c_str());
+      response->printf("\"programId\":%d,", programs[programState.activeProgramId].id);
     } else {
       response->print("\"program\":\"\",");
+      response->print("\"programId\":-1,");
     }
-    response->printf("\"programId\":%u,", (unsigned)programState.activeProgramId);
     response->printf("\"temperature\":%.2f,", tempAvg.averagedTemperature);
     response->printf("\"setpoint\":%.2f,", pid.Setpoint);
     response->printf("\"heater\":%s,", heaterState ? "true" : "false");
@@ -1637,7 +1644,7 @@ void streamStatusJson(Print& out) {
   time_t programReadyAt = 0;
   double fermentationStageTimeLeft = 0.0;
   // stage, stageStartTimes, programStart, elapsed, stageReadyAt, programReadyAt
-  if (programState.activeProgramId < programs.size()) {
+  if (programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
     Program &p = programs[programState.activeProgramId];
     // Determine preview or running mode
     bool previewMode = !programState.isRunning;

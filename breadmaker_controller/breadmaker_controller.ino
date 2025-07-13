@@ -353,11 +353,18 @@ void loadResumeState() {
   DeserializationError err = deserializeJson(doc, f);
   f.close();
   if (err) return;
-  // Restore program by index
+  // Restore program by id (id is now the index in the programs vector, but may be a dummy slot)
   int progIdx = doc["programIdx"] | -1;
-  if (progIdx >= 0 && progIdx < (int)programs.size()) {
+  if (progIdx >= 0 && progIdx < (int)programs.size() && programs[progIdx].id == progIdx) {
     activeProgramId = progIdx;
     updateActiveProgramVars(); // Update program variables after loading
+  } else {
+    // Fallback: select first valid program (id!=-1) or 0 if none
+    activeProgramId = 0;
+    for (size_t i = 0; i < programs.size(); ++i) {
+      if (programs[i].id != -1) { activeProgramId = i; break; }
+    }
+    updateActiveProgramVars();
   }
   customStageIdx = doc["customStageIdx"] | 0;
   customMixIdx = doc["customMixIdx"] | 0;
@@ -387,7 +394,7 @@ void loadResumeState() {
     }
   }
   // Fast-forward logic: if elapsed time > stage/mix durations, advance indices
-  if (isRunning && activeProgramId < programs.size()) {
+  if (isRunning && activeProgramId < programs.size() && programs[activeProgramId].id != -1) {
     Program &p = programs[activeProgramId];
     // Fast-forward stages
     size_t stageIdx = customStageIdx;
