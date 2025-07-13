@@ -1503,6 +1503,7 @@ server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
       return;
     }
 
+
     // Start the program at the specified stage
     isRunning = true;
     customStageIdx = stageIdx;
@@ -1511,9 +1512,16 @@ server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
     customMixStepStart = 0;
     programStartTime = time(nullptr);
 
-    // Initialize actual stage start times array
-    for (int i = 0; i < 20; i++) actualStageStartTimes[i] = 0;
-    actualStageStartTimes[stageIdx] = programStartTime; // Record actual start of this stage
+    // Patch: Do NOT reset all actualStageStartTimes. Mark previous as completed, set current if not set.
+    for (int i = 0; i < 20; i++) {
+      if (i < stageIdx) {
+        // Mark previous stages as completed (set to a nonzero dummy value, e.g., programStartTime - 1000 * (stageIdx - i))
+        if (actualStageStartTimes[i] == 0) actualStageStartTimes[i] = programStartTime - 1000 * (stageIdx - i);
+      } else if (i == stageIdx) {
+        if (actualStageStartTimes[i] == 0) actualStageStartTimes[i] = programStartTime;
+      }
+      // Leave future stages untouched (remain 0)
+    }
 
     // --- Fermentation tracking: set immediately if this stage is fermentation ---
     initialFermentTemp = 0.0;
