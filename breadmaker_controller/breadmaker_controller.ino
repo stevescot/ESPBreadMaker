@@ -1885,6 +1885,18 @@ void loadResumeState() {
   }
 }
 
+// Helper to reset fermentation tracking variables
+void resetFermentationTracking(float temp) {
+  initialFermentTemp = 0.0;
+  fermentationFactor = 1.0;
+  predictedCompleteTime = 0;
+  lastFermentAdjust = 0;
+  fermentLastTemp = temp;
+  fermentLastFactor = 1.0;
+  fermentLastUpdateMs = 0;
+  fermentWeightedSec = 0.0;
+}
+
 void loop() {
   // Update temperature sampling (non-blocking, every 0.5s)
   updateTemperatureSampling();
@@ -1894,7 +1906,8 @@ void loop() {
     
   // Update temperature for broadcasts
   float temp = getAveragedTemperature();
- // --- Live fermentation timing integration and auto-advance ---
+  static bool stageJustAdvanced = false;
+  // --- Live fermentation timing integration and auto-advance ---
   if (programs.size() > 0 && activeProgramId < programs.size() && customStageIdx < programs[activeProgramId].customStages.size()) {
     Program &p = programs[activeProgramId];
     CustomStage &st = p.customStages[customStageIdx];
@@ -1917,27 +1930,24 @@ void loop() {
       }
       fermentationFactor = fermentLastFactor;
       double plannedStageSec = (double)st.min * 60.0;
-      if (fermentWeightedSec >= plannedStageSec) {
+      double epsilon = 0.05; // 50ms margin for float compare
+      if (!stageJustAdvanced && (fermentWeightedSec + epsilon >= plannedStageSec)) {
         if (debugSerial) Serial.printf("[FERMENT] Auto-advance: weighted %.1fs >= planned %.1fs\n", fermentWeightedSec, plannedStageSec);
         customStageIdx++;
         customStageStart = millis();
-        fermentWeightedSec = 0.0;
-        fermentLastUpdateMs = millis();
-        fermentLastFactor = 1.0;
-        fermentLastTemp = actualTemp;
+        resetFermentationTracking(actualTemp);
         saveResumeState();
-        yield(); delay(1); return;
+        stageJustAdvanced = true;
       }
     } else {
-      fermentWeightedSec = 0.0;
-      fermentLastUpdateMs = millis();
-      fermentLastFactor = 1.0;
-      fermentLastTemp = getAveragedTemperature();
-      fermentationFactor = 1.0;
+      resetFermentationTracking(getAveragedTemperature());
     }
+  } else {
+    stageJustAdvanced = false;
   }
 // ...existing code...
   if (!isRunning) {
+    stageJustAdvanced = false;
     // Check if we should resume after startup delay
     static bool delayedResumeChecked = false;
     if (!delayedResumeChecked && isStartupDelayComplete()) {
@@ -2010,12 +2020,15 @@ void loop() {
     yield(); delay(1); return;
   }
   if (programs.size() == 0 || activeProgramId >= programs.size()) {
+    stageJustAdvanced = false;
     stopBreadmaker(); yield(); delay(1); return;
   }
   Program &p = programs[activeProgramId];
   // --- Custom Stages Logic ---
   if (!p.customStages.empty()) {
+    stageJustAdvanced = false;
     if (customStageIdx >= p.customStages.size()) {
+      stageJustAdvanced = false;
       stopBreadmaker(); customStageIdx = 0; customStageStart = 0; clearResumeState(); yield(); delay(1); return;
     }
     CustomStage &st = p.customStages[customStageIdx];
@@ -2024,51 +2037,10 @@ void loop() {
 
     // --- Fermentation factor logic (update every 10 min or on temp change >0.1C) ---
     if (st.isFermentation) {
-      // --- Live fermentation timing integration and auto-advance ---
-      float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
-      float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
-      float actualTemp = getAveragedTemperature();
-      if (initialFermentTemp == 0.0) initialFermentTemp = actualTemp;
-      unsigned long nowMs = millis();
-      // Integrate weighted fermentation time in real time
-      if (fermentLastUpdateMs == 0) {
-        fermentLastTemp = actualTemp;
-        fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
-        fermentLastUpdateMs = nowMs;
-        fermentWeightedSec = 0.0;
-      } else if (isRunning) {
-        double elapsedSec = (nowMs - fermentLastUpdateMs) / 1000.0;
-        fermentWeightedSec += elapsedSec * fermentLastFactor;
-        fermentLastTemp = actualTemp;
-        fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
-        fermentLastUpdateMs = nowMs;
-      }
-      fermentationFactor = fermentLastFactor;
-      // Auto-advance if weighted time exceeds planned duration
-      double plannedStageSec = (double)st.min * 60.0;
-      if (fermentWeightedSec >= plannedStageSec) {
-        if (debugSerial) Serial.printf("[FERMENT] Auto-advance: weighted %.1fs >= planned %.1fs\n", fermentWeightedSec, plannedStageSec);
-        customStageIdx++;
-        customStageStart = millis();
-        fermentWeightedSec = 0.0;
-        fermentLastUpdateMs = millis();
-        fermentLastFactor = 1.0;
-        fermentLastTemp = actualTemp;
-        saveResumeState();
-        yield(); delay(1); return;
-      }
+      // Already handled at top of loop
     } else {
       // Reset fermentation tracking when not in fermentation stage
-      if (initialFermentTemp != 0.0) {
-        initialFermentTemp = 0.0;
-        fermentationFactor = 1.0;
-        predictedCompleteTime = 0;
-        lastFermentAdjust = 0;
-        fermentLastTemp = 0.0;
-        fermentLastFactor = 1.0;
-        fermentLastUpdateMs = 0;
-        fermentWeightedSec = 0.0;
-      }
+      resetFermentationTracking(getAveragedTemperature());
     }
 
     // --- Predicted program completion time: adjust all fermentation stages ---
