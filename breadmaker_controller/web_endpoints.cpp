@@ -420,7 +420,7 @@ server.on("/start_at_stage", HTTP_GET, [](AsyncWebServerRequest* req){
       sendJsonError(req, "Missing stage parameter", "Please specify ?stage=N", 400);
       return;
     }
-
+    updateActiveProgramVars();
     String stageStr = req->getParam("stage")->value();
     bool validStage = true;
     for (size_t i = 0; i < stageStr.length(); ++i) {
