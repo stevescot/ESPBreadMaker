@@ -7,6 +7,45 @@
 #define STARTUP_DELAY_MS 15000UL
 #define PIN_RTD A0
 
+// --- Fermentation tracking state struct ---
+typedef struct {
+  float initialFermentTemp;
+  float fermentationFactor;
+  unsigned long lastFermentAdjust;
+  unsigned long predictedCompleteTime;
+  float fermentLastTemp;
+  float fermentLastFactor;
+  unsigned long fermentLastUpdateMs;
+  double fermentWeightedSec;
+} FermentationState;
+
+extern FermentationState fermentState;
+
+// --- Dynamic restart tracking state struct ---
+typedef struct {
+  unsigned long lastDynamicRestart;
+  String lastDynamicRestartReason;
+  unsigned int dynamicRestartCount;
+} DynamicRestartState;
+
+extern DynamicRestartState dynamicRestart;
+
+// Struct for temperature averaging state
+#ifndef TEMP_AVG_STATE_STRUCT_DEFINED
+#define TEMP_AVG_STATE_STRUCT_DEFINED
+struct TemperatureAveragingState {
+    int tempSampleCount = 10;
+    int tempRejectCount = 2;
+    float tempSamples[MAX_TEMP_SAMPLES] = {0};
+    int tempSampleIndex = 0;
+    bool tempSamplesReady = false;
+    unsigned long lastTempSample = 0;
+    unsigned long tempSampleInterval = 500;
+    float averagedTemperature = 0.0;
+    float lastTemp = 0.0;
+};
+#endif
+
 #ifndef OUTPUT_STATES_STRUCT_DEFINED
 #define OUTPUT_STATES_STRUCT_DEFINED
 struct OutputStates {

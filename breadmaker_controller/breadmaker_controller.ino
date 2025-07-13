@@ -105,33 +105,14 @@ bool manualMode = false; // Manual mode: true = direct manual control, false = a
 unsigned long startupTime = 0;           // Time when system started (millis())
 // STARTUP_DELAY_MS now defined in globals.cpp
 
-// --- Temperature averaging system ---
-int tempSampleCount = 10;
-int tempRejectCount = 2; // Reject top N and bottom N
-// MAX_TEMP_SAMPLES now defined in globals.cpp
-float tempSamples[MAX_TEMP_SAMPLES];
-int tempSampleIndex = 0;
-bool tempSamplesReady = false;
-unsigned long lastTempSample = 0;
-unsigned long tempSampleInterval = 500; // milliseconds
-float averagedTemperature = 0.0;
-float lastTemp = 0.0; // Last temperature for change detection
+// --- Temperature averaging system (encapsulated) ---
+TemperatureAveragingState tempAvg;
 
-// --- Dynamic restart tracking variables ---
-unsigned long lastDynamicRestart = 0;
-String lastDynamicRestartReason = "";
-unsigned int dynamicRestartCount = 0;
+// --- Dynamic restart tracking struct ---
+DynamicRestartState dynamicRestart;
 
-// --- Fermentation tracking variables ---
-float initialFermentTemp = 0.0;
-float fermentationFactor = 1.0;
-unsigned long lastFermentAdjust = 0;
-unsigned long predictedCompleteTime = 0;
-// New: Weighted fermentation time tracking
-float fermentLastTemp = 0.0;
-float fermentLastFactor = 1.0;
-unsigned long fermentLastUpdateMs = 0;
-double fermentWeightedSec = 0.0;
+// --- Fermentation tracking struct ---
+FermentationState fermentState;
 
 // --- Function prototypes ---
 void loadSettings();
@@ -326,12 +307,12 @@ void setup() {
   
   // --- Initialize temperature averaging system ---
   for (int i = 0; i < MAX_TEMP_SAMPLES; i++) {
-    tempSamples[i] = 0.0;
+    tempAvg.tempSamples[i] = 0.0;
   }
-  tempSampleIndex = 0;
-  tempSamplesReady = false;
-  lastTempSample = 0;
-  averagedTemperature = readTemperature(); // Initialize with first reading
+  tempAvg.tempSampleIndex = 0;
+  tempAvg.tempSamplesReady = false;
+  tempAvg.lastTempSample = 0;
+  tempAvg.averagedTemperature = readTemperature(); // Initialize with first reading
   
   Serial.println(F("PID controller initialized with relay-friendly time-proportional control"));
   Serial.println(F("Temperature averaging system initialized (10 samples, 0.5s interval, reject top/bottom 2)"));
@@ -469,14 +450,14 @@ void loadResumeState() {
 // Helper to reset fermentation tracking variables
 // Resets all fermentation tracking variables to initial values for a new fermentation stage.
 void resetFermentationTracking(float temp) {
-  initialFermentTemp = 0.0;
-  fermentationFactor = 1.0;
-  predictedCompleteTime = 0;
-  lastFermentAdjust = 0;
-  fermentLastTemp = temp;
-  fermentLastFactor = 1.0;
-  fermentLastUpdateMs = 0;
-  fermentWeightedSec = 0.0;
+  fermentState.initialFermentTemp = 0.0;
+  fermentState.fermentationFactor = 1.0;
+  fermentState.predictedCompleteTime = 0;
+  fermentState.lastFermentAdjust = 0;
+  fermentState.fermentLastTemp = temp;
+  fermentState.fermentLastFactor = 1.0;
+  fermentState.fermentLastUpdateMs = 0;
+  fermentState.fermentWeightedSec = 0.0;
 }
 
 // --- Helper function declarations ---
@@ -501,6 +482,17 @@ void loop() {
   static bool scheduledStartTriggered = false;
 
   updateFermentationTiming(stageJustAdvanced);
+
+  // --- Check for stage advancement and log ---
+  if (stageJustAdvanced && programs.size() > 0 && activeProgramId < programs.size() && customStageIdx < programs[activeProgramId].customStages.size()) {
+    Program &p = programs[activeProgramId];
+    CustomStage &st = p.customStages[customStageIdx];
+    if (st.isFermentation) {
+      if (debugSerial) Serial.printf("[STAGE ADVANCE] Fermentation stage advanced to %d\n", (int)customStageIdx);
+    } else {
+      if (debugSerial) Serial.printf("[STAGE ADVANCE] Non-fermentation stage advanced to %d\n", (int)customStageIdx);
+    }
+  }
 
   if (!isRunning) {
     stageJustAdvanced = false;
@@ -530,23 +522,23 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
       float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
       float actualTemp = getAveragedTemperature();
       unsigned long nowMs = millis();
-      if (fermentLastUpdateMs == 0) {
-        fermentLastTemp = actualTemp;
-        fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
-        fermentLastUpdateMs = nowMs;
-        fermentWeightedSec = 0.0;
+      if (fermentState.fermentLastUpdateMs == 0) {
+        fermentState.fermentLastTemp = actualTemp;
+        fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
+        fermentState.fermentLastUpdateMs = nowMs;
+        fermentState.fermentWeightedSec = 0.0;
       } else if (isRunning) {
-        double elapsedSec = (nowMs - fermentLastUpdateMs) / 1000.0;
-        fermentWeightedSec += elapsedSec * fermentLastFactor;
-        fermentLastTemp = actualTemp;
-        fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
-        fermentLastUpdateMs = nowMs;
+        double elapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
+        fermentState.fermentWeightedSec += elapsedSec * fermentState.fermentLastFactor;
+        fermentState.fermentLastTemp = actualTemp;
+        fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
+        fermentState.fermentLastUpdateMs = nowMs;
       }
-      fermentationFactor = fermentLastFactor;
+      fermentState.fermentationFactor = fermentState.fermentLastFactor;
       double plannedStageSec = (double)st.min * 60.0;
       double epsilon = 0.05;
-      if (!stageJustAdvanced && (fermentWeightedSec + epsilon >= plannedStageSec)) {
-        if (debugSerial) Serial.printf("[FERMENT] Auto-advance: weighted %.1fs >= planned %.1fs\n", fermentWeightedSec, plannedStageSec);
+      if (!stageJustAdvanced && (fermentState.fermentWeightedSec + epsilon >= plannedStageSec)) {
+        if (debugSerial) Serial.printf("[FERMENT] Auto-advance: weighted %.1fs >= planned %.1fs\n", fermentState.fermentWeightedSec, plannedStageSec);
         customStageIdx++;
         customStageStart = millis();
         resetFermentationTracking(actualTemp);
@@ -653,8 +645,8 @@ void handleCustomStages(bool &stageJustAdvanced) {
     } else {
       resetFermentationTracking(getAveragedTemperature());
     }
-    if (lastFermentAdjust == 0 || millis() - lastFermentAdjust > 600000) {
-      lastFermentAdjust = millis();
+    if (fermentState.lastFermentAdjust == 0 || millis() - fermentState.lastFermentAdjust > 600000) {
+      fermentState.lastFermentAdjust = millis();
       unsigned long nowMs = millis();
       unsigned long elapsedInCurrentStage = (customStageStart > 0) ? (nowMs - customStageStart) : 0UL;
       double cumulativePredictedSec = 0.0;
@@ -666,24 +658,24 @@ void handleCustomStages(bool &stageJustAdvanced) {
           if (i < customStageIdx) {
             float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
             float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
-            float temp = fermentLastTemp;
+            float temp = fermentState.fermentLastTemp;
             float factor = pow(q10, (baseline - temp) / 10.0);
             cumulativePredictedSec += plannedStageSec * factor;
           } else if (i == customStageIdx) {
-            double elapsedSec = fermentWeightedSec;
-            double realElapsedSec = (nowMs - fermentLastUpdateMs) / 1000.0;
-            elapsedSec += realElapsedSec * fermentLastFactor;
-            double remainSec = plannedStageSec - (elapsedSec / fermentLastFactor);
+            double elapsedSec = fermentState.fermentWeightedSec;
+            double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
+            elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
+            double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor);
             if (remainSec < 0) remainSec = 0;
-            cumulativePredictedSec += elapsedSec + remainSec * fermentLastFactor;
+            cumulativePredictedSec += elapsedSec + remainSec * fermentState.fermentLastFactor;
           } else {
-            cumulativePredictedSec += plannedStageSec * fermentLastFactor;
+            cumulativePredictedSec += plannedStageSec * fermentState.fermentLastFactor;
           }
         } else {
           cumulativePredictedSec += plannedStageSec;
         }
       }
-      predictedCompleteTime = (unsigned long)(programStartTime + (unsigned long)(cumulativePredictedSec));
+      fermentState.predictedCompleteTime = (unsigned long)(programStartTime + (unsigned long)(cumulativePredictedSec));
     }
     if (st.temp > 0 || manualMode) {
       if (manualMode && pid.Setpoint > 0) {
@@ -800,13 +792,13 @@ void handleCustomStages(bool &stageJustAdvanced) {
     if (st.isFermentation) {
       double fermentTargetSec = (double)st.min * 60.0;
       double epsilon = 0.05;
-      if (fermentWeightedSec + epsilon >= fermentTargetSec) {
+      if (fermentState.fermentWeightedSec + epsilon >= fermentTargetSec) {
         stageComplete = true;
         if (debugSerial) {
-          Serial.printf("[FERMENT] Advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentWeightedSec, fermentTargetSec, st.min);
+          Serial.printf("[FERMENT] Advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentState.fermentWeightedSec, fermentTargetSec, st.min);
         }
-      } else if (debugSerial && (fermentTargetSec - fermentWeightedSec) < 2.0) {
-        Serial.printf("[FERMENT] Not yet advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentWeightedSec, fermentTargetSec, st.min);
+      } else if (debugSerial && (fermentTargetSec - fermentState.fermentWeightedSec) < 2.0) {
+        Serial.printf("[FERMENT] Not yet advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentState.fermentWeightedSec, fermentTargetSec, st.min);
       }
     } else {
       if (millis() - customStageStart >= (unsigned long)st.min * 60000UL) {
@@ -851,32 +843,26 @@ void updateTemperatureSampling() {
   unsigned long nowMs = millis();
   
   // Sample at the configured interval
-  if (nowMs - lastTempSample >= tempSampleInterval) {
-    lastTempSample = nowMs;
-    
+  if (nowMs - tempAvg.lastTempSample >= tempAvg.tempSampleInterval) {
+    tempAvg.lastTempSample = nowMs;
     // Take a new temperature sample
-    float rawTemp = readTemperature(); // This calls the calibrated temperature reading
-    tempSamples[tempSampleIndex] = rawTemp;
-    tempSampleIndex = (tempSampleIndex + 1) % tempSampleCount;
-    
+    float rawTemp = readTemperature();
+    tempAvg.tempSamples[tempAvg.tempSampleIndex] = rawTemp;
+    tempAvg.tempSampleIndex = (tempAvg.tempSampleIndex + 1) % tempAvg.tempSampleCount;
     // Mark samples as ready once we've filled the array at least once
-    if (tempSampleIndex == 0 && !tempSamplesReady) {
-      tempSamplesReady = true;
+    if (tempAvg.tempSampleIndex == 0 && !tempAvg.tempSamplesReady) {
+      tempAvg.tempSamplesReady = true;
     }
-    
     // Calculate averaged temperature if we have enough samples
-    if (tempSamplesReady && tempSampleCount > 0) {
-      // ALWAYS USE WEIGHTED AVERAGE - no switching between methods
-      
+    if (tempAvg.tempSamplesReady && tempAvg.tempSampleCount > 0) {
       // Step 1: Copy and sort samples for outlier rejection
       float sortedSamples[MAX_TEMP_SAMPLES];
-      for (int i = 0; i < tempSampleCount; i++) {
-        sortedSamples[i] = tempSamples[i];
+      for (int i = 0; i < tempAvg.tempSampleCount; i++) {
+        sortedSamples[i] = tempAvg.tempSamples[i];
       }
-      
       // Simple bubble sort
-      for (int i = 0; i < tempSampleCount - 1; i++) {
-        for (int j = 0; j < tempSampleCount - i - 1; j++) {
+      for (int i = 0; i < tempAvg.tempSampleCount - 1; i++) {
+        for (int j = 0; j < tempAvg.tempSampleCount - i - 1; j++) {
           if (sortedSamples[j] > sortedSamples[j + 1]) {
             float temp = sortedSamples[j];
             sortedSamples[j] = sortedSamples[j + 1];
@@ -884,29 +870,22 @@ void updateTemperatureSampling() {
           }
         }
       }
-      
       // Step 2: Get clean samples (reject outliers if we have enough samples)
       float cleanSamples[MAX_TEMP_SAMPLES];
       int cleanCount = 0;
-      int effectiveSamples = tempSampleCount - (2 * tempRejectCount);
-      
+      int effectiveSamples = tempAvg.tempSampleCount - (2 * tempAvg.tempRejectCount);
       if (effectiveSamples >= 3) {
-        // Enough samples for outlier rejection
-        for (int i = tempRejectCount; i < tempSampleCount - tempRejectCount; i++) {
+        for (int i = tempAvg.tempRejectCount; i < tempAvg.tempSampleCount - tempAvg.tempRejectCount; i++) {
           cleanSamples[cleanCount++] = sortedSamples[i];
         }
       } else {
-        // Not enough samples for outlier rejection, use all samples
-        for (int i = 0; i < tempSampleCount; i++) {
+        for (int i = 0; i < tempAvg.tempSampleCount; i++) {
           cleanSamples[cleanCount++] = sortedSamples[i];
         }
       }
-      
       // Step 3: Detect trend direction and strength
       float firstHalf = 0.0, secondHalf = 0.0;
       int halfSize = cleanCount / 2;
-      
-      // Average first half vs second half to detect trend
       for (int i = 0; i < halfSize; i++) {
         firstHalf += cleanSamples[i];
       }
@@ -915,40 +894,32 @@ void updateTemperatureSampling() {
       }
       firstHalf /= halfSize;
       secondHalf /= (cleanCount - halfSize);
-      
-      float trendStrength = secondHalf - firstHalf; // Positive = rising, Negative = falling
+      float trendStrength = secondHalf - firstHalf;
       float absTrendStrength = fabs(trendStrength);
-      
       // Step 4: ALWAYS apply weighted average (adaptive weighting based on trend)
       float weightedSum = 0.0;
       float totalWeight = 0.0;
-      
-
-        for (int i = 0; i < cleanCount; i++) {
-          // Exponential weighting: newer samples get more weight
-          // Weight increases from 0.5 to 2.0 across the buffer
-          float weight = 0.5 + (1.5 * i) / (cleanCount - 1);
-          weightedSum += cleanSamples[i] * weight;
-          totalWeight += weight;
-        }      
-      averagedTemperature = weightedSum / totalWeight;
-      
+      for (int i = 0; i < cleanCount; i++) {
+        float weight = 0.5 + (1.5 * i) / (cleanCount - 1);
+        weightedSum += cleanSamples[i] * weight;
+        totalWeight += weight;
+      }
+      tempAvg.averagedTemperature = weightedSum / totalWeight;
       // Debug output occasionally
-  if (debugSerial && (nowMs % 30000 < tempSampleInterval)) { // Every 30 seconds
-        Serial.printf("[TEMP_AVG] Raw: %.2f°C, Filtered: %.2f°C, Trend: %.2f°C (from %d samples, mode: %s)\n", 
-                     rawTemp, averagedTemperature, trendStrength, cleanCount,
+      if (debugSerial && (nowMs % 30000 < tempAvg.tempSampleInterval)) {
+        Serial.printf("[TEMP_AVG] Raw: %.2f°C, Filtered: %.2f°C, Trend: %.2f°C (from %d samples, mode: %s)\n",
+                     rawTemp, tempAvg.averagedTemperature, trendStrength, cleanCount,
                      (absTrendStrength > 0.2) ? "TREND" : "STABLE");
       }
     } else {
-      // Not enough samples yet, use the raw reading
-      averagedTemperature = rawTemp;
+      tempAvg.averagedTemperature = rawTemp;
     }
   }
 }
 
 // Returns the most recently calculated averaged temperature.
 float getAveragedTemperature() {
-  return averagedTemperature;
+  return tempAvg.averagedTemperature;
 }
 
 // --- Time-proportional PID control function ---
@@ -1000,21 +971,19 @@ void updateTimeProportionalHeater() {
   if (nowMs - windowStartTime >= windowSize || shouldRestartWindow) {
     // Track dynamic restart events
     if (shouldRestartWindow) {
-      lastDynamicRestart = nowMs;
-      dynamicRestartCount++;
-      
+      dynamicRestart.lastDynamicRestart = nowMs;
+      dynamicRestart.dynamicRestartCount++;
       // Determine restart reason
       if (pid.Output > lastPIDOutput && pid.Output > 0.7) {
-        lastDynamicRestartReason = "Need more heat (output increased to " + String((pid.Output*100), 1) + "%)";
+        dynamicRestart.lastDynamicRestartReason = "Need more heat (output increased to " + String((pid.Output*100), 1) + "%)";
       } else if (pid.Output < lastPIDOutput && pid.Output < 0.3) {
-        lastDynamicRestartReason = "Reduce heat (output decreased to " + String((pid.Output*100), 1) + "%)";
+        dynamicRestart.lastDynamicRestartReason = "Reduce heat (output decreased to " + String((pid.Output*100), 1) + "%)";
       } else {
-        lastDynamicRestartReason = "Output change (from " + String((lastPIDOutput*100), 1) + "% to " + String((pid.Output*100), 1) + "%)";
+        dynamicRestart.lastDynamicRestartReason = "Output change (from " + String((lastPIDOutput*100), 1) + "% to " + String((pid.Output*100), 1) + "%)";
       }
-      
       if (debugSerial) {
         Serial.printf("[PID-DYNAMIC] Restart #%u: %s (elapsed: %lums)\n", 
-                     dynamicRestartCount, lastDynamicRestartReason.c_str(), elapsed);
+                     dynamicRestart.dynamicRestartCount, dynamicRestart.lastDynamicRestartReason.c_str(), elapsed);
       }
     }
     
@@ -1089,9 +1058,9 @@ void streamHeaterDebugStatus(Print& out) {
   out.printf("\"calculated_on_time_ms\":%lu,", onTime);
   out.printf("\"on_time_percent\":%.2f,", onTimePercent);
   out.printf("\"should_be_on\":%s,", (elapsed < onTime) ? "true" : "false");
-  out.printf("\"dynamic_restarts\":%u,", dynamicRestartCount);
-  out.printf("\"last_restart_reason\":\"%s\",", lastDynamicRestartReason.c_str());
-  out.printf("\"last_restart_ago_ms\":%lu,", (lastDynamicRestart > 0) ? (nowMs - lastDynamicRestart) : 0);
+  out.printf("\"dynamic_restarts\":%u,", dynamicRestart.dynamicRestartCount);
+  out.printf("\"last_restart_reason\":\"%s\",", dynamicRestart.lastDynamicRestartReason.c_str());
+  out.printf("\"last_restart_ago_ms\":%lu,", (dynamicRestart.lastDynamicRestart > 0) ? (nowMs - dynamicRestart.lastDynamicRestart) : 0);
   out.printf("\"last_pid_output\":%.2f,", lastPIDOutput);
   out.printf("\"pid_output_change\":%.2f,", abs(pid.Output - lastPIDOutput));
   out.printf("\"change_threshold\":%.2f,", PID_CHANGE_THRESHOLD);
@@ -1167,27 +1136,23 @@ void loadSettings() {
   
   // Load temperature averaging parameters
   if (doc.containsKey("tempSampleCount")) {
-    tempSampleCount = doc["tempSampleCount"] | 10;
-    tempRejectCount = doc["tempRejectCount"] | 2;
-    tempSampleInterval = doc["tempSampleInterval"] | 500;
-    
+    tempAvg.tempSampleCount = doc["tempSampleCount"] | 10;
+    tempAvg.tempRejectCount = doc["tempRejectCount"] | 2;
+    tempAvg.tempSampleInterval = doc["tempSampleInterval"] | 500;
     // Validate parameters
-    if (tempSampleCount < 5) tempSampleCount = 5;
-    if (tempSampleCount > MAX_TEMP_SAMPLES) tempSampleCount = MAX_TEMP_SAMPLES;
-    if (tempRejectCount < 0) tempRejectCount = 0;
-    
+    if (tempAvg.tempSampleCount < 5) tempAvg.tempSampleCount = 5;
+    if (tempAvg.tempSampleCount > MAX_TEMP_SAMPLES) tempAvg.tempSampleCount = MAX_TEMP_SAMPLES;
+    if (tempAvg.tempRejectCount < 0) tempAvg.tempRejectCount = 0;
     // Ensure we have at least 3 samples after rejection
-    int effectiveSamples = tempSampleCount - (2 * tempRejectCount);
+    int effectiveSamples = tempAvg.tempSampleCount - (2 * tempAvg.tempRejectCount);
     if (effectiveSamples < 3) {
-      tempRejectCount = (tempSampleCount - 3) / 2;
+      tempAvg.tempRejectCount = (tempAvg.tempSampleCount - 3) / 2;
     }
-    
     // Reset sampling system when parameters change
-    tempSamplesReady = false;
-    tempSampleIndex = 0;
-    
+    tempAvg.tempSamplesReady = false;
+    tempAvg.tempSampleIndex = 0;
     Serial.printf("[loadSettings] Temperature averaging loaded: Samples=%d, Reject=%d, Interval=%lums\n", 
-                 tempSampleCount, tempRejectCount, tempSampleInterval);
+                 tempAvg.tempSampleCount, tempAvg.tempRejectCount, tempAvg.tempSampleInterval);
   }
   
   // Restore last selected program by ID if present, fallback to name for backward compatibility
@@ -1234,9 +1199,9 @@ void saveSettings() {
   doc["pidSampleTime"] = pid.sampleTime;
   doc["pidWindowSize"] = windowSize;
   // Save temperature averaging parameters
-  doc["tempSampleCount"] = tempSampleCount;
-  doc["tempRejectCount"] = tempRejectCount;
-  doc["tempSampleInterval"] = tempSampleInterval;
+  doc["tempSampleCount"] = tempAvg.tempSampleCount;
+  doc["tempRejectCount"] = tempAvg.tempRejectCount;
+  doc["tempSampleInterval"] = tempAvg.tempSampleInterval;
   File f = LittleFS.open(SETTINGS_FILE, "w");
   if (!f) {
     Serial.println("[saveSettings] Failed to open settings.json for writing!");

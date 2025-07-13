@@ -190,6 +190,7 @@ window.pidComponentData = {
     }
   ]
 };
+}
 
 window.pidComponentChart = null;
 
@@ -695,4 +696,99 @@ function forceStatusRefresh() {
       updateStatus();
     }
   }, 1500);
+}
+
+// --- MISSING UI HANDLER FUNCTIONS ---
+async function resetToDefaults() {
+  // Reset all UI fields to default values (as in HTML)
+  document.getElementById('kpInput').value = '1.000000';
+  document.getElementById('kiInput').value = '0.100000';
+  document.getElementById('kdInput').value = '0.010000';
+  document.getElementById('sampleTimeInput').value = '1000';
+  document.getElementById('windowSizeInput').value = '30000';
+  document.getElementById('tempSampleCount').value = '10';
+  document.getElementById('tempRejectCount').value = '2';
+  document.getElementById('tempSampleInterval').value = '500';
+  showMessage('Parameters reset to defaults (not yet applied)', 'info');
+}
+
+async function testShortBeep() {
+  try {
+    await fetch('/api/short_beep');
+    showMessage('Short beep triggered.', 'success');
+  } catch (err) {
+    showMessage('Failed to trigger short beep: ' + err.message, 'error');
+  }
+}
+
+async function testTone(freq, amp, dur) {
+  try {
+    const url = `/api/buzzer_tone?freq=${encodeURIComponent(freq)}&amp=${encodeURIComponent(amp)}&dur=${encodeURIComponent(dur)}`;
+    await fetch(url);
+    showMessage(`Tone triggered: ${freq}Hz, amp ${amp}, dur ${dur}ms`, 'success');
+  } catch (err) {
+    showMessage('Failed to trigger tone: ' + err.message, 'error');
+  }
+}
+
+async function testMultiTone() {
+  // Play a sequence of tones for demonstration
+  try {
+    await testTone(1000, 0.3, 150);
+    setTimeout(() => testTone(1500, 0.3, 150), 200);
+    setTimeout(() => testTone(2000, 0.3, 150), 400);
+    showMessage('Multi-tone sequence triggered.', 'success');
+  } catch (err) {
+    showMessage('Failed to trigger multi-tone: ' + err.message, 'error');
+  }
+}
+
+function clearGraph() {
+  chartData.labels = [];
+  chartData.datasets.forEach(ds => ds.data = []);
+  if (temperatureChart) temperatureChart.update();
+  showMessage('Temperature graph cleared', 'info');
+}
+
+// --- Auto-Tune Placeholder Functions ---
+async function startAutoTune() {
+  try {
+    // Try to call backend endpoint for auto-tune if available
+    const method = document.getElementById('autoTuneMethod').value;
+    const baseTemp = parseFloat(document.getElementById('autoTuneBaseTemp').value);
+    let stepSize = 0;
+    if (method === 'step') {
+      stepSize = parseFloat(document.getElementById('autoTuneStepSize').value);
+    }
+    let url = `/api/auto_tune?method=${encodeURIComponent(method)}&base_temp=${encodeURIComponent(baseTemp)}`;
+    if (method === 'step') {
+      url += `&step_size=${encodeURIComponent(stepSize)}`;
+    }
+    const resp = await fetch(url);
+    if (resp.ok) {
+      showMessage('Auto-tune started.', 'success');
+      document.getElementById('autoTuneBtn').disabled = true;
+      document.getElementById('stopAutoTuneBtn').disabled = false;
+    } else {
+      showMessage('Failed to start auto-tune: ' + resp.statusText, 'error');
+    }
+  } catch (err) {
+    showMessage('Failed to start auto-tune: ' + err.message, 'error');
+  }
+}
+
+async function stopAutoTune() {
+  try {
+    // Try to call backend endpoint for stopping auto-tune if available
+    const resp = await fetch('/api/auto_tune_stop');
+    if (resp.ok) {
+      showMessage('Auto-tune stopped.', 'success');
+      document.getElementById('autoTuneBtn').disabled = false;
+      document.getElementById('stopAutoTuneBtn').disabled = true;
+    } else {
+      showMessage('Failed to stop auto-tune: ' + resp.statusText, 'error');
+    }
+  } catch (err) {
+    showMessage('Failed to stop auto-tune: ' + err.message, 'error');
+  }
 }

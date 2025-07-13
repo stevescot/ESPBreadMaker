@@ -1,0 +1,20 @@
+// Ensure struct definitions are available
+#include "globals.h"
+// --- Fermentation tracking state instance ---
+FermentationState fermentState = {
+  0.0, // initialFermentTemp
+  1.0, // fermentationFactor
+  0,   // lastFermentAdjust
+  0,   // predictedCompleteTime
+  0.0, // fermentLastTemp
+  1.0, // fermentLastFactor
+  0,   // fermentLastUpdateMs
+  0.0  // fermentWeightedSec
+};
+
+// --- Dynamic restart tracking state instance ---
+DynamicRestartState dynamicRestart = {
+  0,    // lastDynamicRestart
+  "",   // lastDynamicRestartReason
+  0     // dynamicRestartCount
+};
