@@ -319,10 +319,10 @@ void saveResumeState() {
   f.printf("  \"programIdx\":%u,\n", (unsigned)programState.activeProgramId);
   f.printf("  \"customStageIdx\":%u,\n", (unsigned)programState.customStageIdx);
   f.printf("  \"customMixIdx\":%u,\n", (unsigned)programState.customMixIdx);
-  f.printf("  \"elapsedStageSec":%lu,\n", (programState.customStageStart > 0) ? (millis() - programState.customStageStart) / 1000UL : 0UL);
-  f.printf("  \"elapsedMixSec":%lu,\n", (programState.customMixStepStart > 0) ? (millis() - programState.customMixStepStart) / 1000UL : 0UL);
-  f.printf("  \"programStartTime":%lu,\n", (unsigned long)programState.programStartTime);
-  f.printf("  \"isRunning":%s,\n", programState.isRunning ? "true" : "false");
+  f.printf("  \"elapsedStageSec\":%lu,\n", (programState.customStageStart > 0) ? (millis() - programState.customStageStart) / 1000UL : 0UL);
+  f.printf("  \"elapsedMixSec\":%lu,\n", (programState.customMixStepStart > 0) ? (millis() - programState.customMixStepStart) / 1000UL : 0UL);
+  f.printf("  \"programStartTime\":%lu,\n", (unsigned long)programState.programStartTime);
+  f.printf("  \"isRunning\":%s,\n", programState.isRunning ? "true" : "false");
    f.print("  \"actualStageStartTimes\":[");
   for (int i = 0; i < 20; i++) {
     f.printf("%s%lu", (i > 0) ? "," : "", (unsigned long)programState.actualStageStartTimes[i]);
@@ -415,21 +415,21 @@ void loadResumeState() {
     }
     if (stageIdx >= p.customStages.size()) {
       // Program finished
-      customStageIdx = 0;
-      customMixIdx = 0;
-      customStageStart = 0;
-      customMixStepStart = 0;
-      isRunning = false;
+      programState.customStageIdx = 0;
+      programState.customMixIdx = 0;
+      programState.customStageStart = 0;
+      programState.customMixStepStart = 0;
+      programState.isRunning = false;
       clearResumeState();
       return;
     }
-    customStageIdx = stageIdx;
-    customStageStart = millis() - remainStageSec * 1000UL;
-    if (customStageStart == 0) customStageStart = millis(); // Ensure nonzero for UI
+    programState.customStageIdx = stageIdx;
+    programState.customStageStart = millis() - remainStageSec * 1000UL;
+    if (programState.customStageStart == 0) programState.customStageStart = millis(); // Ensure nonzero for UI
     // Fast-forward mix steps if mixPattern exists
-    CustomStage &st = p.customStages[customStageIdx];
+    CustomStage &st = p.customStages[programState.customStageIdx];
     if (!st.mixPattern.empty()) {
-      size_t mixIdx = customMixIdx;
+      size_t mixIdx = programState.customMixIdx;
       unsigned long remainMixSec = elapsedMixSec;
       while (mixIdx < st.mixPattern.size()) {
         unsigned long mixDurSec = st.mixPattern[mixIdx].mixSec + st.mixPattern[mixIdx].waitSec;
@@ -438,17 +438,17 @@ void loadResumeState() {
         mixIdx++;
       }
       if (mixIdx >= st.mixPattern.size()) mixIdx = 0;
-      customMixIdx = mixIdx;
-      customMixStepStart = millis() - remainMixSec * 1000UL;
-      if (customMixStepStart == 0) customMixStepStart = millis(); // Ensure nonzero for UI
+      programState.customMixIdx = mixIdx;
+      programState.customMixStepStart = millis() - remainMixSec * 1000UL;
+      if (programState.customMixStepStart == 0) programState.customMixStepStart = millis(); // Ensure nonzero for UI
     } else {
-      customMixIdx = 0;
-      customMixStepStart = millis(); // Ensure nonzero for UI
+      programState.customMixIdx = 0;
+      programState.customMixStepStart = millis(); // Ensure nonzero for UI
     }
   } else {
     // Not running or invalid program
-    customStageStart = millis() - elapsedStageSec * 1000UL;
-    customMixStepStart = millis() - elapsedMixSec * 1000UL;
+    programState.customStageStart = millis() - elapsedStageSec * 1000UL;
+    programState.customMixStepStart = millis() - elapsedMixSec * 1000UL;
     // Ensure all outputs are OFF if not running
     setHeater(false);
     setMotor(false);
@@ -494,24 +494,24 @@ void loop() {
   updateFermentationTiming(stageJustAdvanced);
 
   // --- Check for stage advancement and log ---
-  if (stageJustAdvanced && programs.size() > 0 && activeProgramId < programs.size() && customStageIdx < programs[activeProgramId].customStages.size()) {
-    Program &p = programs[activeProgramId];
-    CustomStage &st = p.customStages[customStageIdx];
+  if (stageJustAdvanced && programs.size() > 0 && programState.activeProgramId < programs.size() && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
+    Program &p = programs[programState.activeProgramId];
+    CustomStage &st = p.customStages[programState.customStageIdx];
     if (st.isFermentation) {
-      if (debugSerial) Serial.printf("[STAGE ADVANCE] Fermentation stage advanced to %d\n", (int)customStageIdx);
+      if (debugSerial) Serial.printf("[STAGE ADVANCE] Fermentation stage advanced to %d\n", (int)programState.customStageIdx);
     } else {
-      if (debugSerial) Serial.printf("[STAGE ADVANCE] Non-fermentation stage advanced to %d\n", (int)customStageIdx);
+      if (debugSerial) Serial.printf("[STAGE ADVANCE] Non-fermentation stage advanced to %d\n", (int)programState.customStageIdx);
     }
   }
 
-  if (!isRunning) {
+  if (!programState.isRunning) {
     stageJustAdvanced = false;
     checkDelayedResume();
     handleManualMode();
     handleScheduledStart(scheduledStartTriggered);
     yield(); delay(1); return;
   }
-  if (programs.size() == 0 || activeProgramId >= programs.size()) {
+  if (programs.size() == 0 || programState.activeProgramId >= programs.size()) {
     stageJustAdvanced = false;
     stopBreadmaker(); yield(); delay(1); return;
   }
@@ -524,9 +524,9 @@ void loop() {
 // --- Helper function definitions ---
 // Updates fermentation timing, calculates weighted time, and advances stage if needed.
 void updateFermentationTiming(bool &stageJustAdvanced) {
-  if (programs.size() > 0 && activeProgramId < programs.size() && customStageIdx < programs[activeProgramId].customStages.size()) {
-    Program &p = programs[activeProgramId];
-    CustomStage &st = p.customStages[customStageIdx];
+  if (programs.size() > 0 && programState.activeProgramId < programs.size() && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
+    Program &p = programs[programState.activeProgramId];
+    CustomStage &st = p.customStages[programState.customStageIdx];
     if (st.isFermentation) {
       float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
       float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
@@ -549,8 +549,8 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
       double epsilon = 0.05;
       if (!stageJustAdvanced && (fermentState.fermentWeightedSec + epsilon >= plannedStageSec)) {
         if (debugSerial) Serial.printf("[FERMENT] Auto-advance: weighted %.1fs >= planned %.1fs\n", fermentState.fermentWeightedSec, plannedStageSec);
-        customStageIdx++;
-        customStageStart = millis();
+        programState.customStageIdx++;
+        programState.customStageStart = millis();
         resetFermentationTracking(actualTemp);
         saveResumeState();
         stageJustAdvanced = true;
@@ -611,20 +611,20 @@ void handleManualMode() {
 void handleScheduledStart(bool &scheduledStartTriggered) {
   if (scheduledStart && time(nullptr) >= scheduledStart && !scheduledStartTriggered) {
     scheduledStartTriggered = true;
-    isRunning = true;
-    if (scheduledStartStage >= 0 && scheduledStartStage < maxCustomStages) {
-      customStageIdx = scheduledStartStage;
+    programState.isRunning = true;
+    if (scheduledStartStage >= 0 && scheduledStartStage < programState.maxCustomStages) {
+      programState.customStageIdx = scheduledStartStage;
       if (debugSerial) Serial.printf("[SCHEDULED] Starting at stage %d\n", scheduledStartStage);
     } else {
-      customStageIdx = 0;
+      programState.customStageIdx = 0;
       if (debugSerial) Serial.printf("[SCHEDULED] Starting from beginning\n");
     }
-    customMixIdx = 0;
-    customStageStart = millis();
-    customMixStepStart = 0;
-    programStartTime = time(nullptr);
-    for (int i = 0; i < 20; i++) actualStageStartTimes[i] = 0;
-    actualStageStartTimes[customStageIdx] = programStartTime;
+    programState.customMixIdx = 0;
+    programState.customStageStart = millis();
+    programState.customMixStepStart = 0;
+    programState.programStartTime = time(nullptr);
+    for (int i = 0; i < 20; i++) programState.actualStageStartTimes[i] = 0;
+    programState.actualStageStartTimes[programState.customStageIdx] = programState.programStartTime;
     saveResumeState();
     scheduledStart = 0;
     scheduledStartStage = -1;
@@ -634,20 +634,20 @@ void handleScheduledStart(bool &scheduledStartTriggered) {
 
 // Handles the execution and advancement of custom program stages, including mixing and fermentation.
 void handleCustomStages(bool &stageJustAdvanced) {
-  Program &p = programs[activeProgramId];
+  Program &p = programs[programState.activeProgramId];
   if (!p.customStages.empty()) {
     stageJustAdvanced = false;
-    if (customStageIdx >= p.customStages.size()) {
+    if (programState.customStageIdx >= p.customStages.size()) {
       stageJustAdvanced = false;
       stopBreadmaker();
-      customStageIdx = 0;
-      customStageStart = 0;
+      programState.customStageIdx = 0;
+      programState.customStageStart = 0;
       clearResumeState();
       yield();
       delay(1);
       return;
     }
-    CustomStage &st = p.customStages[customStageIdx];
+    CustomStage &st = p.customStages[programState.customStageIdx];
     pid.Setpoint = st.temp;
     pid.Input = getAveragedTemperature();
     if (st.isFermentation) {
@@ -658,20 +658,20 @@ void handleCustomStages(bool &stageJustAdvanced) {
     if (fermentState.lastFermentAdjust == 0 || millis() - fermentState.lastFermentAdjust > 600000) {
       fermentState.lastFermentAdjust = millis();
       unsigned long nowMs = millis();
-      unsigned long elapsedInCurrentStage = (customStageStart > 0) ? (nowMs - customStageStart) : 0UL;
+      unsigned long elapsedInCurrentStage = (programState.customStageStart > 0) ? (nowMs - programState.customStageStart) : 0UL;
       double cumulativePredictedSec = 0.0;
       for (size_t i = 0; i < p.customStages.size(); ++i) {
         CustomStage &stage = p.customStages[i];
         double plannedStageSec = (double)stage.min * 60.0;
         double adjustedStageSec = plannedStageSec;
         if (stage.isFermentation) {
-          if (i < customStageIdx) {
+          if (i < programState.customStageIdx) {
             float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
             float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
             float temp = fermentState.fermentLastTemp;
             float factor = pow(q10, (baseline - temp) / 10.0); // Q10: factor < 1 means faster at higher temp
             cumulativePredictedSec += plannedStageSec * factor; // Multiply: higher temp = less time
-          } else if (i == customStageIdx) {
+          } else if (i == programState.customStageIdx) {
             double elapsedSec = fermentState.fermentWeightedSec;
             double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
             elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
@@ -690,7 +690,7 @@ void handleCustomStages(bool &stageJustAdvanced) {
           cumulativePredictedSec += plannedStageSec;
         }
       }
-      fermentState.predictedCompleteTime = (unsigned long)(programStartTime + (unsigned long)(cumulativePredictedSec)); // All predicted times use Q10 multiply logic
+      fermentState.predictedCompleteTime = (unsigned long)(programState.programStartTime + (unsigned long)(cumulativePredictedSec)); // All predicted times use Q10 multiply logic
     }
     if (st.temp > 0 || manualMode) {
       if (manualMode && pid.Setpoint > 0) {
@@ -739,45 +739,45 @@ void handleCustomStages(bool &stageJustAdvanced) {
         hasMix = false;
       } else if (!st.mixPattern.empty()) {
         hasMix = true;
-        if (customMixIdx >= st.mixPattern.size()) {
-          customMixIdx = 0;
+        if (programState.customMixIdx >= st.mixPattern.size()) {
+          programState.customMixIdx = 0;
           if (debugSerial) Serial.printf("[MIX] Index out of bounds, reset to 0 (total patterns: %d)\n", st.mixPattern.size());
         }
-        MixStep &step = st.mixPattern[customMixIdx];
+        MixStep &step = st.mixPattern[programState.customMixIdx];
         unsigned long stepDuration = (step.durationSec > 0) ? (unsigned long)step.durationSec : (unsigned long)(step.mixSec + step.waitSec);
-        if (customMixStepStart == 0) {
-          customMixStepStart = millis();
+        if (programState.customMixStepStart == 0) {
+          programState.customMixStepStart = millis();
           if (debugSerial) {
             if (stepDuration > (unsigned long)(step.mixSec + step.waitSec)) {
               unsigned long expectedCycles = stepDuration / (step.mixSec + step.waitSec);
               Serial.printf("[MIX] Starting pattern %d/%d: mix=%ds, wait=%ds, duration=%ds (≈%lu cycles)\n", 
-                          customMixIdx + 1, st.mixPattern.size(), step.mixSec, step.waitSec, stepDuration, expectedCycles);
+                          programState.customMixIdx + 1, st.mixPattern.size(), step.mixSec, step.waitSec, stepDuration, expectedCycles);
             } else {
               Serial.printf("[MIX] Starting pattern %d/%d: mix=%ds, wait=%ds, duration=%ds (single cycle)\n", 
-                          customMixIdx + 1, st.mixPattern.size(), step.mixSec, step.waitSec, stepDuration);
+                          programState.customMixIdx + 1, st.mixPattern.size(), step.mixSec, step.waitSec, stepDuration);
             }
           }
         }
-        unsigned long elapsed = (millis() - customMixStepStart) / 1000UL;
+        unsigned long elapsed = (millis() - programState.customMixStepStart) / 1000UL;
         if (stepDuration > (unsigned long)(step.mixSec + step.waitSec)) {
           unsigned long cycleTime = step.mixSec + step.waitSec;
           unsigned long cycleElapsed = elapsed % cycleTime;
           if (cycleElapsed < (unsigned long)step.mixSec) {
             setMotor(true);
             if (debugSerial && (elapsed / cycleTime) != ((elapsed - 1) / cycleTime)) {
-              Serial.printf("[MIX] Pattern %d cycle %lu: mixing (%lus elapsed)\n", customMixIdx + 1, elapsed / cycleTime + 1, elapsed);
+              Serial.printf("[MIX] Pattern %d cycle %lu: mixing (%lus elapsed)\n", programState.customMixIdx + 1, elapsed / cycleTime + 1, elapsed);
             }
           } else {
             setMotor(false);
           }
           if (elapsed >= stepDuration) {
-            customMixIdx++;
-            customMixStepStart = millis();
-            if (customMixIdx >= st.mixPattern.size()) {
-              customMixIdx = 0;
+            programState.customMixIdx++;
+            programState.customMixStepStart = millis();
+            if (programState.customMixIdx >= st.mixPattern.size()) {
+              programState.customMixIdx = 0;
               if (debugSerial) Serial.printf("[MIX] All %d patterns complete, restarting from pattern 0\n", st.mixPattern.size());
             } else {
-              if (debugSerial) Serial.printf("[MIX] Advancing to pattern %d\n", customMixIdx);
+              if (debugSerial) Serial.printf("[MIX] Advancing to pattern %d\n", programState.customMixIdx);
             }
           }
         } else {
@@ -788,13 +788,13 @@ void handleCustomStages(bool &stageJustAdvanced) {
           } else if (elapsed < stepDuration) {
             setMotor(false);
           } else {
-            customMixIdx++;
-            customMixStepStart = millis();
-            if (customMixIdx >= st.mixPattern.size()) {
-              customMixIdx = 0;
+            programState.customMixIdx++;
+            programState.customMixStepStart = millis();
+            if (programState.customMixIdx >= st.mixPattern.size()) {
+              programState.customMixIdx = 0;
               if (debugSerial) Serial.printf("[MIX] All %d patterns complete, restarting from pattern 0\n", st.mixPattern.size());
             } else {
-              if (debugSerial) Serial.printf("[MIX] Advancing to pattern %d\n", customMixIdx);
+              if (debugSerial) Serial.printf("[MIX] Advancing to pattern %d\n", programState.customMixIdx);
             }
           }
         }
@@ -816,21 +816,21 @@ void handleCustomStages(bool &stageJustAdvanced) {
         Serial.printf("[FERMENT] Not yet advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentState.fermentWeightedSec, fermentTargetSec, st.min);
       }
     } else {
-      unsigned long elapsedMs = millis() - customStageStart;
+      unsigned long elapsedMs = millis() - programState.customStageStart;
       unsigned long stageMs = (unsigned long)st.min * 60000UL;
       if (elapsedMs >= stageMs) {
         stageComplete = true;
       } else if (stageMs > 0 && elapsedMs >= stageMs - 1000 && !stageComplete) {
         // Safety: If time left is 0 but not advancing, log warning
-        if (debugSerial) Serial.printf("[WARN] Time left is 0 for non-fermentation stage %d but not advancing (elapsed=%lu, stageMs=%lu)\n", (int)customStageIdx, elapsedMs, stageMs);
+        if (debugSerial) Serial.printf("[WARN] Time left is 0 for non-fermentation stage %d but not advancing (elapsed=%lu, stageMs=%lu)\n", (int)programState.customStageIdx, elapsedMs, stageMs);
       }
     }
     // Extra safety: If time left is 0 for non-fermentation and not advancing, force advancement
     if (!st.isFermentation) {
-      unsigned long elapsedMs = millis() - customStageStart;
+      unsigned long elapsedMs = millis() - programState.customStageStart;
       unsigned long stageMs = (unsigned long)st.min * 60000UL;
       if (stageMs > 0 && elapsedMs > stageMs + 2000 && !stageComplete) {
-        if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of non-fermentation stage %d after time expired (elapsed=%lu, stageMs=%lu)\n", (int)customStageIdx, elapsedMs, stageMs);
+        if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of non-fermentation stage %d after time expired (elapsed=%lu, stageMs=%lu)\n", (int)programState.customStageIdx, elapsedMs, stageMs);
         stageComplete = true;
       }
     }
@@ -848,13 +848,13 @@ void handleCustomStages(bool &stageJustAdvanced) {
         fermentState.predictedCompleteTime = predicted;
         if (debugSerial) Serial.printf("[FERMENT] Stage advanced, predictedCompleteTime set to %lu (now=%lu, remainWeightedSec=%.2f, factor=%.3f) [MULTIPLY]\n", (unsigned long)predicted, (unsigned long)now, remainWeightedSec, factor);
       }
-      customStageIdx++;
-      customStageStart = millis();
-      customMixIdx = 0;
-      customMixStepStart = 0;
+      programState.customStageIdx++;
+      programState.customStageStart = millis();
+      programState.customMixIdx = 0;
+      programState.customMixStepStart = 0;
       saveResumeState();
       stageJustAdvanced = true;
-      if (debugSerial) Serial.printf("[ADVANCE] Stage advanced to %d\n", customStageIdx);
+      if (debugSerial) Serial.printf("[ADVANCE] Stage advanced to %d\n", programState.customStageIdx);
       getAveragedTemperature();
       yield();
       delay(1);
@@ -870,12 +870,12 @@ void handleCustomStages(bool &stageJustAdvanced) {
 // --- Update active program variables ---
 // Updates pointers and counters for the currently active breadmaker program.
 void updateActiveProgramVars() {
-  if (programs.size() > 0 && activeProgramId < programs.size()) {
-    customProgram = &programs[activeProgramId];
-    maxCustomStages = customProgram->customStages.size();
+  if (programs.size() > 0 && programState.activeProgramId < programs.size()) {
+    programState.customProgram = &programs[programState.activeProgramId];
+    programState.maxCustomStages = programState.customProgram->customStages.size();
   } else {
-    customProgram = nullptr;
-    maxCustomStages = 0;
+    programState.customProgram = nullptr;
+    programState.maxCustomStages = 0;
   }
 }
 
@@ -1201,7 +1201,7 @@ void loadSettings() {
   if (doc.containsKey("lastProgramId")) {
     int lastId = doc["lastProgramId"];
     if (lastId >= 0 && lastId < (int)programs.size()) {
-      activeProgramId = lastId;
+      programState.activeProgramId = lastId;
       Serial.print("[loadSettings] lastProgramId loaded: ");
       Serial.println(lastId);
     }
@@ -1210,7 +1210,7 @@ void loadSettings() {
     String lastProg = doc["lastProgram"].as<String>();
     for (size_t i = 0; i < programs.size(); ++i) {
       if (programs[i].name == lastProg) {
-        activeProgramId = i;
+        programState.activeProgramId = i;
         Serial.print("[loadSettings] lastProgram loaded (deprecated): ");
         Serial.println(lastProg);
         break;
@@ -1231,8 +1231,8 @@ void saveSettings() {
   doc["outputMode"] = (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog";
   doc["debugSerial"] = debugSerial;
   if (programs.size() > 0) {
-    doc["lastProgramId"] = (int)activeProgramId;
-    doc["lastProgram"] = programs[activeProgramId].name; // Deprecated, for backward compatibility
+    doc["lastProgramId"] = (int)programState.activeProgramId;
+    doc["lastProgram"] = programs[programState.activeProgramId].name; // Deprecated, for backward compatibility
   }
   // Save PID parameters
   doc["pidKp"] = pid.Kp;

@@ -1,11 +1,12 @@
 
+
 #pragma once
 #include <Arduino.h>
 // Global constants for use across modules
-#define MAX_PROGRAM_STAGES 20
-#define MAX_TEMP_SAMPLES 50
-#define STARTUP_DELAY_MS 15000UL
-#define PIN_RTD A0
+constexpr int MAX_PROGRAM_STAGES = 20;
+constexpr int MAX_TEMP_SAMPLES = 50;
+constexpr unsigned long STARTUP_DELAY_MS = 15000UL;
+constexpr int PIN_RTD = A0;
 
 // --- Fermentation tracking state struct ---
 typedef struct {
