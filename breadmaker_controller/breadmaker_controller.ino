@@ -1,17 +1,6 @@
 #include <functional>
 
-// Helper function to send a JSON error response
-void sendJsonError(AsyncWebServerRequest* req, const String& error, const String& message, int code = 400) {
-  AsyncResponseStream *response = req->beginResponseStream("application/json");
-  response->print("{");
-  response->print("\"error\":\"");
-  response->print(error);
-  response->print("\",");
-  response->print("\"message\":\"");
-  response->print(message);
-  response->print("\"}");
-  req->send(response);
-}
+
 // Maximum number of program stages supported
 #ifndef MAX_PROGRAM_STAGES
 #define MAX_PROGRAM_STAGES 20
@@ -177,6 +166,19 @@ void deleteFolderRecursive(const String& path) {
     }
   }
   LittleFS.rmdir(path);
+}
+
+// Helper function to send a JSON error response
+void sendJsonError(AsyncWebServerRequest* req, const String& error, const String& message, int code = 400) {
+  AsyncResponseStream *response = req->beginResponseStream("application/json");
+  response->print("{");
+  response->print("\"error\":\"");
+  response->print(error);
+  response->print("\",");
+  response->print("\"message\":\"");
+  response->print(message);
+  response->print("\"}");
+  req->send(response);
 }
 
 
@@ -1563,17 +1565,6 @@ server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
     }
 
     saveResumeState();
-    if (debugSerial) Serial.printf("[STAGE] Starting at custom stage: %d\n", customStageIdx);
-
-    response->print("\"status\":\"started\",");
-    response->printf("\"stage\":%d,", stageIdx);
-    if (customProgram && (size_t)stageIdx < customProgram->customStages.size()) {
-      response->print("\"stageName\":\"");
-      response->print(customProgram->customStages[stageIdx].label.c_str());
-      response->print("\"");
-    }
-    response->print("}");
-    req->send(response);
   });
 
   // --- Combined timed start at stage endpoint ---
@@ -1971,6 +1962,7 @@ void loop() {
     stageJustAdvanced = false;
   }
 // ...existing code...
+  static bool scheduledStartTriggered = false;
   if (!isRunning) {
     stageJustAdvanced = false;
     // Check if we should resume after startup delay
@@ -1989,7 +1981,7 @@ void loop() {
         }
       }
     }
-    
+
     // Handle manual mode even when program is not running
     if (manualMode && Setpoint > 0) {
       Input = getAveragedTemperature();
@@ -2016,11 +2008,13 @@ void loop() {
       setLight(false);
       setBuzzer(false);
     }
-    
-    if (scheduledStart && time(nullptr) >= scheduledStart) {
+
+    // Only trigger scheduled start ONCE per schedule
+    if (scheduledStart && time(nullptr) >= scheduledStart && !scheduledStartTriggered) {
       scheduledStart = 0;
+      scheduledStartTriggered = true;
       isRunning = true;
-      
+
       // Handle starting at a specific stage or from the beginning
       if (scheduledStartStage >= 0 && scheduledStartStage < maxCustomStages) {
         customStageIdx = scheduledStartStage;
@@ -2030,18 +2024,20 @@ void loop() {
         if (debugSerial) Serial.printf("[SCHEDULED] Starting from beginning\n");
       }
       scheduledStartStage = -1; // Reset after use
-      
+
       customMixIdx = 0;
       customStageStart = millis();
       customMixStepStart = 0;
       programStartTime = time(nullptr);
-      
+
       // Initialize actual stage start times array for scheduled start
       for (int i = 0; i < 20; i++) actualStageStartTimes[i] = 0;
       actualStageStartTimes[customStageIdx] = programStartTime; // Record start time for the actual starting stage
-      
+
       saveResumeState(); // Save on scheduled start
     }
+    // Reset the trigger if a new schedule is set
+    if (!scheduledStart) scheduledStartTriggered = false;
     yield(); delay(1); return;
   }
   if (programs.size() == 0 || activeProgramId >= programs.size()) {
