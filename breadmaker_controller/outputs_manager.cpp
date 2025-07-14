@@ -1,5 +1,6 @@
 #include "outputs_manager.h"
 #include <Arduino.h>
+#include "globals.h"
 
 // Output pins (define here for linker visibility)
 const int PIN_HEATER = D1;     // Heater (PWM ~1V ON, 0V OFF)
@@ -19,6 +20,7 @@ bool buzzerState = true;
 void setHeater(bool on) {
   if (heaterState == on) return;
   heaterState = on;
+  outputStates.heater = on;  // Keep struct in sync
   if (debugSerial) Serial.printf("[setHeater] Setting heater to %s\n", on ? "ON" : "OFF");
   if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_HEATER, on ? HIGH : LOW);
   else analogWrite(PIN_HEATER, on ? 77 : 0);
@@ -26,6 +28,7 @@ void setHeater(bool on) {
 void setMotor(bool on) {
   if (motorState == on) return;
   motorState = on;
+  outputStates.motor = on;  // Keep struct in sync
   if (debugSerial) Serial.printf("[setMotor] Setting motor to %s\n", on ? "ON" : "OFF");
   if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_MOTOR, on ? HIGH : LOW);
   else analogWrite(PIN_MOTOR, on ? 77 : 0);
@@ -33,6 +36,7 @@ void setMotor(bool on) {
 void setLight(bool on) {
   if (lightState == on) return;
   lightState = on;
+  outputStates.light = on;  // Keep struct in sync
   if (debugSerial) Serial.printf("[setLight] Setting light to %s\n", on ? "ON" : "OFF");
   digitalWrite(PIN_LIGHT, on ? HIGH : LOW);
   if (on) {
@@ -43,6 +47,7 @@ void setLight(bool on) {
 void setBuzzer(bool on) {
   if (buzzerState == on) return;
   buzzerState = on;
+  outputStates.buzzer = on;  // Keep struct in sync
   if (debugSerial) Serial.printf("[setBuzzer] Setting buzzer to %s\n", on ? "ON" : "OFF");
   if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_BUZZER, on ? HIGH : LOW);
   else analogWrite(PIN_BUZZER, on ? 77 : 0);
@@ -60,6 +65,7 @@ void outputsManagerInit() {
   setMotor(false);
   setLight(false);
   setBuzzer(false);
+  // outputStates is now synced by the setter functions
 }
 
 // Buzzer tone generation variables

@@ -12,21 +12,11 @@
 
 // Forward declarations for helpers and global variables used in endpoints
 extern bool debugSerial;
-// extern unsigned int activeProgramId; // Now in programState
-
-// Only keep externs for actual variables, not macros/constants from globals.h
-extern bool debugSerial;
-#include "globals.h" // For ProgramState struct
-extern ProgramState programState;
-#include "globals.h" // For PIDControl struct
-extern PIDControl pid;
 extern unsigned long windowSize, onTime, startupTime;
-// Use tempAvg and fermentState structs from globals.h
-extern TemperatureAveragingState tempAvg;
-extern FermentationState fermentState;
 extern bool thermalRunawayDetected, sensorFaultDetected;
 extern time_t scheduledStart;
 extern int scheduledStartStage;
+extern bool heaterState, motorState, lightState, buzzerState;
 extern void streamStatusJson(Print& out);
 extern void saveSettings();
 extern void saveResumeState();
@@ -41,6 +31,9 @@ extern void shortBeep();
 extern void startBuzzerTone(float, float, unsigned long);
 extern float getAveragedTemperature();
 extern float readTemperature();
+extern void switchToProfile(const String& profileName);
+extern void loadPIDProfiles();
+extern void savePIDProfiles();
 
 extern void sendJsonError(AsyncWebServerRequest*, const String&, const String&, int);
 void deleteFolderRecursive(const String& path);
@@ -49,7 +42,6 @@ extern std::vector<Program> programs;
 extern unsigned long lightOnTime;
 extern unsigned long windowStartTime;
 // Now accessed via pid.pidP, pid.pidI, pid.pidD, pid.lastInput, pid.lastITerm
-extern OutputStates outputStates;
 // Use fermentState struct fields
 
 // Now accessed via pid.controller
@@ -60,6 +52,7 @@ extern OutputStates outputStates;
 void stateMachineEndpoints(AsyncWebServer& server);
 void manualOutputEndpoints(AsyncWebServer& server);
 void pidControlEndpoints(AsyncWebServer& server);
+void pidProfileEndpoints(AsyncWebServer& server);
 void homeAssistantEndpoint(AsyncWebServer& server);
 void calibrationEndpoints(AsyncWebServer& server);
 void fileEndPoints(AsyncWebServer& server);
@@ -129,6 +122,7 @@ void coreEndpoints(AsyncWebServer& server) {
             req->send(response);
         }
     );
+
 }
 
 void registerWebEndpoints(AsyncWebServer& server) {
@@ -136,6 +130,7 @@ void registerWebEndpoints(AsyncWebServer& server) {
     stateMachineEndpoints(server);
     manualOutputEndpoints(server);
     pidControlEndpoints(server);
+    pidProfileEndpoints(server);
     homeAssistantEndpoint(server);
     calibrationEndpoints(server);
     fileEndPoints(server);
@@ -696,7 +691,7 @@ void manualOutputEndpoints(AsyncWebServer& server)
       response->printf("\"is_running\":%s,", programState.isRunning ? "true" : "false");
       response->printf("\"kp\":%.6f,", pid.Kp);
       response->printf("\"ki\":%.6f,", pid.Ki);
-      response->printf("\"kd\":%.6f,", pid.Kd);
+      response->printf("\"kd\":%.6f", pid.Kd);
       response->printf("\"sample_time_ms\":%lu,", pid.sampleTime);
       response->printf("\"temp_sample_count\":%d,", tempAvg.tempSampleCount);
       response->printf("\"temp_reject_count\":%d,", tempAvg.tempRejectCount);
@@ -968,666 +963,112 @@ void pidControlEndpoints(AsyncWebServer& server)
   
 }
 
-void homeAssistantEndpoint(AsyncWebServer& server)
-{// --- Home Assistant-friendly endpoint (lightweight - uses cached values only) ---
-  server.on("/ha", HTTP_GET, [](AsyncWebServerRequest* req){
-    AsyncResponseStream *response = req->beginResponseStream("application/json");
-    response->print("{");
-    response->printf("\"state\":\"%s\",", programState.isRunning ? "on" : "off");
-    response->printf("\"stage\":\"");
-    if (programState.activeProgramId < programs.size() && programState.isRunning && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-      if (programs[programState.activeProgramId].id != -1)
-        response->print(programs[programState.activeProgramId].customStages[programState.customStageIdx].label.c_str());
-      else
-        response->print("Idle");
-    } else {
-      response->print("Idle");
-    }
-    response->print("\",");
-    // NOTE: The index (activeProgramId) is NOT the same as the id property. The id is a unique field in each Program.
-    // All JSON output for programId uses the id property, not the index.
-    if (programState.activeProgramId < programs.size()) {
-      if (programs[programState.activeProgramId].id != -1) {
-        response->printf("\"program\":\"%s\",", programs[programState.activeProgramId].name.c_str());
-        response->printf("\"programId\":%d,", programs[programState.activeProgramId].id);
-      } else {
-        response->print("\"program\":\"\",\"programId\":-1,");
-      }
-    } else {
-      response->print("\"program\":\"\",");
-      response->print("\"programId\":-1,");
-    }
-    response->printf("\"temperature\":%.2f,", tempAvg.averagedTemperature);
-    response->printf("\"setpoint\":%.2f,", pid.Setpoint);
-    response->printf("\"heater\":%s,", heaterState ? "true" : "false");
-    response->printf("\"motor\":%s,", motorState ? "true" : "false");
-    response->printf("\"light\":%s,", lightState ? "true" : "false");
-    response->printf("\"buzzer\":%s,", buzzerState ? "true" : "false");
-    response->printf("\"manual_mode\":%s,", programState.manualMode ? "true" : "false");
-    response->printf("\"stageIdx\":%u,", (unsigned)programState.customStageIdx);
-    response->printf("\"mixIdx\":%u,", (unsigned)programState.customMixIdx);
-    // Use the same logic as streamStatusJson for stage_ready_at and program_ready_at
-    unsigned long nowMs = millis();
-    time_t now = time(nullptr);
-    unsigned long stageReadyAt = 0;
-    unsigned long programReadyAt = 0;
-    if (programState.activeProgramId < programs.size() && programState.isRunning && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-        Program &p = programs[programState.activeProgramId];
-        CustomStage &st = p.customStages[programState.customStageIdx];
-        if (st.isFermentation) {
-            double plannedStageSec = (double)st.min * 60.0;
-            double elapsedSec = fermentState.fermentWeightedSec;
-            double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
-            elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
-            double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor);
-            if (remainSec < 0) remainSec = 0;
-            stageReadyAt = now + (unsigned long)(remainSec * fermentState.fermentLastFactor);
-        } else if (programState.actualStageStartTimes[programState.customStageIdx] > 0) {
-            stageReadyAt = programState.actualStageStartTimes[programState.customStageIdx] + (time_t)st.min * 60;
-        }
-        // Program ready at: predictedCompleteTime if running
-        programReadyAt = (unsigned long)fermentState.predictedCompleteTime;
-    }
-    response->printf("\"stage_time_left\":%ld,", 0L); // TODO: implement if needed
-    response->printf("\"stage_ready_at\":%lu,", stageReadyAt);
-    response->printf("\"program_ready_at\":%lu,", programReadyAt);
-    response->printf("\"startupDelayComplete\":%s,", isStartupDelayComplete() ? "true" : "false");
-    response->printf("\"startupDelayRemainingMs\":%lu,", isStartupDelayComplete() ? 0UL : (STARTUP_DELAY_MS - (millis() - startupTime)));
-    response->printf("\"fermentationFactor\":%.2f,", fermentState.fermentationFactor);
-    response->printf("\"initialFermentTemp\":%.2f,", fermentState.initialFermentTemp);
-    // Health info
-    response->print("\"health\":{");
-    response->printf("\"uptime_sec\":%lu,", millis() / 1000UL);
-    response->printf("\"firmware_version\":\"%s\",", FIRMWARE_BUILD_DATE);
-    response->printf("\"build_date\":\"%s\",", FIRMWARE_BUILD_DATE);
-    response->printf("\"reset_reason\":\"%s\",", ESP.getResetReason().c_str());
-    response->printf("\"chip_id\":%lu,", ESP.getChipId());
-    response->print("\"watchdog_enabled\":true,");
-    response->printf("\"startup_complete\":%s,", (millis() - startupTime) >= STARTUP_DELAY_MS ? "true" : "false");
-    response->printf("\"watchdog_last_feed\":%lu,", millis() % 1000);
-    response->print("\"watchdog_timeout_ms\":8000,");
-    // Memory info
-    uint32_t freeHeap = ESP.getFreeHeap();
-    uint32_t maxFreeBlock = ESP.getMaxFreeBlockSize();
-    response->print("\"memory\":{");
-    response->printf("\"free_heap\":%lu,", freeHeap);
-    response->printf("\"max_free_block\":%lu,", maxFreeBlock);
-    response->printf("\"min_free_heap\":%lu,", freeHeap);
-    response->printf("\"fragmentation\":%.2f", (freeHeap > 0) ? ((maxFreeBlock * 100.0) / freeHeap) : 0.0);
-    response->print("},");
-    // Performance info
-    response->print("\"performance\":{");
-    response->print("\"cpu_usage\":0,");
-    response->print("\"avg_loop_time_us\":1000,");
-    response->print("\"max_loop_time_us\":5000,");
-    response->printf("\"loop_count\":%lu", millis() / 10);
-    response->print("},");
-    // Network info
-    response->print("\"network\":{");
-    response->printf("\"connected\":%s,", (WiFi.status() == WL_CONNECTED) ? "true" : "false");
-    response->printf("\"rssi\":%d,", WiFi.RSSI());
-    response->print("\"reconnect_count\":0,");
-    response->printf("\"ip\":\"%s\"", WiFi.localIP().toString().c_str());
-    response->print("},");
-    // Filesystem info (real values)
-    FSInfo fsinfo;
-    LittleFS.info(fsinfo);
-    response->print("\"filesystem\":{");
-    response->printf("\"usedBytes\":%lu,", fsinfo.usedBytes);
-    response->printf("\"totalBytes\":%lu,", fsinfo.totalBytes);
-    response->printf("\"freeBytes\":%lu,", fsinfo.totalBytes - fsinfo.usedBytes);
-    float fsUtil = (fsinfo.totalBytes > 0) ? (fsinfo.usedBytes * 100.0 / fsinfo.totalBytes) : 0.0;
-    response->printf("\"utilization\":%.2f", fsUtil);
-    response->print("},");
-    // Error counts (placeholder)
-    response->print("\"error_counts\":[0,0,0,0,0,0],");
-    // Temperature control info
-    response->print("\"temperature_control\":{");
-    response->printf("\"input\":%.2f,", tempAvg.averagedTemperature); // Averaged temp for legacy
-    response->printf("\"pid_input\":%.2f,", pid.Input); // PID input (raw value used by PID)
-    response->printf("\"output\":%.2f,", pid.Output * 100.0); // Output as percent
-    response->printf("\"pid_output\":%.6f,", pid.Output); // PID output (0-1 float)
-    response->printf("\"raw_temp\":%.2f,", readTemperature());
-    response->printf("\"thermal_runaway\":%s,", (thermalRunawayDetected ? "true" : "false"));
-    response->printf("\"sensor_fault\":%s,", (sensorFaultDetected ? "true" : "false"));
-    // Use the outer nowMs if already declared, otherwise declare here
-    unsigned long elapsed = (windowStartTime > 0) ? (nowMs - windowStartTime) : 0;
-    response->printf("\"window_elapsed_ms\":%lu,", elapsed);
-    response->printf("\"window_size_ms\":%lu,", windowSize);
-    response->printf("\"on_time_ms\":%lu,", onTime);
-    response->printf("\"duty_cycle_percent\":%.2f,", pid.Output * 100.0);
-    // --- PID parameters for Home Assistant ---
-    response->printf("\"kp\":%.6f,", pid.Kp);
-    response->printf("\"ki\":%.6f,", pid.Ki);
-    response->printf("\"kd\":%.6f,", pid.Kd);
-    response->printf("\"sample_time_ms\":%lu,", pid.sampleTime);
-    response->printf("\"temp_sample_count\":%d,", tempAvg.tempSampleCount);
-    response->printf("\"temp_reject_count\":%d,", tempAvg.tempRejectCount);
-    response->printf("\"temp_sample_interval_ms\":%lu", tempAvg.tempSampleInterval);
-    response->print("}");
-    // --- Add any missing properties for Home Assistant integration ---
-    // Add any additional properties here as needed for HA sensors
-    response->print("}"); // end health
-    response->print("}"); // end root
-    req->send(response);
-  });// --- Home Assistant-friendly endpoint (lightweight - uses cached values only) ---
-  server.on("/ha", HTTP_GET, [](AsyncWebServerRequest* req){
-    AsyncResponseStream *response = req->beginResponseStream("application/json");
-    response->print("{");
-    response->printf("\"state\":\"%s\",", programState.isRunning ? "on" : "off");
-    response->printf("\"stage\":\"");
-    if (programState.activeProgramId < programs.size() && programState.isRunning && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-      response->print(programs[programState.activeProgramId].customStages[programState.customStageIdx].label.c_str());
-    } else {
-      response->print("Idle");
-    }
-    response->print("\",");
-    if (programState.activeProgramId < programs.size()) {
-      response->printf("\"program\":\"%s\",", programs[programState.activeProgramId].name.c_str());
-      response->printf("\"programId\":%d,", programs[programState.activeProgramId].id);
-    } else {
-      response->print("\"program\":\"\",");
-      response->print("\"programId\":-1,");
-    }
-    response->printf("\"temperature\":%.2f,", tempAvg.averagedTemperature);
-    response->printf("\"setpoint\":%.2f,", pid.Setpoint);
-    response->printf("\"heater\":%s,", heaterState ? "true" : "false");
-    response->printf("\"motor\":%s,", motorState ? "true" : "false");
-    response->printf("\"light\":%s,", lightState ? "true" : "false");
-    response->printf("\"buzzer\":%s,", buzzerState ? "true" : "false");
-    response->printf("\"manual_mode\":%s,", programState.manualMode ? "true" : "false");
-    response->printf("\"stageIdx\":%u,", (unsigned)programState.customStageIdx);
-    response->printf("\"mixIdx\":%u,", (unsigned)programState.customMixIdx);
-    // Use the same logic as streamStatusJson for stage_ready_at and program_ready_at
-    unsigned long nowMs = millis();
-    time_t now = time(nullptr);
-    unsigned long stageReadyAt = 0;
-    unsigned long programReadyAt = 0;
-    if (programState.activeProgramId < programs.size() && programState.isRunning && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-        Program &p = programs[programState.activeProgramId];
-        CustomStage &st = p.customStages[programState.customStageIdx];
-        if (st.isFermentation) {
-            double plannedStageSec = (double)st.min * 60.0;
-            double elapsedSec = fermentState.fermentWeightedSec;
-            double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
-            elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
-            double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor);
-            if (remainSec < 0) remainSec = 0;
-            stageReadyAt = now + (unsigned long)(remainSec * fermentState.fermentLastFactor);
-        } else if (programState.actualStageStartTimes[programState.customStageIdx] > 0) {
-            stageReadyAt = programState.actualStageStartTimes[programState.customStageIdx] + (time_t)st.min * 60;
-        }
-        // Program ready at: predictedCompleteTime if running
-        programReadyAt = (unsigned long)fermentState.predictedCompleteTime;
-    }
-    response->printf("\"stage_time_left\":%ld,", 0L); // TODO: implement if needed
-    response->printf("\"stage_ready_at\":%lu,", stageReadyAt);
-    response->printf("\"program_ready_at\":%lu,", programReadyAt);
-    response->printf("\"startupDelayComplete\":%s,", isStartupDelayComplete() ? "true" : "false");
-    response->printf("\"startupDelayRemainingMs\":%lu,", isStartupDelayComplete() ? 0UL : (STARTUP_DELAY_MS - (millis() - startupTime)));
-    response->printf("\"fermentationFactor\":%.2f,", fermentState.fermentationFactor);
-    response->printf("\"initialFermentTemp\":%.2f,", fermentState.initialFermentTemp);
-    // Health info
-    response->print("\"health\":{");
-    response->printf("\"uptime_sec\":%lu,", millis() / 1000UL);
-    response->printf("\"firmware_version\":\"%s\",", FIRMWARE_BUILD_DATE);
-    response->printf("\"build_date\":\"%s\",", FIRMWARE_BUILD_DATE);
-    response->printf("\"reset_reason\":\"%s\",", ESP.getResetReason().c_str());
-    response->printf("\"chip_id\":%lu,", ESP.getChipId());
-    response->print("\"watchdog_enabled\":true,");
-    response->printf("\"startup_complete\":%s,", (millis() - startupTime) >= STARTUP_DELAY_MS ? "true" : "false");
-    response->printf("\"watchdog_last_feed\":%lu,", millis() % 1000);
-    response->print("\"watchdog_timeout_ms\":8000,");
-    // Memory info
-    uint32_t freeHeap = ESP.getFreeHeap();
-    uint32_t maxFreeBlock = ESP.getMaxFreeBlockSize();
-    response->print("\"memory\":{");
-    response->printf("\"free_heap\":%lu,", freeHeap);
-    response->printf("\"max_free_block\":%lu,", maxFreeBlock);
-    response->printf("\"min_free_heap\":%lu,", freeHeap);
-    response->printf("\"fragmentation\":%.2f", (freeHeap > 0) ? ((maxFreeBlock * 100.0) / freeHeap) : 0.0);
-    response->print("},");
-    // Performance info
-    response->print("\"performance\":{");
-    response->print("\"cpu_usage\":0,");
-    response->print("\"avg_loop_time_us\":1000,");
-    response->print("\"max_loop_time_us\":5000,");
-    response->printf("\"loop_count\":%lu", millis() / 10);
-    response->print("},");
-    // Network info
-    response->print("\"network\":{");
-    response->printf("\"connected\":%s,", (WiFi.status() == WL_CONNECTED) ? "true" : "false");
-    response->printf("\"rssi\":%d,", WiFi.RSSI());
-    response->print("\"reconnect_count\":0,");
-    response->printf("\"ip\":\"%s\"", WiFi.localIP().toString().c_str());
-    response->print("},");
-    // Filesystem info (real values)
-    FSInfo fsinfo;
-    LittleFS.info(fsinfo);
-    response->print("\"filesystem\":{");
-    response->printf("\"usedBytes\":%lu,", fsinfo.usedBytes);
-    response->printf("\"totalBytes\":%lu,", fsinfo.totalBytes);
-    response->printf("\"freeBytes\":%lu,", fsinfo.totalBytes - fsinfo.usedBytes);
-    float fsUtil = (fsinfo.totalBytes > 0) ? (fsinfo.usedBytes * 100.0 / fsinfo.totalBytes) : 0.0;
-    response->printf("\"utilization\":%.2f", fsUtil);
-    response->print("},");
-    // Error counts (placeholder)
-    response->print("\"error_counts\":[0,0,0,0,0,0],");
-    // Temperature control info
-    response->print("\"temperature_control\":{");
-    response->printf("\"input\":%.2f,", tempAvg.averagedTemperature); // Averaged temp for legacy
-    response->printf("\"pid_input\":%.2f,", pid.Input); // PID input (raw value used by PID)
-    response->printf("\"output\":%.2f,", pid.Output * 100.0); // Output as percent
-    response->printf("\"pid_output\":%.6f,", pid.Output); // PID output (0-1 float)
-    response->printf("\"raw_temp\":%.2f,", readTemperature());
-    response->printf("\"thermal_runaway\":%s,", (thermalRunawayDetected ? "true" : "false"));
-    response->printf("\"sensor_fault\":%s,", (sensorFaultDetected ? "true" : "false"));
-    // Use the outer nowMs if already declared, otherwise declare here
-    unsigned long elapsed = (windowStartTime > 0) ? (nowMs - windowStartTime) : 0;
-    response->printf("\"window_elapsed_ms\":%lu,", elapsed);
-    response->printf("\"window_size_ms\":%lu,", windowSize);
-    response->printf("\"on_time_ms\":%lu,", onTime);
-    response->printf("\"duty_cycle_percent\":%.2f,", pid.Output * 100.0);
-    // --- PID parameters for Home Assistant ---
-    response->printf("\"kp\":%.6f,", pid.Kp);
-    response->printf("\"ki\":%.6f,", pid.Ki);
-    response->printf("\"kd\":%.6f,", pid.Kd);
-    response->printf("\"sample_time_ms\":%lu,", pid.sampleTime);
-    response->printf("\"temp_sample_count\":%d,", tempAvg.tempSampleCount);
-    response->printf("\"temp_reject_count\":%d,", tempAvg.tempRejectCount);
-    response->printf("\"temp_sample_interval_ms\":%lu", tempAvg.tempSampleInterval);
-    response->print("}");
-    // --- Add any missing properties for Home Assistant integration ---
-    // Add any additional properties here as needed for HA sensors
-    response->print("}"); // end health
-    response->print("}"); // end root
-    req->send(response);
-  });
-}
-
-void calibrationEndpoints(AsyncWebServer& server)
+void pidProfileEndpoints(AsyncWebServer& server)
 {
-  // --- Add single calibration point endpoint ---
-  server.on("/api/calibration/add", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
-    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
-      if (debugSerial) {
-        Serial.printf("[CALIBRATION] Add point POST received %u bytes: ", len);
-        for (size_t i = 0; i < len; i++) {
-          Serial.print((char)data[i]);
-        }
-        Serial.println();
-      }
-      
-      DynamicJsonDocument doc(256);
-      DeserializationError error = deserializeJson(doc, data, len);
-      if (error) { 
-        if (debugSerial) Serial.printf("[CALIBRATION] JSON parse error: %s\n", error.c_str());
-        req->send(400,"text/plain","Bad JSON"); 
-        return; 
-      }
-      
-      if (!doc.containsKey("raw") || !doc.containsKey("temp")) {
-        if (debugSerial) Serial.println("[CALIBRATION] Missing raw or temp field");
-        req->send(400,"text/plain","Missing fields"); 
-        return;
-      }
-      
-      int raw = doc["raw"];
-      float temp = doc["temp"];
-      
-      // Check for duplicates
-      for (auto& pt : rtdCalibTable) {
-        if (pt.raw == raw) {
-          req->send(400,"text/plain","Duplicate raw value"); 
-          return;
-        }
-        if (abs(pt.temp - temp) < 0.01) {
-          req->send(400,"text/plain","Duplicate temp value"); 
-          return;
-        }
-      }
-      
-      // Add the new point
-      CalibPoint newPt = { raw, temp };
-      rtdCalibTable.push_back(newPt);
-      
-      // Sort by raw value for proper interpolation
-      std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), [](const CalibPoint& a, const CalibPoint& b) {
-        return a.raw < b.raw;
-      });
-      
-      // Save to LittleFS
-      saveCalibration();
-      if (debugSerial) Serial.printf("[CALIBRATION] Added point (%d, %.2f), total points: %d\n", raw, temp, rtdCalibTable.size());
-      req->send(200,"text/plain","OK");
-    }
-  );
-
-  // --- Update calibration point endpoint ---
-  server.on("/api/calibration/update", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
-    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
-      if (debugSerial) {
-        Serial.printf("[CALIBRATION] Update point POST received %u bytes: ", len);
-        for (size_t i = 0; i < len; i++) {
-          Serial.print((char)data[i]);
-        }
-        Serial.println();
-      }
-      
-      DynamicJsonDocument doc(256);
-      DeserializationError error = deserializeJson(doc, data, len);
-      if (error) { 
-        if (debugSerial) Serial.printf("[CALIBRATION] JSON parse error: %s\n", error.c_str());
-        req->send(400,"text/plain","Bad JSON"); 
-        return; 
-      }
-      
-      if (!doc.containsKey("index") || !doc.containsKey("raw") || !doc.containsKey("temp")) {
-        if (debugSerial) Serial.println("[CALIBRATION] Missing required fields");
-        req->send(400,"text/plain","Missing fields"); 
-        return;
-      }
-      
-      int index = doc["index"];
-      int newRaw = doc["raw"];
-      float newTemp = doc["temp"];
-      
-      if (index < 0 || index >= rtdCalibTable.size()) {
-        req->send(400,"text/plain","Invalid index"); 
-        return;
-      }
-      
-      // Check for duplicates (excluding current point)
-      for (size_t i = 0; i < rtdCalibTable.size(); i++) {
-        if (i != index) {
-          if (rtdCalibTable[i].raw == newRaw) {
-            req->send(400,"text/plain","Duplicate raw value"); 
-            return;
-          }
-          if (abs(rtdCalibTable[i].temp - newTemp) < 0.01) {
-            req->send(400,"text/plain","Duplicate temp value"); 
-            return;
-          }
-        }
-      }
-      
-      // Update the point
-      rtdCalibTable[index].raw = newRaw;
-      rtdCalibTable[index].temp = newTemp;
-      
-      // Sort by raw value for proper interpolation
-      std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), [](const CalibPoint& a, const CalibPoint& b) {
-        return a.raw < b.raw;
-      });
-      
-      // Save to LittleFS
-      saveCalibration();
-      if (debugSerial) Serial.printf("[CALIBRATION] Updated point to (%d, %.2f), total points: %d\n", newRaw, newTemp, rtdCalibTable.size());
-      req->send(200,"text/plain","OK");
-    }
-  );
-
-  // --- Delete calibration point endpoint ---
-  server.on("/api/calibration/delete", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
-    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
-      if (debugSerial) {
-        Serial.printf("[CALIBRATION] Delete point POST received %u bytes: ", len);
-        for (size_t i = 0; i < len; i++) {
-          Serial.print((char)data[i]);
-        }
-        Serial.println();
-      }
-      
-      DynamicJsonDocument doc(256);
-      DeserializationError error = deserializeJson(doc, data, len);
-      if (error) { 
-        if (debugSerial) Serial.printf("[CALIBRATION] JSON parse error: %s\n", error.c_str());
-        req->send(400,"text/plain","Bad JSON"); 
-        return; 
-      }
-      
-      if (!doc.containsKey("index")) {
-        if (debugSerial) Serial.println("[CALIBRATION] Missing index field");
-        req->send(400,"text/plain","Missing index"); 
-        return;
-      }
-      
-      int index = doc["index"];
-      
-      if (index < 0 || index >= rtdCalibTable.size()) {
-        req->send(400,"text/plain","Invalid index"); 
-        return;
-      }
-      
-      // Remove the point
-      rtdCalibTable.erase(rtdCalibTable.begin() + index);
-      
-      // Save to LittleFS
-      saveCalibration();
-      if (debugSerial) Serial.printf("[CALIBRATION] Deleted point at index %d, remaining points: %d\n", index, rtdCalibTable.size());
-      req->send(200,"text/plain","OK");
-    }
-  );
- 
-   server.on("/api/calibration", HTTP_GET, [](AsyncWebServerRequest* req){
+  // --- PID profile management endpoints ---
+  server.on("/api/pid_profiles", HTTP_GET, [](AsyncWebServerRequest* req){
     AsyncResponseStream *response = req->beginResponseStream("application/json");
-    int raw = analogRead(PIN_RTD);
-    response->print("{");
-    response->printf("\"raw\":%d,\"table\":[", raw);
-    for (size_t i = 0; i < rtdCalibTable.size(); ++i) {
-      response->printf("{\"raw\":%d,\"temp\":%.2f}", rtdCalibTable[i].raw, rtdCalibTable[i].temp);
-      if (i + 1 < rtdCalibTable.size()) response->print(",");
+    response->print("{\"profiles\":[");
+    // List all available profiles
+    for (size_t i = 0; i < pid.profiles.size(); ++i) {
+      if (i > 0) response->print(",");
+      response->printf("{\"id\":%d,\"name\":\"%s\",\"minTemp\":%.1f,\"maxTemp\":%.1f}", 
+                       (int)i, pid.profiles[i].name.c_str(), pid.profiles[i].minTemp, pid.profiles[i].maxTemp);
     }
-    response->print("]}");
+    response->printf("],\"activeProfile\":\"%s\",\"autoSwitching\":%s}", 
+                     pid.activeProfile.c_str(), pid.autoSwitching ? "true" : "false");
     req->send(response);
   });
-server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){},NULL,
-  [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
-    if (debugSerial) {
-      Serial.printf("[CALIBRATION] POST received %u bytes: ", len);
-      for (size_t i = 0; i < len; i++) {
-        Serial.print((char)data[i]);
-      }
-      Serial.println();
-    }
-    
-    DynamicJsonDocument doc(8192);  // Increased buffer size
-    DeserializationError error = deserializeJson(doc, data, len);
-    if (error) { 
-      if (debugSerial) Serial.printf("[CALIBRATION] JSON parse error: %s\n", error.c_str());
-      req->send(400,"text/plain","Bad JSON"); 
-      return; 
-    }
-    
-    if (!doc.containsKey("table") || !doc["table"].is<JsonArray>()) {
-      if (debugSerial) Serial.println("[CALIBRATION] Missing or invalid 'table' field");
-      req->send(400,"text/plain","Missing table field"); 
-      return;
-    }
-    
-    rtdCalibTable.clear();
-    JsonArray table = doc["table"].as<JsonArray>();
-    for(JsonObject o : table) {
-      if (!o.containsKey("raw") || !o.containsKey("temp")) {
-        if (debugSerial) Serial.println("[CALIBRATION] Invalid calibration point format");
-        continue;
-      }
-      CalibPoint pt = { o["raw"], o["temp"] };
-      rtdCalibTable.push_back(pt);
-    }
-    
-    // Sort by raw value for proper interpolation
-    std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), [](const CalibPoint& a, const CalibPoint& b) {
-      return a.raw < b.raw;
-    });
-    
-    // Save to LittleFS
-    saveCalibration();
-    if (debugSerial) Serial.printf("[CALIBRATION] Saved %d calibration points\n", rtdCalibTable.size());
-    req->send(200,"text/plain","OK");
-  });
-  // Programs/cals as before...
-  server.on("/api/programs",HTTP_GET,[](AsyncWebServerRequest*req){
-    File f = LittleFS.open("/programs.json", "r");
-    if (!f || f.size() == 0) {
-      // File missing or empty, return empty array
-      req->send(200, "application/json", "[]");
-      return;
-    }
-    // Do not close the file here; let beginResponse handle it
-    auto r = req->beginResponse(LittleFS, "/programs.json", "application/json");
-    r->addHeader("Cache-Control", "no-cache");
-    req->send(r);
-  });
-}
-
-void fileEndPoints(AsyncWebServer& server)
-{
   
-  // --- Create Folder API endpoint ---
-server.on("/api/create_folder", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
-  [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
-    DynamicJsonDocument doc(128);
-    if (deserializeJson(doc, data, len)) { req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); return; }
-    String parent = doc["parent"] | "/";
-    String name = doc["name"] | "";
-    if (name.length() == 0) { req->send(400, "application/json", "{\"error\":\"No folder name provided\"}"); return; }
-    if (!parent.endsWith("/")) parent += "/";
-    String path = parent + name;
-    if (!path.startsWith("/")) path = "/" + path;
-    if (LittleFS.mkdir(path)) {
-      req->send(200, "application/json", "{\"status\":\"created\"}");
-    } else {
-      req->send(500, "application/json", "{\"error\":\"Failed to create folder\"}");
+  server.on("/api/pid_profile", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (!req->hasParam("id")) {
+      req->send(400, "application/json", "{\"error\":\"Missing id parameter\"}");
+      return;
     }
-  }
-);
-
-server.on("/api/delete_folder", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
-  [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
-    DynamicJsonDocument doc(128);
-    if (deserializeJson(doc, data, len)) { req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); return; }
-    String parent = doc["folder"] | "/";
-    String name = doc["name"] | "";
-    if (name.length() == 0) { req->send(400, "application/json", "{\"error\":\"No folder name provided\"}"); return; }
-    if (!parent.endsWith("/")) parent += "/";
-    String path = parent + name;
-    if (!path.startsWith("/")) path = "/" + path;
-    if (LittleFS.exists(path)) {
-      deleteFolderRecursive(path);
-      req->send(200, "application/json", "{\"status\":\"deleted\"}");
-    } else {
-      req->send(404, "application/json", "{\"error\":\"Folder not found\"}");
+    int id = req->getParam("id")->value().toInt();
+    if (id < 0 || id >= (int)pid.profiles.size()) {
+      req->send(404, "application/json", "{\"error\":\"Profile not found\"}");
+      return;
     }
-  }
-);
-
-// --- Updated File List API endpoint ---
-server.on("/api/files", HTTP_GET, [](AsyncWebServerRequest* req){
-  String folder = "/";
-  if (req->hasParam("folder")) {
-    folder = req->getParam("folder")->value();
-    if (!folder.startsWith("/")) folder = "/" + folder;
-    if (!folder.endsWith("/")) folder += "/";
-  }
-  AsyncResponseStream *response = req->beginResponseStream("application/json");
-  response->print("{\"folders\":[");
-  Dir dir = LittleFS.openDir(folder);
-  bool firstFolder = true, firstFile = true;
-  String filesJson = "],\"files\":[";
-  while (dir.next()) {
-    if (dir.isDirectory()) {
-      if (!firstFolder) response->print(",");
-      response->printf("\"%s\"", dir.fileName().c_str());
-      firstFolder = false;
-    } else {
-      if (!firstFile) filesJson += ",";
-      filesJson += "{";
-      filesJson += "\"name\":\"" + String(dir.fileName()) + "\",\"size\":" + String((unsigned long)dir.fileSize());
-      filesJson += "}";
-      firstFile = false;
-    }
-  }
-  response->print(filesJson);
-  response->print("]}");
-  req->send(response);
-});
-
-// --- File upload API endpoint ---
-  server.on("/api/upload", HTTP_POST, [](AsyncWebServerRequest* req){
-    req->send(200, "text/plain", "Upload complete");
-  }, [](AsyncWebServerRequest* req, String filename, size_t index, uint8_t* data, size_t len, bool final){
-    static File uploadFile;
-    if (!index) {
-      // First chunk - open file for writing
-      if (debugSerial) Serial.printf("[UPLOAD] Starting upload of %s\n", filename.c_str());
-      String filepath = "/" + filename;
-      uploadFile = LittleFS.open(filepath, "w");
-      if (!uploadFile) {
-        if (debugSerial) Serial.printf("[UPLOAD] Failed to open %s for writing\n", filepath.c_str());
-        req->send(500, "text/plain", "Failed to open file for writing");
-        return;
-      }
-    }
-    
-    if (uploadFile) {
-      // Write chunk to file
-      uploadFile.write(data, len);
-      if (debugSerial && index == 0) Serial.printf("[UPLOAD] Writing %u bytes to %s\n", len, filename.c_str());
-    }
-    
-    if (final) {
-      // Last chunk - close file
-      if (uploadFile) {
-        uploadFile.close();
-        if (debugSerial) Serial.printf("[UPLOAD] Completed upload of %s\n", filename.c_str());
-      }
-    }
+    AsyncResponseStream *response = req->beginResponseStream("application/json");
+    response->print("{");
+    response->printf("\"id\":%d,", id);
+    response->printf("\"name\":\"%s\",", pid.profiles[id].name.c_str());
+    response->printf("\"minTemp\":%.1f,", pid.profiles[id].minTemp);
+    response->printf("\"maxTemp\":%.1f,", pid.profiles[id].maxTemp);
+    response->print("\"params\":{");
+    response->printf("\"kp\":%.6f,", pid.profiles[id].kp);
+    response->printf("\"ki\":%.6f,", pid.profiles[id].ki);
+    response->printf("\"kd\":%.6f,", pid.profiles[id].kd);
+    response->printf("\"windowMs\":%lu", pid.profiles[id].windowMs);
+    response->print("},");
+    response->printf("\"description\":\"%s\",", pid.profiles[id].description.c_str());
+    response->printf("\"isActive\":%s", (pid.profiles[id].name == pid.activeProfile) ? "true" : "false");
+    response->print("}");
+    req->send(response);
   });
-
-  // --- File delete API endpoint ---
-  server.on("/api/delete", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+  
+  // Switch to a specific profile
+  server.on("/api/pid_profile/switch", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
     [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
       DynamicJsonDocument doc(128);
-      if (deserializeJson(doc, data, len)) { req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); return; }
-      const char* filename = doc["filename"] | "";
-      if (strlen(filename) == 0) { req->send(400, "application/json", "{\"error\":\"No filename provided\"}"); return; }
-      String filepath = "/" + String(filename);
-      if (LittleFS.remove(filepath)) {
-        if (debugSerial) Serial.printf("[DELETE] Deleted file: %s\n", filename);
-        req->send(200, "application/json", "{\"status\":\"deleted\"}");
+      DeserializationError error = deserializeJson(doc, data, len);
+      if (error) { 
+        req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); 
+        return; 
+      }
+      
+      if (!doc.containsKey("name")) {
+        req->send(400, "application/json", "{\"error\":\"Missing name field\"}");
+        return;
+      }
+      
+      String profileName = doc["name"];
+      
+      // Find and switch to the profile
+      bool found = false;
+      for (const PIDProfile& profile : pid.profiles) {
+        if (profile.name == profileName) {
+          switchToProfile(profileName);
+          found = true;
+          break;
+        }
+      }
+      
+      if (!found) {
+        req->send(404, "application/json", "{\"error\":\"Profile not found\"}");
+        return;
+      }
+      
+      req->send(200, "application/json", "{\"status\":\"Profile switched\"}");
+    }
+  );
+  
+  // Enable/disable auto-switching
+  server.on("/api/pid_profile/auto_switch", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+      DynamicJsonDocument doc(128);
+      DeserializationError error = deserializeJson(doc, data, len);
+      if (error) { 
+        req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); 
+        return; 
+      }
+      
+      if (doc.containsKey("enabled")) {
+        pid.autoSwitching = doc["enabled"];
+        saveSettings();
+        
+        AsyncResponseStream *response = req->beginResponseStream("application/json");
+        response->print("{");
+        response->printf("\"autoSwitching\":%s,", pid.autoSwitching ? "true" : "false");
+        response->print("\"status\":\"Auto-switching updated\"");
+        response->print("}");
+        req->send(response);
       } else {
-        if (debugSerial) Serial.printf("[DELETE] Failed to delete file: %s\n", filename);
-        req->send(500, "application/json", "{\"error\":\"Failed to delete file\"}");
+        req->send(400, "application/json", "{\"error\":\"Missing enabled field\"}");
       }
     }
   );
-
-  // --- File list API endpoint ---
-  server.on("/api/files", HTTP_GET, [](AsyncWebServerRequest* req){
-    AsyncResponseStream *response = req->beginResponseStream("application/json");
-    response->print("{\"files\":[");
-    Dir dir = LittleFS.openDir("/");
-    bool first = true;
-    while (dir.next()) {
-      if (!first) response->print(",");
-      response->print("{");
-      response->printf("\"name\":\"%s\",\"size\":%lu", dir.fileName().c_str(), (unsigned long)dir.fileSize());
-      response->print("}");
-      first = false;
-    }
-    response->print("]}");
-    req->send(response);
-  });
-
-  server.on("/listfiles", HTTP_GET, [](AsyncWebServerRequest* req){
-  String out = "Files:<br>";
-  Dir dir = LittleFS.openDir("/");
-  while (dir.next()) {
-    out += dir.fileName() + "<br>";
-  }
-  req->send(200, "text/html", out);
-});
 }
 
 // --- Streaming status JSON function ---
@@ -1795,4 +1236,318 @@ void streamStatusJson(Print& out) {
   out.printf("\"wifiConnected\":%s,", (WiFi.status() == WL_CONNECTED) ? "true" : "false");
   out.printf("\"initialFermentTemp\":%.2f", fermentState.initialFermentTemp);
   out.print("}");
+}
+
+void homeAssistantEndpoint(AsyncWebServer& server)
+{
+  // --- Home Assistant integration endpoint (matches template configuration.yaml) ---
+  server.on("/ha", HTTP_GET, [](AsyncWebServerRequest* req){
+    AsyncResponseStream *response = req->beginResponseStream("application/json");
+    response->print("{");
+    
+    // Basic status - matches template expectations
+    response->printf("\"state\":\"%s\",", programState.isRunning ? "running" : "idle");
+    response->printf("\"temperature\":%.1f,", tempAvg.averagedTemperature);
+    response->printf("\"setpoint\":%.1f,", pid.Setpoint);
+    
+    // Output states (direct boolean values as expected)
+    response->printf("\"motor\":%s,", outputStates.motor ? "true" : "false");
+    response->printf("\"light\":%s,", outputStates.light ? "true" : "false");
+    response->printf("\"buzzer\":%s,", outputStates.buzzer ? "true" : "false");
+    response->printf("\"heater\":%s,", outputStates.heater ? "true" : "false");
+    response->printf("\"manual_mode\":%s,", programState.manualMode ? "true" : "false");
+    
+    // Program and stage info
+    if (programState.activeProgramId < programs.size()) {
+      response->printf("\"program\":\"%s\",", programs[programState.activeProgramId].name.c_str());
+      
+      if (programState.isRunning && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
+        response->printf("\"stage\":\"%s\",", programs[programState.activeProgramId].customStages[programState.customStageIdx].label.c_str());
+        
+        // Calculate stage time left in minutes (as expected by template)
+        unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+        int stageTimeMin = programs[programState.activeProgramId].customStages[programState.customStageIdx].min;
+        int timeLeftMin = stageTimeMin - (elapsed / 60);
+        if (timeLeftMin < 0) timeLeftMin = 0;
+        response->printf("\"stage_time_left\":%d,", timeLeftMin);
+      } else {
+        response->print("\"stage\":\"Idle\",");
+        response->print("\"stage_time_left\":0,");
+      }
+    } else {
+      response->print("\"program\":\"\",");
+      response->print("\"stage\":\"Idle\",");
+      response->print("\"stage_time_left\":0,");
+    }
+    
+    // Timing information (Unix timestamps as expected)
+    time_t now = time(nullptr);
+    time_t stageReadyAt = 0;
+    time_t programReadyAt = 0;
+    
+    if (programState.isRunning && programState.activeProgramId < programs.size() && 
+        programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
+      
+      unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+      int stageTimeMin = programs[programState.activeProgramId].customStages[programState.customStageIdx].min;
+      int timeLeftSec = (stageTimeMin * 60) - elapsed;
+      if (timeLeftSec < 0) timeLeftSec = 0;
+      
+      stageReadyAt = now + timeLeftSec;
+      
+      // Calculate total program time remaining
+      programReadyAt = stageReadyAt;
+      for (size_t i = programState.customStageIdx + 1; i < programs[programState.activeProgramId].customStages.size(); ++i) {
+        programReadyAt += programs[programState.activeProgramId].customStages[i].min * 60;
+      }
+    }
+    
+    response->printf("\"stage_ready_at\":%lu,", (unsigned long)stageReadyAt);
+    response->printf("\"program_ready_at\":%lu,", (unsigned long)programReadyAt);
+    
+    // Health section (comprehensive system information as expected by template)
+    response->print("\"health\":{");
+    
+    // System info
+    response->printf("\"uptime_sec\":%lu,", millis() / 1000);
+    response->printf("\"firmware_version\":\"%s\",", FIRMWARE_BUILD_DATE);
+    response->printf("\"build_date\":\"%s\",", FIRMWARE_BUILD_DATE);
+    response->printf("\"reset_reason\":\"%s\",", ESP.getResetReason().c_str());
+    response->printf("\"chip_id\":\"%08X\",", ESP.getChipId());
+    
+    // Memory information
+    response->print("\"memory\":{");
+    response->printf("\"free_heap\":%u,", ESP.getFreeHeap());
+    response->printf("\"max_free_block\":%u,", ESP.getMaxFreeBlockSize());
+    response->printf("\"min_free_heap\":%u,", ESP.getFreeHeap()); // Approximation
+    response->printf("\"fragmentation\":%.1f", (ESP.getHeapFragmentation()));
+    response->print("},");
+    
+    // Performance information (basic approximations)
+    response->print("\"performance\":{");
+    response->print("\"cpu_usage\":0.0,"); // Would need implementation
+    response->print("\"avg_loop_time_us\":1000,"); // Approximation
+    response->print("\"max_loop_time_us\":5000,"); // Approximation
+    response->printf("\"loop_count\":%lu", millis() / 10); // Rough estimate
+    response->print("},");
+    
+    // Network information
+    response->print("\"network\":{");
+    response->printf("\"connected\":%s,", (WiFi.status() == WL_CONNECTED) ? "true" : "false");
+    response->printf("\"rssi\":%d,", WiFi.RSSI());
+    response->print("\"reconnect_count\":0,"); // Would need implementation
+    response->printf("\"ip\":\"%s\"", WiFi.localIP().toString().c_str());
+    response->print("},");
+    
+    // Filesystem information
+    response->print("\"filesystem\":{");
+    FSInfo fsInfo;
+    LittleFS.info(fsInfo);
+    response->printf("\"usedBytes\":%u,", fsInfo.usedBytes);
+    response->printf("\"totalBytes\":%u", fsInfo.totalBytes);
+    response->print("}");
+    
+    response->print("}"); // Close health section
+    response->print("}"); // Close main JSON
+    req->send(response);
+  });
+}
+
+// --- Calibration endpoints ---
+void calibrationEndpoints(AsyncWebServer& server) {
+  // Temperature calibration endpoints
+  server.on("/api/calibration", HTTP_GET, [](AsyncWebServerRequest* req){
+    AsyncResponseStream *response = req->beginResponseStream("application/json");
+    response->print("{\"table\":[");
+    for (size_t i = 0; i < rtdCalibTable.size(); ++i) {
+      if (i > 0) response->print(",");
+      response->printf("{\"raw\":%d,\"temp\":%.2f}", rtdCalibTable[i].raw, rtdCalibTable[i].temp);
+    }
+    response->print("]}");
+    req->send(response);
+  });
+  
+  server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+      DynamicJsonDocument doc(2048);
+      if (deserializeJson(doc, data, len)) { 
+        req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); 
+        return; 
+      }
+      
+      rtdCalibTable.clear();
+      for (JsonObject pt : doc["table"].as<JsonArray>()) {
+        CalibPoint p = { pt["raw"], pt["temp"] };
+        rtdCalibTable.push_back(p);
+      }
+      saveCalibration();
+      req->send(200, "application/json", "{\"status\":\"saved\"}");
+    }
+  );
+}
+
+// --- File management endpoints ---
+void fileEndPoints(AsyncWebServer& server) {
+  // Serve static files from LittleFS
+  server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+  
+  // File upload endpoint
+  server.on("/api/upload", HTTP_POST, [](AsyncWebServerRequest* req){
+    req->send(200, "application/json", "{\"status\":\"upload_complete\"}");
+  }, [](AsyncWebServerRequest* req, String filename, size_t index, uint8_t *data, size_t len, bool final){
+    static File uploadFile;
+    static String uploadPath;
+    
+    if (index == 0) {
+      // Start of upload - create file
+      String folder = "/";
+      if (req->hasParam("folder", true)) {
+        folder = req->getParam("folder", true)->value();
+        if (!folder.startsWith("/")) folder = "/" + folder;
+        if (!folder.endsWith("/")) folder += "/";
+      }
+      
+      uploadPath = folder + filename;
+      Serial.printf("Starting upload: %s\n", uploadPath.c_str());
+      
+      // Ensure directory structure exists by creating any missing parent directories
+      String dir = uploadPath.substring(0, uploadPath.lastIndexOf('/'));
+      if (dir.length() > 1) {
+        // Create directory structure by creating a dummy file and removing it
+        String dummyFile = dir + "/.dummy";
+        File tempFile = LittleFS.open(dummyFile, "w");
+        if (tempFile) {
+          tempFile.close();
+          LittleFS.remove(dummyFile);
+        }
+      }
+      
+      uploadFile = LittleFS.open(uploadPath, "w");
+      if (!uploadFile) {
+        Serial.printf("Failed to create file: %s\n", uploadPath.c_str());
+        return;
+      }
+    }
+    
+    // Write data chunk
+    if (len) {
+      uploadFile.write(data, len);
+    }
+    
+    if (final) {
+      // End of upload - close file
+      uploadFile.close();
+      Serial.printf("Upload complete: %s (%d bytes)\n", uploadPath.c_str(), index + len);
+    }
+  });
+
+  // Enhanced file listing with folder support
+  server.on("/api/files", HTTP_GET, [](AsyncWebServerRequest* req){
+    String folder = "/";
+    if (req->hasParam("folder")) {
+      folder = req->getParam("folder")->value();
+      if (!folder.startsWith("/")) folder = "/" + folder;
+      if (!folder.endsWith("/")) folder += "/";
+    }
+    
+    AsyncResponseStream *response = req->beginResponseStream("application/json");
+    response->print("{\"folders\":[");
+    
+    // List directories first
+    Dir dir = LittleFS.openDir(folder);
+    bool firstFolder = true;
+    while (dir.next()) {
+      if (dir.isDirectory()) {
+        if (!firstFolder) response->print(",");
+        firstFolder = false;
+        response->printf("\"%s\"", dir.fileName().c_str());
+      }
+    }
+    
+    response->print("],\"files\":[");
+    
+    // List files
+    dir = LittleFS.openDir(folder);
+    bool firstFile = true;
+    while (dir.next()) {
+      if (dir.isFile()) {
+        if (!firstFile) response->print(",");
+        firstFile = false;
+        response->printf("{\"name\":\"%s\",\"size\":%u}", dir.fileName().c_str(), dir.fileSize());
+      }
+    }
+    
+    response->print("]}");
+    req->send(response);
+  });
+
+  // File delete endpoint (enhanced for folder support)
+  server.on("/api/delete", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL, [](AsyncWebServerRequest* req, uint8_t *data, size_t len, size_t index, size_t total){
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, (char*)data);
+    
+    String filename = doc["filename"];
+    String folder = doc["folder"] | "/";
+    
+    if (!folder.endsWith("/")) folder += "/";
+    String fullPath = folder + filename;
+    
+    if (LittleFS.remove(fullPath)) {
+      req->send(200, "application/json", "{\"status\":\"deleted\"}");
+    } else {
+      req->send(404, "application/json", "{\"error\":\"File not found\"}");
+    }
+  });
+
+  // Create folder endpoint
+  server.on("/api/create_folder", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL, [](AsyncWebServerRequest* req, uint8_t *data, size_t len, size_t index, size_t total){
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, (char*)data);
+    
+    String parent = doc["parent"] | "/";
+    String name = doc["name"];
+    
+    if (!parent.endsWith("/")) parent += "/";
+    String fullPath = parent + name;
+    
+    // Create a dummy file to ensure the directory exists, then remove it
+    // This is a workaround for ESP8266 LittleFS which doesn't have true directory support
+    String dummyFile = fullPath + "/.dummy";
+    File f = LittleFS.open(dummyFile, "w");
+    if (f) {
+      f.close();
+      LittleFS.remove(dummyFile);
+      req->send(200, "application/json", "{\"status\":\"created\"}");
+    } else {
+      req->send(500, "application/json", "{\"error\":\"Failed to create folder\"}");
+    }
+  });
+
+  // Delete folder endpoint
+  server.on("/api/delete_folder", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL, [](AsyncWebServerRequest* req, uint8_t *data, size_t len, size_t index, size_t total){
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, (char*)data);
+    
+    String folder = doc["folder"] | "/";
+    String name = doc["name"];
+    
+    if (!folder.endsWith("/")) folder += "/";
+    String folderPath = folder + name + "/";
+    
+    // Delete all files in the folder (ESP8266 LittleFS doesn't have true directories)
+    Dir dir = LittleFS.openDir(folderPath);
+    bool success = true;
+    while (dir.next()) {
+      String filePath = folderPath + dir.fileName();
+      if (!LittleFS.remove(filePath)) {
+        success = false;
+      }
+    }
+    
+    if (success) {
+      req->send(200, "application/json", "{\"status\":\"deleted\"}");
+    } else {
+      req->send(500, "application/json", "{\"error\":\"Failed to delete all files in folder\"}");
+    }
+  });
 }

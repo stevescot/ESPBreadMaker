@@ -8,11 +8,23 @@ function loadProgramsEditor(forceRefresh) {
     renderPrograms(window._programs);
     return;
   }
-  fetch('/api/programs')
-    .then(r => r.json())
+  fetch('/programs.json')
+    .then(r => r.text())
     .then(data => {
-      window.cachedPrograms = data;
-      window._programs = Array.isArray(data) ? data : (Array.isArray(data.programs) ? data.programs : []);
+      try {
+        const parsedData = JSON.parse(data);
+        window.cachedPrograms = parsedData;
+        window._programs = Array.isArray(parsedData) ? parsedData : (Array.isArray(parsedData.programs) ? parsedData.programs : []);
+        renderPrograms(window._programs);
+      } catch (e) {
+        console.error('Failed to parse programs.json:', e);
+        window._programs = [];
+        renderPrograms(window._programs);
+      }
+    })
+    .catch(err => {
+      console.error('Failed to fetch programs:', err);
+      window._programs = [];
       renderPrograms(window._programs);
     });
 }
@@ -190,7 +202,16 @@ function renderPrograms(progs) {
             inp.value = minutes;
             hours = Math.floor(currentStage.min / 60);
           }
-          progs[i].customStages[c].min = hours * 60 + minutes;
+          const totalMinutes = hours * 60 + minutes;
+          // Warn if duration is very long (could cause timing issues)
+          if (totalMinutes > 1440) { // More than 24 hours
+            if (!confirm(`Warning: Stage duration of ${totalMinutes} minutes (${hours}h ${minutes}m) is very long. This may cause timing issues on the controller. Continue?`)) {
+              // Revert to previous value
+              renderPrograms(progs);
+              return;
+            }
+          }
+          progs[i].customStages[c].min = totalMinutes;
           renderPrograms(progs);
           return;
         }

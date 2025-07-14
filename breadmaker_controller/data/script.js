@@ -84,7 +84,8 @@ function populateStageDropdown(programIdx) {
   stageSelect.innerHTML = '<option value="">Start from beginning</option>';
   
   // Get the selected program
-  const program = window.cachedPrograms[programIdx];
+  const programs = Array.isArray(window.cachedPrograms) ? window.cachedPrograms : [];
+  const program = programs[programIdx];
   if (!program || !program.customStages || !Array.isArray(program.customStages)) {
     // Hide the start at stage row if no custom stages
     if (startAtStageRow) startAtStageRow.style.display = 'none';
@@ -205,7 +206,8 @@ function updateStageProgress(currentStage, statusData) {
   // Get current program and its stages
   let program = null;
   if (statusData && statusData.program && window.cachedPrograms) {
-    program = window.cachedPrograms.find(p => p.name === statusData.program);
+    const programs = Array.isArray(window.cachedPrograms) ? window.cachedPrograms : [];
+    program = programs.find(p => p.name === statusData.program);
   }
   
   // If no custom stages available, use the legacy hardcoded stages
@@ -408,7 +410,8 @@ function updateStatusInternal(s) {
   populateProgramDropdown(s);
   // Update stage dropdown based on current program
   if (s && s.program && window.cachedPrograms) {
-    const programIdx = window.cachedPrograms.findIndex(p => p.name === s.program);
+    const programs = Array.isArray(window.cachedPrograms) ? window.cachedPrograms : [];
+    const programIdx = programs.findIndex(p => p.name === s.program);
     if (programIdx >= 0) {
       populateStageDropdown(programIdx);
     }
@@ -564,34 +567,15 @@ function updateFermentationInfo(s) {
 function updateProgramReadyAt(s) {
   const el = document.getElementById('programReadyAt');
   if (!el) return;
-  
-  // Clear display if program is idle or finished
-  if (!s || !s.running || s.stage === "Idle") {
-    el.textContent = '';
-    return;
-  }
-  
-  // Use firmware's calculated programReadyAt if available
-  if (s && typeof s.programReadyAt === 'number' && s.programReadyAt > 0) {
-    const finishTs = s.programReadyAt * 1000; // Convert firmware's seconds to milliseconds
-    const now = Date.now();
-    
-    // If the program ready time is in the past, clear the display
-    if (finishTs <= now) {
-      el.textContent = '';
-      return;
-    }
-    
-    el.textContent = 'Program ready at: ' + formatDateTime(finishTs);
-    return;
-  }
-  
-  // Fallback calculation if firmware doesn't provide programReadyAt
+  // Always show a completion time if a program is selected, even if idle (showing 'if started now')
+  let showIfStartedNow = false;
+  let finishTs = 0;
+  let label = 'Program ready at:';
+  // If no status or no program, clear
   if (!s || typeof s.program !== 'string' || !s.program.length) {
     el.textContent = '';
     return;
   }
-  
   // Use cached programs if available for fallback
   const data = window.cachedPrograms;
   const progArr = Array.isArray(data) ? data : (data && data.programs ? data.programs : []);
@@ -606,26 +590,35 @@ function updateProgramReadyAt(s) {
     return;
   }
   let totalMin = prog.customStages.reduce((sum, st) => sum + (st.min || 0), 0);
-  let finishTs = 0;
-  if (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000)) {
-    finishTs = (s.scheduledStart * 1000) + (totalMin * 60000);
-  } else if (s.stage && s.stage !== "Idle" && typeof s.stageIdx === "number" && typeof s.timeLeft === "number" && s.timeLeft > 0) {
-    let remainMin = 0;
-    for (let i = s.stageIdx + 1; i < prog.customStages.length; ++i) {
-      remainMin += prog.customStages[i].min || 0;
+  // If running or scheduled, show actual finish time
+  if (s.running || (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000))) {
+    // Use firmware's calculated programReadyAt if available
+    if (typeof s.programReadyAt === 'number' && s.programReadyAt > 0) {
+      finishTs = s.programReadyAt * 1000;
+    } else if (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000)) {
+      finishTs = (s.scheduledStart * 1000) + (totalMin * 60000);
+    } else if (s.stage && s.stage !== "Idle" && typeof s.stageIdx === "number" && typeof s.timeLeft === "number" && s.timeLeft > 0) {
+      let remainMin = 0;
+      for (let i = s.stageIdx + 1; i < prog.customStages.length; ++i) {
+        remainMin += prog.customStages[i].min || 0;
+      }
+      finishTs = Date.now() + (s.timeLeft * 1000) + (remainMin * 60000);
+    } else {
+      finishTs = Date.now() + (totalMin * 60000);
     }
-    finishTs = Date.now() + (s.timeLeft * 1000) + (remainMin * 60000);
+    label = 'Program ready at:';
   } else {
+    // Not running, show 'if started now'
     finishTs = Date.now() + (totalMin * 60000);
+    showIfStartedNow = true;
+    label = 'If started now, ready at:';
   }
-  
   // If the program ready time is in the past, clear the display
   if (finishTs <= Date.now()) {
     el.textContent = '';
     return;
   }
-  
-  el.textContent = 'Program ready at: ' + formatDateTime(finishTs);
+  el.textContent = label + ' ' + formatDateTime(finishTs);
 }
 
 function updateCountdownDisplay() {
@@ -671,8 +664,8 @@ function updateCountdownDisplay() {
   if (s.stage === "Idle" || !s.running || timeLeft <= 0) {
     document.getElementById('timeLeft').textContent = "--";
     document.getElementById('stageReadyAt').textContent = "";
-    let el = document.getElementById('programReadyAt');
-    if (el) el.textContent = '';
+    // Don't clear programReadyAt here - let updateProgramReadyAt() handle it
+    // This was causing the "If started now" text to flash every second
   } else {
     document.getElementById('timeLeft').textContent = formatDuration(timeLeft);
     document.getElementById('stageReadyAt').textContent = showStageReadyAt ? stageReadyAtText : "--";
@@ -943,18 +936,27 @@ function fetchProgramsOnce(callback) {
     window._programsFetchQueue.push(callback);
     if (window._programsFetchInProgress) return;
     window._programsFetchInProgress = true;
-    fetch('/api/programs')
-      .then(r => r.json())
+    fetch('/programs.json')
+      .then(r => r.text())
       .then(data => {
-        window.cachedPrograms = data;
-        window._programsFetchInProgress = false;
-        // Call all queued callbacks
-        (window._programsFetchQueue || []).forEach(cb => cb(data));
-        window._programsFetchQueue = [];
-        
-        // Update stage progress if we have a current status
-        if (window.lastStatusData) {
-          updateStageProgress(window.lastStatusData.stage, window.lastStatusData);
+        try {
+          const parsedData = JSON.parse(data);
+          window.cachedPrograms = parsedData;
+          window._programsFetchInProgress = false;
+          // Call all queued callbacks
+          (window._programsFetchQueue || []).forEach(cb => cb(parsedData));
+          window._programsFetchQueue = [];
+          
+          // Update stage progress if we have a current status
+          if (window.lastStatusData) {
+            updateStageProgress(window.lastStatusData.stage, window.lastStatusData);
+          }
+        } catch (e) {
+          console.error('Failed to parse programs.json:', e);
+          window._programsFetchInProgress = false;
+          // Call callbacks with empty array as fallback
+          (window._programsFetchQueue || []).forEach(cb => cb([]));
+          window._programsFetchQueue = [];
         }
       })
       .catch(err => {

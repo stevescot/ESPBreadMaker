@@ -1,3 +1,24 @@
+// Utility function for fetch with timeout
+function fetchWithTimeout(url, timeout = 10000) {
+  return new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`Request timeout after ${timeout}ms`));
+    }, timeout);
+    
+    fetch(url, { signal: controller.signal })
+      .then(response => {
+        clearTimeout(id);
+        resolve(response);
+      })
+      .catch(error => {
+        clearTimeout(id);
+        reject(error);
+      });
+  });
+}
+
 // --- Real-time chart update logic ---
 async function updateStatus() {
     // PID P, I, D terms
@@ -649,6 +670,85 @@ function updateAutoTuneMethodDescription() {
   }
 }
 
+// Show status messages to user
+function showMessage(message, type = 'info', duration = 3000) {
+  // Create message element if it doesn't exist
+  let messageContainer = document.getElementById('messageContainer');
+  if (!messageContainer) {
+    messageContainer = document.createElement('div');
+    messageContainer.id = 'messageContainer';
+    messageContainer.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 1000;
+      max-width: 400px;
+    `;
+    document.body.appendChild(messageContainer);
+  }
+  
+  // Create message element
+  const messageElement = document.createElement('div');
+  messageElement.style.cssText = `
+    padding: 12px 16px;
+    margin-bottom: 10px;
+    border-radius: 6px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    color: white;
+    font-weight: bold;
+    animation: slideIn 0.3s ease-out;
+  `;
+  
+  // Set background color based on type
+  switch (type) {
+    case 'success':
+      messageElement.style.backgroundColor = '#4CAF50';
+      break;
+    case 'error':
+      messageElement.style.backgroundColor = '#f44336';
+      break;
+    case 'warning':
+      messageElement.style.backgroundColor = '#ff9800';
+      break;
+    case 'info':
+    default:
+      messageElement.style.backgroundColor = '#2196f3';
+      break;
+  }
+  
+  messageElement.textContent = message;
+  messageContainer.appendChild(messageElement);
+  
+  // Auto-remove after duration
+  setTimeout(() => {
+    if (messageElement.parentNode) {
+      messageElement.style.animation = 'slideOut 0.3s ease-in';
+      setTimeout(() => {
+        if (messageElement.parentNode) {
+          messageElement.parentNode.removeChild(messageElement);
+        }
+      }, 300);
+    }
+  }, duration);
+}
+
+// Add CSS animations for messages
+if (!document.getElementById('messageAnimations')) {
+  const style = document.createElement('style');
+  style.id = 'messageAnimations';
+  style.textContent = `
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slideOut {
+      from { transform: translateX(0); opacity: 1; }
+      to { transform: translateX(100%); opacity: 0; }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
 // Initialize page
 document.addEventListener('DOMContentLoaded', function() {
   initChart();
@@ -677,6 +777,26 @@ document.addEventListener('DOMContentLoaded', function() {
   console.log('PID Controller Tuning page initialized');
 });
 
+// Additional initialization for range management
+document.addEventListener('DOMContentLoaded', function() {
+  // Wait a bit for other initializations to complete
+  setTimeout(() => {
+    // Initialize range management
+    if (typeof initializeRangeManagement === 'function') {
+      initializeRangeManagement();
+    }
+    
+    // Add setpoint change handler for auto-detection
+    const targetSetpoint = document.getElementById('targetSetpoint');
+    if (targetSetpoint) {
+      targetSetpoint.addEventListener('change', detectRangeFromSetpoint);
+      targetSetpoint.addEventListener('input', detectRangeFromSetpoint);
+    }
+    
+    console.log('Range management initialization completed');
+  }, 500);
+});
+
 // Force status refresh (manual) with delayed re-query
 function forceStatusRefresh() {
   console.log('Manual status refresh requested...');
@@ -698,97 +818,318 @@ function forceStatusRefresh() {
   }, 1500);
 }
 
-// --- MISSING UI HANDLER FUNCTIONS ---
-async function resetToDefaults() {
-  // Reset all UI fields to default values (as in HTML)
-  document.getElementById('kpInput').value = '1.000000';
-  document.getElementById('kiInput').value = '0.100000';
-  document.getElementById('kdInput').value = '0.010000';
-  document.getElementById('sampleTimeInput').value = '1000';
-  document.getElementById('windowSizeInput').value = '30000';
-  document.getElementById('tempSampleCount').value = '10';
-  document.getElementById('tempRejectCount').value = '2';
-  document.getElementById('tempSampleInterval').value = '500';
-  showMessage('Parameters reset to defaults (not yet applied)', 'info');
+// Temperature-dependent PID parameter suggestions based on user tuning experience
+const temperaturePIDSuggestions = [
+  { 
+    key: "room",
+    min: 0, max: 35, 
+    name: "Room Temperature (0-35°C)",
+    kp: 0.5, ki: 0.00001, kd: 2.0,
+    windowMs: 60000, // Longer window for gentle control
+    description: "Very gentle control - minimal heat to prevent long thermal mass rises. Use longer windows (60s) to reduce heat frequency."
+  },
+  { 
+    key: "lowFerm",
+    min: 35, max: 50, 
+    name: "Low Fermentation (35-50°C)",
+    kp: 0.3, ki: 0.00002, kd: 3.0,
+    windowMs: 45000, // Still long window
+    description: "Gentle warming prevents thermal mass overshoot. Even small heat pulses cause long temperature rises at these levels."
+  },
+  { 
+    key: "medFerm",
+    min: 50, max: 70, 
+    name: "Medium Fermentation (50-70°C)", 
+    kp: 0.2, ki: 0.00005, kd: 5.0,
+    windowMs: 30000, // Moderate window
+    description: "Balanced control for typical fermentation temps. Higher derivative starts to help with thermal prediction."
+  },
+  { 
+    key: "highFerm",
+    min: 70, max: 100, 
+    name: "High Fermentation (70-100°C)",
+    kp: 0.15, ki: 0.00008, kd: 6.0,
+    windowMs: 25000,
+    description: "More responsive for higher fermentation temps. Thermal mass less problematic, faster response possible."
+  },
+  { 
+    key: "baking",
+    min: 100, max: 150, 
+    name: "Baking Heat (100-150°C)",
+    kp: 0.11, ki: 0.00005, kd: 10.0, // Your current settings
+    windowMs: 15000, // Your current setting
+    description: "Your current range - balanced for baking. High derivative (10) provides excellent control."
+  },
+  { 
+    key: "highBaking",
+    min: 150, max: 200, 
+    name: "High Baking (150-200°C)",
+    kp: 0.08, ki: 0.00003, kd: 10.0,
+    windowMs: 15000,
+    description: "Higher derivative to prevent overshoot. Very responsive control needed at high temperatures."
+  },
+  { 
+    key: "extreme",
+    min: 200, max: 250, 
+    name: "Extreme Heat (200-250°C)",
+    kp: 0.015, ki: 0.00015, kd: 10.0, // Your exact high-temp settings
+    windowMs: 10000,
+    description: "Your exact tuned settings - maximum derivative control. Perfect for extreme temperatures where overshoot must be prevented."
+  }
+];
+
+// Range configuration tracking
+let rangeConfigurationStatus = {
+  room: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
+  lowFerm: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
+  medFerm: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
+  highFerm: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
+  baking: { configured: true, kp: 0.11, ki: 0.00005, kd: 10.0, windowMs: 15000 }, // Default configured
+  highBaking: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
+  extreme: { configured: false, kp: null, ki: null, kd: null, windowMs: null }
+};
+
+let currentRangeIndex = 4; // Start with baking range
+let isRangeConfigurationMode = false;
+
+// Detect temperature range from setpoint and highlight it
+function detectRangeFromSetpoint() {
+  const setpoint = parseFloat(document.getElementById('targetSetpoint').value);
+  if (isNaN(setpoint)) {
+    showMessage('Please enter a valid temperature setpoint', 'error', 3000);
+    return;
+  }
+
+  // Find the appropriate temperature range
+  const detectedRange = temperaturePIDSuggestions.find(range => 
+    setpoint >= range.min && setpoint < range.max
+  );
+
+  if (!detectedRange) {
+    showMessage('Temperature out of supported range (0-250°C)', 'error', 3000);
+    return;
+  }
+
+  // Update the range selector to match detected range
+  document.getElementById('tempRangeSelect').value = detectedRange.key;
+  
+  // Update the detected range info
+  const detectedInfo = document.getElementById('detectedRangeInfo');
+  detectedInfo.innerHTML = `
+    <div style="background: rgba(255, 214, 0, 0.2); padding: 10px; border-radius: 6px; border: 1px solid #ffd600;">
+      <strong>🎯 Detected Range:</strong> ${detectedRange.name}<br>
+      <small>${detectedRange.description}</small><br>
+      <div style="margin-top: 8px; font-family: monospace; font-size: 0.9em;">
+        Suggested: Kp=${detectedRange.kp} | Ki=${detectedRange.ki} | Kd=${detectedRange.kd} | Window=${detectedRange.windowMs/1000}s
+      </div>
+    </div>
+  `;
+
+  // Set current range index for navigation
+  currentRangeIndex = temperaturePIDSuggestions.findIndex(range => range.key === detectedRange.key);
+  
+  // Load the range settings
+  loadTemperatureRangeSettings();
+  
+  // Update the range status display
+  updateRangeStatusDisplay();
+  
+  showMessage(`🎯 Auto-detected range: ${detectedRange.name}`, 'success', 3000);
 }
 
-async function testShortBeep() {
-  try {
-    await fetch('/api/short_beep');
-    showMessage('Short beep triggered.', 'success');
-  } catch (err) {
-    showMessage('Failed to trigger short beep: ' + err.message, 'error');
+// Update the range configuration status display
+function updateRangeStatusDisplay() {
+  const statusGrid = document.getElementById('rangeStatusGrid');
+  statusGrid.innerHTML = '';
+
+  temperaturePIDSuggestions.forEach((range, index) => {
+    const status = rangeConfigurationStatus[range.key];
+    const isActive = index === currentRangeIndex;
+    
+    const statusItem = document.createElement('div');
+    statusItem.className = `range-status-item ${status.configured ? 'configured' : 'unconfigured'} ${isActive ? 'active' : ''}`;
+    statusItem.onclick = () => selectRange(index);
+    
+    statusItem.innerHTML = `
+      <div class="range-status-header">
+        <div class="range-status-name">${range.name}</div>
+        <div class="range-status-indicator">${status.configured ? '✅' : '❌'}</div>
+      </div>
+      <div class="range-status-details">
+        ${range.min}°C - ${range.max}°C | ${status.configured ? 
+          `Kp=${status.kp}, Ki=${status.ki}, Kd=${status.kd}` : 
+          'Not configured'}
+      </div>
+    `;
+    
+    statusGrid.appendChild(statusItem);
+  });
+}
+
+// Navigate between temperature ranges
+function navigateToRange(direction) {
+  const newIndex = currentRangeIndex + direction;
+  if (newIndex >= 0 && newIndex < temperaturePIDSuggestions.length) {
+    selectRange(newIndex);
+  } else {
+    showMessage(direction > 0 ? 'Already at the last range' : 'Already at the first range', 'info', 2000);
   }
 }
 
-async function testTone(freq, amp, dur) {
-  try {
-    const url = `/api/buzzer_tone?freq=${encodeURIComponent(freq)}&amp=${encodeURIComponent(amp)}&dur=${encodeURIComponent(dur)}`;
-    await fetch(url);
-    showMessage(`Tone triggered: ${freq}Hz, amp ${amp}, dur ${dur}ms`, 'success');
-  } catch (err) {
-    showMessage('Failed to trigger tone: ' + err.message, 'error');
+// Select a specific range by index
+function selectRange(index) {
+  if (index < 0 || index >= temperaturePIDSuggestions.length) return;
+  
+  currentRangeIndex = index;
+  const range = temperaturePIDSuggestions[index];
+  
+  // Update the dropdown
+  document.getElementById('tempRangeSelect').value = range.key;
+  
+  // Update setpoint to mid-range value for testing
+  const midTemp = (range.min + range.max) / 2;
+  document.getElementById('targetSetpoint').value = midTemp.toFixed(1);
+  
+  // Load range settings
+  loadTemperatureRangeSettings();
+  
+  // Update status display
+  updateRangeStatusDisplay();
+  
+  showMessage(`📍 Selected range: ${range.name}`, 'info', 2000);
+}
+
+// Confirm and save current range configuration
+function confirmRangeConfiguration() {
+  const currentRange = temperaturePIDSuggestions[currentRangeIndex];
+  if (!currentRange) return;
+  
+  // Get current PID values from inputs
+  const kp = parseFloat(document.getElementById('kpInput').value);
+  const ki = parseFloat(document.getElementById('kiInput').value);
+  const kd = parseFloat(document.getElementById('kdInput').value);
+  const windowMs = parseFloat(document.getElementById('windowSizeInput').value);
+  
+  if (isNaN(kp) || isNaN(ki) || isNaN(kd) || isNaN(windowMs)) {
+    showMessage('Please enter valid PID parameters before confirming', 'error', 3000);
+    return;
+  }
+  
+  // Save the configuration
+  rangeConfigurationStatus[currentRange.key] = {
+    configured: true,
+    kp: kp,
+    ki: ki,
+    kd: kd,
+    windowMs: windowMs
+  };
+  
+  // Update the PID profiles on the controller
+  updatePIDProfileOnController(currentRange.key, { kp, ki, kd, windowMs });
+  
+  // Update display
+  updateRangeStatusDisplay();
+  
+  showMessage(`✅ Confirmed configuration for ${currentRange.name}`, 'success', 3000);
+  
+  // Auto-navigate to next unconfigured range
+  const nextUnconfigured = findNextUnconfiguredRange();
+  if (nextUnconfigured !== -1) {
+    setTimeout(() => {
+      selectRange(nextUnconfigured);
+      showMessage(`🔄 Moving to next unconfigured range`, 'info', 2000);
+    }, 1500);
+  } else {
+    showMessage(`🎉 All ranges configured! PID system ready.`, 'success', 4000);
   }
 }
 
-async function testMultiTone() {
-  // Play a sequence of tones for demonstration
-  try {
-    await testTone(1000, 0.3, 150);
-    setTimeout(() => testTone(1500, 0.3, 150), 200);
-    setTimeout(() => testTone(2000, 0.3, 150), 400);
-    showMessage('Multi-tone sequence triggered.', 'success');
-  } catch (err) {
-    showMessage('Failed to trigger multi-tone: ' + err.message, 'error');
-  }
-}
-
-function clearGraph() {
-  chartData.labels = [];
-  chartData.datasets.forEach(ds => ds.data = []);
-  if (temperatureChart) temperatureChart.update();
-  showMessage('Temperature graph cleared', 'info');
-}
-
-// --- Auto-Tune Placeholder Functions ---
-async function startAutoTune() {
-  try {
-    // Try to call backend endpoint for auto-tune if available
-    const method = document.getElementById('autoTuneMethod').value;
-    const baseTemp = parseFloat(document.getElementById('autoTuneBaseTemp').value);
-    let stepSize = 0;
-    if (method === 'step') {
-      stepSize = parseFloat(document.getElementById('autoTuneStepSize').value);
+// Find the next unconfigured range
+function findNextUnconfiguredRange() {
+  for (let i = 0; i < temperaturePIDSuggestions.length; i++) {
+    const range = temperaturePIDSuggestions[i];
+    if (!rangeConfigurationStatus[range.key].configured) {
+      return i;
     }
-    let url = `/api/auto_tune?method=${encodeURIComponent(method)}&base_temp=${encodeURIComponent(baseTemp)}`;
-    if (method === 'step') {
-      url += `&step_size=${encodeURIComponent(stepSize)}`;
+  }
+  return -1; // All configured
+}
+
+// Start the range configuration wizard
+function startRangeConfigurationWizard() {
+  isRangeConfigurationMode = true;
+  const firstUnconfigured = findNextUnconfiguredRange();
+  
+  if (firstUnconfigured === -1) {
+    showMessage('🎉 All ranges are already configured!', 'success', 3000);
+    return;
+  }
+  
+  selectRange(firstUnconfigured);
+  showMessage(`🧙‍♂️ Configuration wizard started. Configure each range step by step.`, 'info', 4000);
+}
+
+// Update PID profile on the controller (API call)
+async function updatePIDProfileOnController(rangeKey, params) {
+  try {
+    const response = await fetch('/api/pid_profile', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        profile: rangeKey,
+        kp: params.kp,
+        ki: params.ki,
+        kd: params.kd,
+        windowMs: params.windowMs
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to update PID profile on controller');
     }
-    const resp = await fetch(url);
-    if (resp.ok) {
-      showMessage('Auto-tune started.', 'success');
-      document.getElementById('autoTuneBtn').disabled = true;
-      document.getElementById('stopAutoTuneBtn').disabled = false;
-    } else {
-      showMessage('Failed to start auto-tune: ' + resp.statusText, 'error');
-    }
-  } catch (err) {
-    showMessage('Failed to start auto-tune: ' + err.message, 'error');
+    
+    console.log(`Updated ${rangeKey} profile on controller`);
+  } catch (error) {
+    console.error('Error updating PID profile:', error);
+    showMessage('Warning: Failed to save profile to controller', 'warning', 3000);
   }
 }
 
-async function stopAutoTune() {
+// Load range configuration status from controller
+async function loadRangeConfigurationStatus() {
   try {
-    // Try to call backend endpoint for stopping auto-tune if available
-    const resp = await fetch('/api/auto_tune_stop');
-    if (resp.ok) {
-      showMessage('Auto-tune stopped.', 'success');
-      document.getElementById('autoTuneBtn').disabled = false;
-      document.getElementById('stopAutoTuneBtn').disabled = true;
-    } else {
-      showMessage('Failed to stop auto-tune: ' + resp.statusText, 'error');
+    const response = await fetch('/api/pid_profile');
+    if (response.ok) {
+      const data = await response.json();
+      
+      // Update configuration status based on controller data
+      if (data.profiles) {
+        data.profiles.forEach(profile => {
+          if (rangeConfigurationStatus[profile.key]) {
+            rangeConfigurationStatus[profile.key] = {
+              configured: true,
+              kp: profile.kp,
+              ki: profile.ki,
+              kd: profile.kd,
+              windowMs: profile.windowMs
+            };
+          }
+        });
+      }
     }
-  } catch (err) {
-    showMessage('Failed to stop auto-tune: ' + err.message, 'error');
+  } catch (error) {
+    console.error('Error loading range configuration status:', error);
   }
+}
+
+// Initialize range management when page loads
+function initializeRangeManagement() {
+  loadRangeConfigurationStatus();
+  updateRangeStatusDisplay();
+  
+  // Set initial setpoint to current baking range
+  document.getElementById('targetSetpoint').value = '125';
+  detectRangeFromSetpoint();
 }

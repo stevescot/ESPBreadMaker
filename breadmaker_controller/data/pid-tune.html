@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PID Controller Tuning - Breadmaker</title>
   <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet" href="controllertuning.css">
+  <link rel="stylesheet" href="pid-tune.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -14,12 +14,76 @@
     <a href="/config.html">⚙️ Config</a>
     <a href="/programs.html">📝 Programs</a>
     <a href="/calibration.html">🌡️ Calibration</a>
-    <a href="/controllertuning.html" class="active">🔥 PID Tuning</a>
+    <a href="/pid-tune.html" class="active">🔥 PID Tuning</a>
     <a href="/update.html">⬆️ Update</a>
   </nav>
 
   <div class="tuning-container">
     <h1>🔥 High-Precision PID Controller Tuning</h1>
+    
+    <!-- Temperature-Dependent PID Selection -->
+    <div class="temp-dependent-section">
+      <h3>🌡️ Temperature-Dependent PID Control</h3>
+      
+      <!-- Setpoint-based Range Detection -->
+      <div class="setpoint-range-detector">
+        <h4>🎯 Set Target Temperature to Auto-Select Range</h4>
+        <div class="setpoint-input-row">
+          <label for="targetSetpoint">Target Temperature:</label>
+          <input type="number" id="targetSetpoint" step="0.5" min="0" max="250" value="60.0" onchange="detectRangeFromSetpoint()">
+          <span class="param-unit">°C</span>
+          <button id="detectRangeBtn" onclick="detectRangeFromSetpoint()">🎯 Detect Range</button>
+        </div>
+        <div id="detectedRangeInfo" class="detected-range-info">
+          <!-- Auto-detected range information will appear here -->
+        </div>
+      </div>
+
+      <!-- Range Configuration Status -->
+      <div class="range-config-status">
+        <h4>📋 PID Range Configuration Status</h4>
+        <div id="rangeStatusGrid" class="range-status-grid">
+          <!-- Range status indicators will be populated here -->
+        </div>
+        <div class="range-navigation">
+          <button id="prevRangeBtn" onclick="navigateToRange(-1)">⬅️ Previous Range</button>
+          <button id="nextRangeBtn" onclick="navigateToRange(1)">Next Range ➡️</button>
+          <button id="configureAllBtn" onclick="startRangeConfigurationWizard()">🧙‍♂️ Configure All Ranges</button>
+        </div>
+      </div>
+      
+      <!-- Manual Range Selection (Enhanced) -->
+      <div class="temp-range-selector">
+        <label for="tempRangeSelect">Manual Range Selection:</label>
+        <select id="tempRangeSelect" onchange="loadTemperatureRangeSettings()">
+          <option value="room">Room Temperature (0-35°C) - Gentle Control</option>
+          <option value="lowFerm">Low Fermentation (35-50°C) - Thermal Mass Prevention</option>
+          <option value="medFerm">Medium Fermentation (50-70°C) - Balanced Control</option>
+          <option value="highFerm">High Fermentation (70-100°C) - Responsive Control</option>
+          <option value="baking">Baking Heat (100-150°C) - Current Range</option>
+          <option value="highBaking">High Baking (150-200°C) - High Derivative</option>
+          <option value="extreme">Extreme Heat (200-250°C) - Maximum Control</option>
+        </select>
+        <button id="applyTempRangeBtn" onclick="applyTemperatureRangeSettings()">Apply Range Settings</button>
+        <button id="confirmRangeBtn" onclick="confirmRangeConfiguration()" class="btn-confirm">✅ Confirm Range Config</button>
+      </div>
+      
+      <div id="tempRangeInfo" class="temp-range-info">
+        <!-- Temperature range information will be populated here -->
+      </div>
+      
+      <div id="pidSuggestion" class="suggestion-container">
+        <!-- Temperature-dependent suggestions will appear here -->
+      </div>
+      
+      <div id="lowTempAnalysis" class="analysis-container">
+        <!-- Low temperature analysis will appear here -->
+      </div>
+      
+      <div id="thermalMassWarning" class="warning-container">
+        <!-- Thermal mass warnings will appear here -->
+      </div>
+    </div>
     
     <div class="tuning-instructions">
       <h3>📚 PID Tuning Quick Reference</h3>
@@ -451,7 +515,7 @@
 
   <!-- JavaScript Files -->
   <script src="script.js"></script>
-  <script src="controllertuning.js"></script>
+  <script src="pid-tune.js"></script>
   <script>
   // Live PID/Temp Control Monitoring
   async function pollLivePidStatus() {

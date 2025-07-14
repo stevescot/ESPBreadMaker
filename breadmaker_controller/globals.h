@@ -1,5 +1,3 @@
-
-
 #pragma once
 #include <Arduino.h>
 // Global constants for use across modules
@@ -56,6 +54,10 @@ struct OutputStates {
     bool buzzer = false;
 };
 #endif
+
+extern OutputStates outputStates;
+extern TemperatureAveragingState tempAvg;
+
 #ifndef PROGRAM_STATE_STRUCT_DEFINED
 #define PROGRAM_STATE_STRUCT_DEFINED
 #include <vector>
@@ -71,10 +73,25 @@ struct ProgramState {
     bool isRunning = false, manualMode = false;
 };
 #endif
+
+extern ProgramState programState;
 // PIDControl struct definition for use across multiple files
 #ifndef PID_CONTROL_STRUCT_DEFINED
 #define PID_CONTROL_STRUCT_DEFINED
 #include <PID_v1.h>
+
+// Temperature-dependent PID profile structure
+struct PIDProfile {
+    String name;
+    float minTemp;
+    float maxTemp;
+    double kp;
+    double ki;
+    double kd;
+    unsigned long windowMs;
+    String description;
+};
+
 struct PIDControl {
     double Setpoint = 0, Input = 0, Output = 0;
     double Kp = 2.0, Ki = 5.0, Kd = 1.0;
@@ -82,6 +99,12 @@ struct PIDControl {
     double pidP = 0, pidI = 0, pidD = 0;
     double lastInput = 0, lastITerm = 0;
     PID* controller = nullptr;
+    
+    // Temperature-dependent profiles
+    std::vector<PIDProfile> profiles;
+    String activeProfile = "Baking Heat";
+    bool autoSwitching = true;
+    unsigned long lastProfileCheck = 0;
 };
 extern PIDControl pid;
 #endif

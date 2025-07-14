@@ -46,11 +46,10 @@ AsyncWebServer server(80); // Main web server
 // (Output pins are defined in outputs_manager.cpp)
 
 
-// --- PID control struct instance ---
-PIDControl pid;
-
-// --- Program state struct instance (needed for web_endpoints.cpp extern reference) ---
-ProgramState programState;
+#define DEFAULT_KP 0.11
+#define DEFAULT_KI 0.00005
+#define DEFAULT_KD 10.0
+#define DEFAULT_WINDOW_MS 30000
 
 // In setup(), initialize the PID controller:
 // pid.controller = new PID(&pid.Input, &pid.Output, &pid.Setpoint, pid.Kp, pid.Ki, pid.Kd, DIRECT);
@@ -65,10 +64,6 @@ const unsigned long MIN_WINDOW_TIME = 5000; // Minimum time before allowing dyna
 
 time_t scheduledStart = 0; // Scheduled start time (epoch)
 int scheduledStartStage = -1; // Stage to start at when scheduled (-1 = start from beginning)
-
-// --- State variables ---
-bool isRunning = false;           // Is the breadmaker running?
-// Removed activeProgramName and programNamesOrdered; use activeProgramId and programs[activeProgramId].name instead
 
 // --- Custom stage state variables now in programState ---
 // Use programState.customStageIdx, programState.customMixIdx, programState.customStageStart, programState.customMixStepStart, programState.programStartTime, programState.actualStageStartTimes, etc.
@@ -90,20 +85,18 @@ const char* SETTINGS_FILE = "/settings.json";
 // --- Debug serial setting ---
 bool debugSerial = true; // Debug serial output (default: true)
 
-// --- Manual mode global variable ---
-bool manualMode = false; // Manual mode: true = direct manual control, false = automatic
-
 // --- Startup delay to let temperature sensor stabilize ---
 unsigned long startupTime = 0;           // Time when system started (millis())
 // STARTUP_DELAY_MS now defined in globals.cpp
 
-// --- Temperature averaging system (encapsulated) ---
-TemperatureAveragingState tempAvg;
-
-
 // --- Function prototypes ---
 void loadSettings();
 void saveSettings();
+void loadPIDProfiles();
+void savePIDProfiles();
+PIDProfile* findProfileForTemperature(float temperature);
+void switchToProfile(const String& profileName);
+void checkAndSwitchPIDProfile();
 void updateTemperatureSampling();
 float getAveragedTemperature();
 void streamStatusJson(Print& out);
@@ -325,7 +318,15 @@ const char* RESUME_FILE = "/resume.json";
 unsigned long lastResumeSave = 0;
 
 // Saves the current breadmaker state (program, stage, timing, etc.) to LittleFS for resume after reboot.
+// Includes throttling to prevent excessive writes under load conditions.
 void saveResumeState() {
+  // Throttle saves: minimum 2 seconds between saves to reduce wear and memory pressure
+  unsigned long now = millis();
+  if (lastResumeSave > 0 && (now - lastResumeSave) < 2000) {
+    return; // Skip this save to reduce load
+  }
+  lastResumeSave = now;
+  
   File f = LittleFS.open(RESUME_FILE, "w");
   if (!f) {
     if (debugSerial) Serial.println("[saveResumeState] ERROR: Failed to open resume file for writing!");
@@ -335,19 +336,25 @@ void saveResumeState() {
   f.close();
 }
 
-// Helper to serialize resume state as JSON
+// Helper to serialize resume state as JSON using memory-efficient streaming
 void serializeResumeStateJson(Print& f) {
+  // Calculate elapsed times once to avoid multiple calculations
+  unsigned long stageSec = (programState.customStageStart > 0) ? (millis() - programState.customStageStart) / 1000UL : 0UL;
+  unsigned long mixSec = (programState.customMixStepStart > 0) ? (millis() - programState.customMixStepStart) / 1000UL : 0UL;
+  
+  // Stream JSON directly to file - no large buffers needed
   f.print("{\n");
   f.printf("  \"programIdx\":%u,\n", (unsigned)programState.activeProgramId);
   f.printf("  \"customStageIdx\":%u,\n", (unsigned)programState.customStageIdx);
   f.printf("  \"customMixIdx\":%u,\n", (unsigned)programState.customMixIdx);
-  f.printf("  \"elapsedStageSec\":%lu,\n", (programState.customStageStart > 0) ? (millis() - programState.customStageStart) / 1000UL : 0UL);
-  f.printf("  \"elapsedMixSec\":%lu,\n", (programState.customMixStepStart > 0) ? (millis() - programState.customMixStepStart) / 1000UL : 0UL);
+  f.printf("  \"elapsedStageSec\":%lu,\n", stageSec);
+  f.printf("  \"elapsedMixSec\":%lu,\n", mixSec);
   f.printf("  \"programStartTime\":%lu,\n", (unsigned long)programState.programStartTime);
   f.printf("  \"isRunning\":%s,\n", programState.isRunning ? "true" : "false");
   f.print("  \"actualStageStartTimes\":[");
   for (int i = 0; i < 20; i++) {
-    f.printf("%s%lu", (i > 0) ? "," : "", (unsigned long)programState.actualStageStartTimes[i]);
+    if (i > 0) f.print(",");
+    f.printf("%lu", (unsigned long)programState.actualStageStartTimes[i]);
   }
   f.print("]\n");
   f.print("}\n");
@@ -359,28 +366,45 @@ void clearResumeState() {
 }
 
 // Loads the breadmaker's previous state from LittleFS and restores program, stage, and timing.
+// Optimized for memory efficiency and better error handling.
 void loadResumeState() {
   File f = LittleFS.open(RESUME_FILE, "r");
   if (!f) return;
-  DynamicJsonDocument doc(1024); // Increased size for stage start times array
+  
+  // Use a smaller buffer since resume files are typically <400 bytes
+  DynamicJsonDocument doc(768); // Reduced from 1024 to 768 bytes
   DeserializationError err = deserializeJson(doc, f);
   f.close();
-  if (err) return;
-  // Restore program by id (id is now the index in the programs vector, but may be a dummy slot)
+  
+  if (err) {
+    if (debugSerial) {
+      Serial.print("[loadResumeState] JSON parse error: ");
+      Serial.println(err.c_str());
+    }
+    return;
+  }
+  
+  // Restore program by id with better validation
   int progIdx = doc["programIdx"] | -1;
-  if (progIdx >= 0 && progIdx < (int)programs.size() && programs[progIdx].id == progIdx && programs[progIdx].id != -1) {
+  if (progIdx >= 0 && progIdx < (int)programs.size() && 
+      programs[progIdx].id == progIdx && programs[progIdx].id != -1) {
     programState.activeProgramId = progIdx;
-    updateActiveProgramVars(); // Update program variables after loading
+    updateActiveProgramVars();
   } else {
     // Fallback: select first valid program (id!=-1) or 0 if none
     programState.activeProgramId = 0;
     for (size_t i = 0; i < programs.size(); ++i) {
-      if (programs[i].id != -1) { programState.activeProgramId = i; break; }
+      if (programs[i].id != -1) { 
+        programState.activeProgramId = i; 
+        break; 
+      }
     }
     updateActiveProgramVars();
   }
-  programState.customStageIdx = doc["customStageIdx"] | 0;
-  programState.customMixIdx = doc["customMixIdx"] | 0;
+  
+  // Load basic state with bounds checking
+  programState.customStageIdx = constrain(doc["customStageIdx"] | 0, 0, 19);
+  programState.customMixIdx = constrain(doc["customMixIdx"] | 0, 0, 9);
   unsigned long elapsedStageSec = doc["elapsedStageSec"] | 0;
   unsigned long elapsedMixSec = doc["elapsedMixSec"] | 0;
   programState.programStartTime = doc["programStartTime"] | 0;
@@ -512,6 +536,9 @@ void loop() {
   static bool stageJustAdvanced = false;
   static bool scheduledStartTriggered = false;
 
+  // Check and switch PID profile based on temperature
+  checkAndSwitchPIDProfile();
+
   updateFermentationTiming(stageJustAdvanced);
 
   // --- Check for stage advancement and log ---
@@ -544,6 +571,7 @@ void loop() {
 
 // --- Helper function definitions ---
 // Updates fermentation timing, calculates weighted time, and advances stage if needed.
+// NOTE: This is the ONLY place where fermentation stages should advance to prevent race conditions.
 void updateFermentationTiming(bool &stageJustAdvanced) {
   if (programs.size() > 0 && programState.activeProgramId < programs.size() && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
     Program &p = programs[programState.activeProgramId];
@@ -558,7 +586,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0); // Q10: factor < 1 means faster at higher temp
         fermentState.fermentLastUpdateMs = nowMs;
         fermentState.fermentWeightedSec = 0.0;
-      } else if (isRunning) {
+      } else if (programState.isRunning) {
         double elapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
         fermentState.fermentWeightedSec += elapsedSec * fermentState.fermentLastFactor;
         fermentState.fermentLastTemp = actualTemp;
@@ -604,7 +632,7 @@ void checkDelayedResume() {
 
 // Handles manual mode operation, including direct PID and output control.
 void handleManualMode() {
-  if (manualMode && pid.Setpoint > 0) {
+  if (programState.manualMode && pid.Setpoint > 0) {
     pid.Input = getAveragedTemperature();
     double error = pid.Setpoint - pid.Input;
     double dInput = pid.Input - pid.lastInput;
@@ -646,6 +674,10 @@ void handleScheduledStart(bool &scheduledStartTriggered) {
     programState.programStartTime = time(nullptr);
     for (int i = 0; i < 20; i++) programState.actualStageStartTimes[i] = 0;
     programState.actualStageStartTimes[programState.customStageIdx] = programState.programStartTime;
+    
+    // Initialize fermentation tracking for the starting stage
+    resetFermentationTracking(getAveragedTemperature());
+    
     saveResumeState();
     scheduledStart = 0;
     scheduledStartStage = -1;
@@ -713,8 +745,8 @@ void handleCustomStages(bool &stageJustAdvanced) {
       }
       fermentState.predictedCompleteTime = (unsigned long)(programState.programStartTime + (unsigned long)(cumulativePredictedSec)); // All predicted times use Q10 multiply logic
     }
-    if (st.temp > 0 || manualMode) {
-      if (manualMode && pid.Setpoint > 0) {
+    if (st.temp > 0 || programState.manualMode) {
+      if (programState.manualMode && pid.Setpoint > 0) {
         pid.Input = getAveragedTemperature();
         double error = pid.Setpoint - pid.Input;
         double dInput = pid.Input - pid.lastInput;
@@ -727,7 +759,7 @@ void handleCustomStages(bool &stageJustAdvanced) {
         pid.lastInput = pid.Input;
         if (pid.controller) pid.controller->Compute();
         updateTimeProportionalHeater();
-      } else if (!manualMode && st.temp > 0) {
+      } else if (!programState.manualMode && st.temp > 0) {
         double error = pid.Setpoint - pid.Input;
         double dInput = pid.Input - pid.lastInput;
         double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
@@ -749,11 +781,11 @@ void handleCustomStages(bool &stageJustAdvanced) {
       windowStartTime = 0;
       lastPIDOutput = 0.0;
     }
-    if (!manualMode) {
+    if (!programState.manualMode) {
       setLight(false);
       setBuzzer(false);
     }
-    if (!manualMode) {
+    if (!programState.manualMode) {
       bool hasMix = false;
       if (st.noMix) {
         setMotor(false);
@@ -825,20 +857,20 @@ void handleCustomStages(bool &stageJustAdvanced) {
       }
     }
     bool stageComplete = false;
+    // Note: Fermentation stage advancement is handled in updateFermentationTiming()
+    // to prevent duplicate advancement logic and race conditions
     if (st.isFermentation) {
-      double fermentTargetSec = (double)st.min * 60.0;
-      double epsilon = 0.05;
-      if (fermentState.fermentWeightedSec + epsilon >= fermentTargetSec) {
-        stageComplete = true;
-        if (debugSerial) {
-          Serial.printf("[FERMENT] Advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentState.fermentWeightedSec, fermentTargetSec, st.min);
-        }
-      } else if (debugSerial && (fermentTargetSec - fermentState.fermentWeightedSec) < 2.0) {
-        Serial.printf("[FERMENT] Not yet advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentState.fermentWeightedSec, fermentTargetSec, st.min);
-      }
+      // For fermentation stages, completion is handled by updateFermentationTiming()
+      // We only set stageComplete here if stageJustAdvanced flag is set
+      stageComplete = stageJustAdvanced;
     } else {
       unsigned long elapsedMs = millis() - programState.customStageStart;
-      unsigned long stageMs = (unsigned long)st.min * 60000UL;
+      // Prevent integer overflow: limit stage time to ~71 minutes (2^32 / 60000)
+      unsigned long safeMin = (st.min > 71) ? 71 : st.min;
+      if (st.min > 71 && debugSerial) {
+        Serial.printf("[WARN] Stage duration %u minutes exceeds safe limit, capping at 71 minutes\n", st.min);
+      }
+      unsigned long stageMs = safeMin * 60000UL;
       if (elapsedMs >= stageMs) {
         stageComplete = true;
       } else if (stageMs > 0 && elapsedMs >= stageMs - 1000 && !stageComplete) {
@@ -846,13 +878,30 @@ void handleCustomStages(bool &stageJustAdvanced) {
         if (debugSerial) Serial.printf("[WARN] Time left is 0 for non-fermentation stage %d but not advancing (elapsed=%lu, stageMs=%lu)\n", (int)programState.customStageIdx, elapsedMs, stageMs);
       }
     }
-    // Extra safety: If time left is 0 for non-fermentation and not advancing, force advancement
+    // Extra safety mechanisms for stuck stages
     if (!st.isFermentation) {
       unsigned long elapsedMs = millis() - programState.customStageStart;
-      unsigned long stageMs = (unsigned long)st.min * 60000UL;
+      // Use same safe calculation to prevent overflow
+      unsigned long safeMin = (st.min > 71) ? 71 : st.min;
+      unsigned long stageMs = safeMin * 60000UL;
       if (stageMs > 0 && elapsedMs > stageMs + 2000 && !stageComplete) {
         if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of non-fermentation stage %d after time expired (elapsed=%lu, stageMs=%lu)\n", (int)programState.customStageIdx, elapsedMs, stageMs);
         stageComplete = true;
+      }
+    } else {
+      // Safety for fermentation stages: if real time is way beyond expected (4x), force advance
+      unsigned long elapsedMs = millis() - programState.customStageStart;
+      // Prevent overflow: limit calculation and use safe max time
+      unsigned long safeMin = (st.min > 17) ? 17 : st.min; // 17 * 4 * 60000 = max safe value
+      if (st.min > 17 && debugSerial) {
+        Serial.printf("[WARN] Fermentation stage %u minutes too long for 4x safety calc, using 17 min limit\n", st.min);
+      }
+      unsigned long maxStageMs = safeMin * 60000UL * 4; // 4x expected time as safety limit
+      if (maxStageMs > 0 && elapsedMs > maxStageMs && !stageComplete) {
+        if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of stuck fermentation stage %d after %lu minutes (4x limit reached)\n", (int)programState.customStageIdx, elapsedMs / 60000UL);
+        stageComplete = true;
+        // Reset fermentation tracking to prevent issues in next stage
+        resetFermentationTracking(getAveragedTemperature());
       }
     }
     if (stageComplete) {
@@ -1113,8 +1162,8 @@ void streamHeaterDebugStatus(Print& out) {
   out.printf("\"heater_physical_state\":%s,", heaterState ? "true" : "false");
   out.printf("\"pid_output_percent\":%.2f,", pid.Output * 100);
   out.printf("\"setpoint\":%.2f,", pid.Setpoint);
-  out.printf("\"manual_mode\":%s,", manualMode ? "true" : "false");
-  out.printf("\"is_running\":%s,", isRunning ? "true" : "false");
+  out.printf("\"manual_mode\":%s,", programState.manualMode ? "true" : "false");
+  out.printf("\"is_running\":%s,", programState.isRunning ? "true" : "false");
   out.printf("\"window_size_ms\":%lu,", windowSize);
   out.printf("\"window_elapsed_ms\":%lu,", elapsed);
   out.printf("\"window_progress_percent\":%.2f,", windowProgress);
@@ -1132,8 +1181,8 @@ void streamHeaterDebugStatus(Print& out) {
   out.printf("\"restart_condition_more_heat\":%s,", needMoreHeat ? "true" : "false");
   out.printf("\"restart_condition_less_heat\":%s,", needLessHeat ? "true" : "false");
   out.printf("\"setpoint_override\":%s,", (pid.Setpoint <= 0) ? "true" : "false");
-  out.printf("\"running_override\":%s,", !isRunning ? "true" : "false");
-  out.printf("\"manual_override\":%s,", manualMode ? "true" : "false");
+  out.printf("\"running_override\":%s,", !programState.isRunning ? "true" : "false");
+  out.printf("\"manual_override\":%s,", programState.manualMode ? "true" : "false");
   out.printf("\"relay_protection_active\":%s,", relayProtectionActive ? "true" : "false");
   out.printf("\"theoretical_on_time_ms\":%lu,", theoreticalOnTime);
   out.printf("\"enforced_min_off_time_ms\":%lu", minOffTime);
@@ -1150,7 +1199,7 @@ bool isStartupDelayComplete() {
 // Stops the breadmaker, turns off all outputs, and saves state.
 void stopBreadmaker() {
   if (debugSerial) Serial.println("[ACTION] stopBreadmaker() called");
-  isRunning = false;
+  programState.isRunning = false;
   setHeater(false);
   setMotor(false);
   setLight(false);
@@ -1180,7 +1229,7 @@ void loadSettings() {
   outputMode = (strcmp(mode, "digital") == 0) ? OUTPUT_DIGITAL : OUTPUT_ANALOG;
   debugSerial = doc["debugSerial"] | true;
   
-  // Load PID parameters
+  // Load PID parameters - backward compatibility
   if (doc.containsKey("pidKp")) {
     pid.Kp = doc["pidKp"] | 2.0;
     pid.Ki = doc["pidKi"] | 5.0;
@@ -1193,8 +1242,19 @@ void loadSettings() {
       pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
       pid.controller->SetSampleTime(pid.sampleTime);
     }
-    Serial.printf("[loadSettings] PID parameters loaded: Kp=%.6f, Ki=%.6f, Kd=%.6f\n", pid.Kp, pid.Ki, pid.Kd);
+    Serial.printf("[loadSettings] Legacy PID parameters loaded: Kp=%.6f, Ki=%.6f, Kd=%.6f\n", pid.Kp, pid.Ki, pid.Kd);
     Serial.printf("[loadSettings] Timing parameters loaded: SampleTime=%lums, WindowSize=%lums\n", pid.sampleTime, windowSize);
+  }
+  
+  // Load temperature-dependent PID profiles
+  loadPIDProfiles();
+  
+  // Load PID control settings
+  if (doc.containsKey("activeProfile")) {
+    pid.activeProfile = doc["activeProfile"] | "Baking Heat";
+  }
+  if (doc.containsKey("autoSwitching")) {
+    pid.autoSwitching = doc["autoSwitching"] | true;
   }
   
   // Load temperature averaging parameters
@@ -1246,31 +1306,250 @@ void loadSettings() {
   Serial.println("[loadSettings] Settings loaded.");
 }
 // Saves breadmaker settings (PID, temperature, program selection, etc.) to LittleFS.
+// Uses direct streaming to minimize memory usage under load.
 void saveSettings() {
-  Serial.println("[saveSettings] Saving settings...");
-  DynamicJsonDocument doc(768);
-  doc["outputMode"] = (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog";
-  doc["debugSerial"] = debugSerial;
-  if (programs.size() > 0) {
-    doc["lastProgramId"] = (int)programState.activeProgramId;
-    doc["lastProgram"] = programs[programState.activeProgramId].name; // Deprecated, for backward compatibility
-  }
-  // Save PID parameters
-  doc["pidKp"] = pid.Kp;
-  doc["pidKi"] = pid.Ki;
-  doc["pidKd"] = pid.Kd;
-  doc["pidSampleTime"] = pid.sampleTime;
-  doc["pidWindowSize"] = windowSize;
-  // Save temperature averaging parameters
-  doc["tempSampleCount"] = tempAvg.tempSampleCount;
-  doc["tempRejectCount"] = tempAvg.tempRejectCount;
-  doc["tempSampleInterval"] = tempAvg.tempSampleInterval;
+  if (debugSerial) Serial.println("[saveSettings] Saving settings...");
+  
   File f = LittleFS.open(SETTINGS_FILE, "w");
   if (!f) {
-    Serial.println("[saveSettings] Failed to open settings.json for writing!");
+    if (debugSerial) Serial.println("[saveSettings] Failed to open settings.json for writing!");
     return;
   }
+  
+  // Stream JSON directly to file - much more memory efficient than building large strings
+  f.print("{\n");
+  f.printf("  \"outputMode\":\"%s\",\n", (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog");
+  f.printf("  \"debugSerial\":%s,\n", debugSerial ? "true" : "false");
+  
+  if (programs.size() > 0) {
+    f.printf("  \"lastProgramId\":%d,\n", (int)programState.activeProgramId);
+    f.print("  \"lastProgram\":\"");
+    f.print(programs[programState.activeProgramId].name);
+    f.print("\",\n");
+  } else {
+    f.print("  \"lastProgramId\":0,\n");
+    f.print("  \"lastProgram\":\"Unknown\",\n");
+  }
+  
+  // PID parameters for backward compatibility
+  f.printf("  \"pidKp\":%.6f,\n", pid.Kp);
+  f.printf("  \"pidKi\":%.6f,\n", pid.Ki);
+  f.printf("  \"pidKd\":%.6f,\n", pid.Kd);
+  f.printf("  \"pidSampleTime\":%lu,\n", pid.sampleTime);
+  f.printf("  \"pidWindowSize\":%lu,\n", windowSize);
+  
+  // PID profile settings
+  f.print("  \"activeProfile\":\"");
+  f.print(pid.activeProfile);
+  f.print("\",\n");
+  f.printf("  \"autoSwitching\":%s,\n", pid.autoSwitching ? "true" : "false");
+  
+  // Temperature averaging parameters
+  f.printf("  \"tempSampleCount\":%d,\n", tempAvg.tempSampleCount);
+  f.printf("  \"tempRejectCount\":%d,\n", tempAvg.tempRejectCount);
+  f.printf("  \"tempSampleInterval\":%lu\n", tempAvg.tempSampleInterval);
+  
+  f.print("}\n");
+  f.close();
+  
+  if (debugSerial) Serial.println("[saveSettings] Settings saved with direct streaming (low memory usage).");
+}
+
+// Load PID profiles from LittleFS
+void loadPIDProfiles() {
+  Serial.println("[loadPIDProfiles] Loading PID profiles...");
+  
+  // Clear existing profiles
+  pid.profiles.clear();
+  
+  File f = LittleFS.open("/pid-profiles.json", "r");
+  if (!f) {
+    Serial.println("[loadPIDProfiles] pid-profiles.json not found, creating defaults.");
+    createDefaultPIDProfiles();
+    savePIDProfiles();
+    return;
+  }
+  
+  DynamicJsonDocument doc(2048);
+  DeserializationError err = deserializeJson(doc, f);
+  f.close();
+  
+  if (err) {
+    Serial.print("[loadPIDProfiles] Failed to parse pid-profiles.json: ");
+    Serial.println(err.c_str());
+    createDefaultPIDProfiles();
+    return;
+  }
+  
+  JsonArray profileArray = doc["pidProfiles"];
+  if (profileArray.isNull()) {
+    Serial.println("[loadPIDProfiles] No pidProfiles array found, creating defaults.");
+    createDefaultPIDProfiles();
+    return;
+  }
+  
+  for (JsonObject profile : profileArray) {
+    PIDProfile p;
+    p.name = profile["name"] | "Unknown";
+    p.minTemp = profile["minTemp"] | 0.0;
+    p.maxTemp = profile["maxTemp"] | 100.0;
+    p.kp = profile["kp"] | 0.11;
+    p.ki = profile["ki"] | 0.00005;
+    p.kd = profile["kd"] | 10.0;
+    p.windowMs = profile["windowMs"] | 30000;
+    p.description = profile["description"] | "";
+    pid.profiles.push_back(p);
+  }
+  
+  // Load control settings
+  pid.activeProfile = doc["activeProfile"] | "Baking Heat";
+  pid.autoSwitching = doc["autoSwitching"] | true;
+  
+  Serial.printf("[loadPIDProfiles] Loaded %d PID profiles, active: %s, auto-switching: %s\n", 
+                pid.profiles.size(), pid.activeProfile.c_str(), pid.autoSwitching ? "ON" : "OFF");
+}
+
+// Save PID profiles to LittleFS
+void savePIDProfiles() {
+  Serial.println("[savePIDProfiles] Saving PID profiles...");
+  
+  DynamicJsonDocument doc(2048);
+  JsonArray profileArray = doc.createNestedArray("pidProfiles");
+  
+  for (const PIDProfile& profile : pid.profiles) {
+    JsonObject p = profileArray.createNestedObject();
+    p["name"] = profile.name;
+    p["minTemp"] = profile.minTemp;
+    p["maxTemp"] = profile.maxTemp;
+    p["kp"] = profile.kp;
+    p["ki"] = profile.ki;
+    p["kd"] = profile.kd;
+    p["windowMs"] = profile.windowMs;
+    p["description"] = profile.description;
+  }
+  
+  doc["activeProfile"] = pid.activeProfile;
+  doc["autoSwitching"] = pid.autoSwitching;
+  
+  File f = LittleFS.open("/pid-profiles.json", "w");
+  if (!f) {
+    Serial.println("[savePIDProfiles] Failed to open pid-profiles.json for writing!");
+    return;
+  }
+  
   serializeJson(doc, f);
   f.close();
-  Serial.println("[saveSettings] Settings saved with PID and temperature averaging parameters.");
+  Serial.println("[savePIDProfiles] PID profiles saved successfully.");
+}
+
+// Create default PID profiles
+void createDefaultPIDProfiles() {
+  Serial.println("[createDefaultPIDProfiles] Creating default PID profiles...");
+  
+  pid.profiles.clear();
+  
+  // Room Temperature - Very gentle control
+  pid.profiles.push_back({
+    "Room Temperature", 0, 35, 0.5, 0.00001, 2.0, 60000,
+    "Very gentle control - minimal heat to prevent long thermal mass rises"
+  });
+  
+  // Low Fermentation - Gentle warming
+  pid.profiles.push_back({
+    "Low Fermentation", 35, 50, 0.3, 0.00002, 3.0, 45000,
+    "Gentle warming prevents thermal mass overshoot"
+  });
+  
+  // Medium Fermentation - Balanced control
+  pid.profiles.push_back({
+    "Medium Fermentation", 50, 70, 0.2, 0.00005, 5.0, 30000,
+    "Balanced control for typical fermentation temps"
+  });
+  
+  // High Fermentation - More responsive
+  pid.profiles.push_back({
+    "High Fermentation", 70, 100, 0.15, 0.00008, 6.0, 25000,
+    "More responsive for higher fermentation temps"
+  });
+  
+  // Baking Heat - Your current settings
+  pid.profiles.push_back({
+    "Baking Heat", 100, 150, 0.11, 0.00005, 10.0, 15000,
+    "Your current range - balanced for baking"
+  });
+  
+  // High Baking - Higher derivative
+  pid.profiles.push_back({
+    "High Baking", 150, 200, 0.08, 0.00003, 10.0, 15000,
+    "Higher derivative to prevent overshoot"
+  });
+  
+  // Extreme Heat - Maximum control
+  pid.profiles.push_back({
+    "Extreme Heat", 200, 250, 0.015, 0.00015, 10.0, 10000,
+    "Your exact tuned settings - maximum derivative control"
+  });
+  
+  Serial.printf("[createDefaultPIDProfiles] Created %d default profiles.\n", pid.profiles.size());
+}
+
+// Find the appropriate PID profile for a given temperature
+PIDProfile* findProfileForTemperature(float temperature) {
+  for (PIDProfile& profile : pid.profiles) {
+    if (temperature >= profile.minTemp && temperature < profile.maxTemp) {
+      return &profile;
+    }
+  }
+  // Return the last profile if temperature is higher than all ranges
+  if (!pid.profiles.empty()) {
+    return &pid.profiles.back();
+  }
+  return nullptr;
+}
+
+// Switch to a specific PID profile by name
+void switchToProfile(const String& profileName) {
+  for (const PIDProfile& profile : pid.profiles) {
+    if (profile.name == profileName) {
+      // Update active PID parameters
+      pid.Kp = profile.kp;
+      pid.Ki = profile.ki;
+      pid.Kd = profile.kd;
+      windowSize = profile.windowMs;
+      pid.activeProfile = profileName;
+      
+      // Apply to PID controller
+      if (pid.controller) {
+        pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
+      }
+      
+      Serial.printf("[switchToProfile] Switched to '%s': Kp=%.6f, Ki=%.6f, Kd=%.6f, Window=%lums\n",
+                    profileName.c_str(), pid.Kp, pid.Ki, pid.Kd, windowSize);
+      return;
+    }
+  }
+  Serial.printf("[switchToProfile] Profile '%s' not found!\n", profileName.c_str());
+}
+
+// Check current temperature and switch profile if needed
+void checkAndSwitchPIDProfile() {
+  // Only check every 5 seconds to avoid excessive switching
+  if (millis() - pid.lastProfileCheck < 5000) return;
+  pid.lastProfileCheck = millis();
+  
+  // Skip if auto-switching is disabled
+  if (!pid.autoSwitching) return;
+  
+  // Skip if no valid temperature reading
+  if (tempAvg.averagedTemperature <= 0) return;
+  
+  PIDProfile* targetProfile = findProfileForTemperature(tempAvg.averagedTemperature);
+  if (targetProfile && targetProfile->name != pid.activeProfile) {
+    Serial.printf("[checkAndSwitchPIDProfile] Temperature %.1f°C - switching from '%s' to '%s'\n",
+                  tempAvg.averagedTemperature, pid.activeProfile.c_str(), targetProfile->name.c_str());
+    switchToProfile(targetProfile->name);
+    
+    // Save the change to persist across reboots
+    saveSettings();
+  }
 }
