@@ -4,6 +4,13 @@
 // Maximum number of program stages supported (now in globals.cpp)
 #include "globals.h"
 
+// PROGMEM constants for debug messages - saves RAM by storing in flash
+const char DEBUG_PID_DYNAMIC[] PROGMEM = "[PID-DYNAMIC] Restart #%u: %s (elapsed: %lums)\n";
+const char DEBUG_PID_RELAY[] PROGMEM = "[PID-RELAY] Setpoint: %.1f°C, Input: %.1f°C, Output: %.2f, OnTime: %lums/%lums (%.1f%%) %s\n";
+const char DEBUG_TEMP_AVG[] PROGMEM = "[TEMP_AVG] Raw: %.2f°C, Filtered: %.2f°C, Trend: %.2f°C (from %d samples, mode: %s)\n";
+const char DEBUG_FERMENT[] PROGMEM = "[FERMENT] Stage advanced, predictedCompleteTime set to %lu (now=%lu, remainWeightedSec=%.2f, factor=%.3f) [MULTIPLY]\n";
+const char DEBUG_ADVANCE[] PROGMEM = "[ADVANCE] Stage advanced to %d\n";
+
 // --- Temperature safety flags ---
 bool thermalRunawayDetected = false;
 bool sensorFaultDetected = false;
@@ -100,6 +107,10 @@ void checkAndSwitchPIDProfile();
 void updateTemperatureSampling();
 float getAveragedTemperature();
 void streamStatusJson(Print& out);
+
+// Memory monitoring functions
+void updateMemoryMonitoring();
+void logMemoryStatus(const char* context = "");
 
 // --- Forward declaration for stopBreadmaker (must be before any use) ---
 void stopBreadmaker();
@@ -372,7 +383,7 @@ void loadResumeState() {
   if (!f) return;
   
   // Use a smaller buffer since resume files are typically <400 bytes
-  DynamicJsonDocument doc(768); // Reduced from 1024 to 768 bytes
+  DynamicJsonDocument doc(512); // Reduced from 768 to 512 bytes
   DeserializationError err = deserializeJson(doc, f);
   f.close();
   
@@ -619,7 +630,7 @@ void checkDelayedResume() {
     delayedResumeChecked = true;
     File f = LittleFS.open(RESUME_FILE, "r");
     if (f) {
-      DynamicJsonDocument doc(256);
+      DynamicJsonDocument doc(192); // Reduced from 256 to 192 bytes
       DeserializationError err = deserializeJson(doc, f);
       f.close();
       if (!err && (doc["isRunning"] | false)) {
@@ -916,7 +927,7 @@ void handleCustomStages(bool &stageJustAdvanced) {
         time_t now = time(nullptr);
         time_t predicted = now + (time_t)(remainWeightedSec * factor); // Multiply: higher temp = less time
         fermentState.predictedCompleteTime = predicted;
-        if (debugSerial) Serial.printf("[FERMENT] Stage advanced, predictedCompleteTime set to %lu (now=%lu, remainWeightedSec=%.2f, factor=%.3f) [MULTIPLY]\n", (unsigned long)predicted, (unsigned long)now, remainWeightedSec, factor);
+        if (debugSerial) Serial.printf(DEBUG_FERMENT, (unsigned long)predicted, (unsigned long)now, remainWeightedSec, factor);
       }
       programState.customStageIdx++;
       programState.customStageStart = millis();
@@ -924,7 +935,7 @@ void handleCustomStages(bool &stageJustAdvanced) {
       programState.customMixStepStart = 0;
       saveResumeState();
       stageJustAdvanced = true;
-      if (debugSerial) Serial.printf("[ADVANCE] Stage advanced to %d\n", programState.customStageIdx);
+      if (debugSerial) Serial.printf(DEBUG_ADVANCE, programState.customStageIdx);
       getAveragedTemperature();
       yield();
       delay(1);
@@ -1019,8 +1030,7 @@ void updateTemperatureSampling() {
       tempAvg.averagedTemperature = weightedSum / totalWeight;
       // Debug output occasionally
       if (debugSerial && (nowMs % 30000 < tempAvg.tempSampleInterval)) {
-        Serial.printf("[TEMP_AVG] Raw: %.2f°C, Filtered: %.2f°C, Trend: %.2f°C (from %d samples, mode: %s)\n",
-                     rawTemp, tempAvg.averagedTemperature, trendStrength, cleanCount,
+        Serial.printf(DEBUG_TEMP_AVG, rawTemp, tempAvg.averagedTemperature, trendStrength, cleanCount,
                      (absTrendStrength > 0.2) ? "TREND" : "STABLE");
       }
     } else {
@@ -1060,8 +1070,8 @@ void updateTimeProportionalHeater() {
       if (elapsed >= onTime && pid.Output > 0.7) { // Need >70% output but heater is OFF
         shouldRestartWindow = true;
         if (debugSerial) {
-          Serial.printf("[PID-DYNAMIC] Restarting window: Output jumped from %.2f to %.2f (need more heat)\n", 
-                       lastPIDOutput, pid.Output);
+          Serial.printf(DEBUG_PID_DYNAMIC, dynamicRestart.dynamicRestartCount, 
+                       "Need more heat (output increased to %.1f%%)", pid.Output * 100);
         }
       }
     }
@@ -1072,8 +1082,8 @@ void updateTimeProportionalHeater() {
       if (elapsed < onTime && pid.Output < 0.3) { // Need <30% output but heater is ON
         shouldRestartWindow = true;
         if (debugSerial) {
-          Serial.printf("[PID-DYNAMIC] Restarting window: Output dropped from %.2f to %.2f (reduce heat)\n", 
-                       lastPIDOutput, pid.Output);
+          Serial.printf(DEBUG_PID_DYNAMIC, dynamicRestart.dynamicRestartCount, 
+                       "Reduce heat (output decreased to %.1f%%)", pid.Output * 100);
         }
       }
     }
@@ -1086,16 +1096,17 @@ void updateTimeProportionalHeater() {
       dynamicRestart.lastDynamicRestart = nowMs;
       dynamicRestart.dynamicRestartCount++;
       // Determine restart reason
+      char reasonBuffer[120]; // Static buffer to avoid String allocation
       if (pid.Output > lastPIDOutput && pid.Output > 0.7) {
-        dynamicRestart.lastDynamicRestartReason = "Need more heat (output increased to " + String((pid.Output*100), 1) + "%)";
+        snprintf(reasonBuffer, sizeof(reasonBuffer), "Need more heat (output increased to %.1f%%)", pid.Output * 100);
       } else if (pid.Output < lastPIDOutput && pid.Output < 0.3) {
-        dynamicRestart.lastDynamicRestartReason = "Reduce heat (output decreased to " + String((pid.Output*100), 1) + "%)";
+        snprintf(reasonBuffer, sizeof(reasonBuffer), "Reduce heat (output decreased to %.1f%%)", pid.Output * 100);
       } else {
-        dynamicRestart.lastDynamicRestartReason = "Output change (from " + String((lastPIDOutput*100), 1) + "% to " + String((pid.Output*100), 1) + "%)";
+        snprintf(reasonBuffer, sizeof(reasonBuffer), "Output change (from %.1f%% to %.1f%%)", lastPIDOutput * 100, pid.Output * 100);
       }
+      dynamicRestart.lastDynamicRestartReason = reasonBuffer;
       if (debugSerial) {
-        Serial.printf("[PID-DYNAMIC] Restart #%u: %s (elapsed: %lums)\n", 
-                     dynamicRestart.dynamicRestartCount, dynamicRestart.lastDynamicRestartReason.c_str(), elapsed);
+        Serial.printf(DEBUG_PID_DYNAMIC, dynamicRestart.dynamicRestartCount, dynamicRestart.lastDynamicRestartReason.c_str(), elapsed);
       }
     }
     
@@ -1130,7 +1141,7 @@ void updateTimeProportionalHeater() {
     }
     
     if (debugSerial && millis() % 15000 < 50) {  // Debug every 15 seconds
-      Serial.printf("[PID-RELAY] Setpoint: %.1f°C, Input: %.1f°C, Output: %.2f, OnTime: %lums/%lums (%.1f%%) %s\n", 
+      Serial.printf(DEBUG_PID_RELAY, 
                    pid.Setpoint, pid.Input, pid.Output, onTime, windowSize, (onTime * 100.0 / windowSize),
                    shouldRestartWindow ? "[DYNAMIC]" : "[NORMAL]");
     }
@@ -1216,7 +1227,7 @@ void loadSettings() {
     debugSerial = true;
     return;
   }
-  DynamicJsonDocument doc(512);
+  DynamicJsonDocument doc(384); // Reduced from 512 to 384 bytes
   DeserializationError err = deserializeJson(doc, f);
   if (err) {
     Serial.print("[loadSettings] Failed to parse settings.json: ");
@@ -1370,7 +1381,7 @@ void loadPIDProfiles() {
     return;
   }
   
-  DynamicJsonDocument doc(2048);
+  DynamicJsonDocument doc(1024); // Reduced from 2048 to 1024 bytes
   DeserializationError err = deserializeJson(doc, f);
   f.close();
   
@@ -1493,10 +1504,6 @@ void createDefaultPIDProfiles() {
   // High Baking - Higher derivative
   pid.profiles.push_back({
     "High Baking", 150, 200, 0.08, 0.00003, 10.0, 15000,
-    "Higher derivative to prevent overshoot"
-  });
-  
-  // Extreme Heat - Maximum control
   pid.profiles.push_back({
     "Extreme Heat", 200, 250, 0.015, 0.00015, 10.0, 10000,
     "Your exact tuned settings - maximum derivative control"

@@ -153,9 +153,8 @@ void stateMachineEndpoints(AsyncWebServer& server)
       if (debugSerial) Serial.printf_P(PSTR("[START] Startup delay: %lu ms remaining\n"), remaining);
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       response->print("{");
-      response->print("\"error\":\"Startup delay active\",");
-      response->print("\"message\":\"Please wait for temperature sensor to stabilize\",");
-      response->printf("\"remainingMs\":%lu", remaining);
+      response->print(FPSTR(JSON_ERROR_STARTUP_DELAY));
+      response->printf(",\"remainingMs\":%lu", remaining);
       response->print("}");
       req->send(response); // Correct usage for AsyncResponseStream*
       return;
@@ -166,8 +165,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
 
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       response->print("{");
-      response->print("\"error\":\"No program selected\",");
-      response->print("\"message\":\"Please select a program before starting.\"");
+      response->print(FPSTR(JSON_ERROR_NO_PROGRAM));
       response->print("}");
       req->send(response);
       return;
@@ -447,9 +445,8 @@ server.on("/start_at_stage", HTTP_GET, [](AsyncWebServerRequest* req){
       if (debugSerial) Serial.printf("[START_AT_STAGE] Startup delay: %lu ms remaining\n", remaining);
       AsyncResponseStream *response = req->beginResponseStream("application/json");
       response->print("{");
-      response->print("\"error\":\"Startup delay active\",");
-      response->print("\"message\":\"Please wait for temperature sensor to stabilize\",");
-      response->printf("\"remainingMs\":%lu", remaining);
+      response->print(JSON_ERROR_STARTUP_DELAY);
+      response->printf(",\"remainingMs\":%lu", remaining);
       response->print("}");
       req->send(response);
       return;
@@ -471,8 +468,9 @@ server.on("/start_at_stage", HTTP_GET, [](AsyncWebServerRequest* req){
 
     // Validate stage index against actual number of stages
     if (stageIdx < 0 || (size_t)stageIdx >= numStages) {
-      String msg = "Stage index must be between 0 and " + String(numStages - 1);
-      sendJsonError(req, "Invalid stage index", msg, 400);
+      char msgBuffer[80]; // Static buffer to avoid String allocation
+      snprintf(msgBuffer, sizeof(msgBuffer), "Stage index must be between 0 and %zu", numStages - 1);
+      sendJsonError(req, "Invalid stage index", msgBuffer, 400);
       return;
     }
 
@@ -1414,7 +1412,8 @@ void fileEndPoints(AsyncWebServer& server) {
       String dir = uploadPath.substring(0, uploadPath.lastIndexOf('/'));
       if (dir.length() > 1) {
         // Create directory structure by creating a dummy file and removing it
-        String dummyFile = dir + "/.dummy";
+        char dummyFile[128];
+        snprintf(dummyFile, sizeof(dummyFile), "%s/.dummy", dir.c_str());
         File tempFile = LittleFS.open(dummyFile, "w");
         if (tempFile) {
           tempFile.close();
@@ -1489,8 +1488,10 @@ void fileEndPoints(AsyncWebServer& server) {
     String filename = doc["filename"];
     String folder = doc["folder"] | "/";
     
+    // Use char array for path building to reduce heap allocation
+    char fullPath[128];
     if (!folder.endsWith("/")) folder += "/";
-    String fullPath = folder + filename;
+    snprintf(fullPath, sizeof(fullPath), "%s%s", folder.c_str(), filename.c_str());
     
     if (LittleFS.remove(fullPath)) {
       req->send(200, "application/json", "{\"status\":\"deleted\"}");
@@ -1507,12 +1508,15 @@ void fileEndPoints(AsyncWebServer& server) {
     String parent = doc["parent"] | "/";
     String name = doc["name"];
     
+    // Use char arrays for path building to reduce heap allocation
+    char fullPath[128];
+    char dummyFile[140];
     if (!parent.endsWith("/")) parent += "/";
-    String fullPath = parent + name;
+    snprintf(fullPath, sizeof(fullPath), "%s%s", parent.c_str(), name.c_str());
     
     // Create a dummy file to ensure the directory exists, then remove it
     // This is a workaround for ESP8266 LittleFS which doesn't have true directory support
-    String dummyFile = fullPath + "/.dummy";
+    snprintf(dummyFile, sizeof(dummyFile), "%s/.dummy", fullPath);
     File f = LittleFS.open(dummyFile, "w");
     if (f) {
       f.close();
