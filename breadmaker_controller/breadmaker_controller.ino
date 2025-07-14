@@ -1413,33 +1413,45 @@ void loadPIDProfiles() {
 void savePIDProfiles() {
   Serial.println("[savePIDProfiles] Saving PID profiles...");
   
-  DynamicJsonDocument doc(2048);
-  JsonArray profileArray = doc.createNestedArray("pidProfiles");
-  
-  for (const PIDProfile& profile : pid.profiles) {
-    JsonObject p = profileArray.createNestedObject();
-    p["name"] = profile.name;
-    p["minTemp"] = profile.minTemp;
-    p["maxTemp"] = profile.maxTemp;
-    p["kp"] = profile.kp;
-    p["ki"] = profile.ki;
-    p["kd"] = profile.kd;
-    p["windowMs"] = profile.windowMs;
-    p["description"] = profile.description;
-  }
-  
-  doc["activeProfile"] = pid.activeProfile;
-  doc["autoSwitching"] = pid.autoSwitching;
-  
   File f = LittleFS.open("/pid-profiles.json", "w");
   if (!f) {
     Serial.println("[savePIDProfiles] Failed to open pid-profiles.json for writing!");
     return;
   }
   
-  serializeJson(doc, f);
+  // Stream JSON directly to file - much more memory efficient than 2048-byte buffer
+  f.print("{\n");
+  f.print("  \"pidProfiles\":[\n");
+  
+  for (size_t i = 0; i < pid.profiles.size(); ++i) {
+    const PIDProfile& profile = pid.profiles[i];
+    if (i > 0) f.print(",\n");
+    
+    f.print("    {\n");
+    f.print("      \"name\":\"");
+    f.print(profile.name);
+    f.print("\",\n");
+    f.printf("      \"minTemp\":%.1f,\n", profile.minTemp);
+    f.printf("      \"maxTemp\":%.1f,\n", profile.maxTemp);
+    f.printf("      \"kp\":%.6f,\n", profile.kp);
+    f.printf("      \"ki\":%.6f,\n", profile.ki);
+    f.printf("      \"kd\":%.6f,\n", profile.kd);
+    f.printf("      \"windowMs\":%lu,\n", profile.windowMs);
+    f.print("      \"description\":\"");
+    f.print(profile.description);
+    f.print("\"\n");
+    f.print("    }");
+  }
+  
+  f.print("\n  ],\n");
+  f.print("  \"activeProfile\":\"");
+  f.print(pid.activeProfile);
+  f.print("\",\n");
+  f.printf("  \"autoSwitching\":%s\n", pid.autoSwitching ? "true" : "false");
+  f.print("}\n");
+  
   f.close();
-  Serial.println("[savePIDProfiles] PID profiles saved successfully.");
+  Serial.println("[savePIDProfiles] PID profiles saved with direct streaming (low memory usage).");
 }
 
 // Create default PID profiles
