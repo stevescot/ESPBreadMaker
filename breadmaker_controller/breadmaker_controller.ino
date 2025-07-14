@@ -117,16 +117,24 @@ bool isStartupDelayComplete();
 // --- Delete Folder API endpoint ---
 // Recursively deletes a folder and all its contents from the LittleFS filesystem.
 void deleteFolderRecursive(const String& path) {
+  if (!LittleFS.exists(path)) {
+    if (debugSerial) Serial.printf("[deleteFolderRecursive] WARNING: Path '%s' does not exist.\n", path.c_str());
+    return;
+  }
   Dir dir = LittleFS.openDir(path);
   while (dir.next()) {
     String filePath = path + "/" + dir.fileName();
     if (dir.isDirectory()) {
       deleteFolderRecursive(filePath);
     } else {
-      LittleFS.remove(filePath);
+      if (!LittleFS.remove(filePath) && debugSerial) {
+        Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove file '%s'\n", filePath.c_str());
+      }
     }
   }
-  LittleFS.rmdir(path);
+  if (!LittleFS.rmdir(path) && debugSerial) {
+    Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove directory '%s'\n", path.c_str());
+  }
 }
 
 // Helper function to send a JSON error response
@@ -304,8 +312,13 @@ void setup() {
   Serial.println(F("PID controller initialized with relay-friendly time-proportional control"));
   Serial.println(F("Temperature averaging system initialized (10 samples, 0.5s interval, reject top/bottom 2)"));
   
-  // Wait for time sync
-  while (time(nullptr) < 100000) delay(200);
+  // Wait for time sync with timeout to avoid hanging forever
+  unsigned long ntpStart = millis();
+  const unsigned long ntpTimeout = 15000; // 15 seconds max wait
+  while (time(nullptr) < 100000 && (millis() - ntpStart < ntpTimeout)) delay(200);
+  if (time(nullptr) < 100000 && debugSerial) {
+    Serial.println("[setup] WARNING: NTP time sync timed out after 15 seconds.");
+  }
 }
 
 const char* RESUME_FILE = "/resume.json";
@@ -314,7 +327,16 @@ unsigned long lastResumeSave = 0;
 // Saves the current breadmaker state (program, stage, timing, etc.) to LittleFS for resume after reboot.
 void saveResumeState() {
   File f = LittleFS.open(RESUME_FILE, "w");
-  if (!f) return;
+  if (!f) {
+    if (debugSerial) Serial.println("[saveResumeState] ERROR: Failed to open resume file for writing!");
+    return;
+  }
+  serializeResumeStateJson(f);
+  f.close();
+}
+
+// Helper to serialize resume state as JSON
+void serializeResumeStateJson(Print& f) {
   f.print("{\n");
   f.printf("  \"programIdx\":%u,\n", (unsigned)programState.activeProgramId);
   f.printf("  \"customStageIdx\":%u,\n", (unsigned)programState.customStageIdx);
@@ -323,13 +345,12 @@ void saveResumeState() {
   f.printf("  \"elapsedMixSec\":%lu,\n", (programState.customMixStepStart > 0) ? (millis() - programState.customMixStepStart) / 1000UL : 0UL);
   f.printf("  \"programStartTime\":%lu,\n", (unsigned long)programState.programStartTime);
   f.printf("  \"isRunning\":%s,\n", programState.isRunning ? "true" : "false");
-   f.print("  \"actualStageStartTimes\":[");
+  f.print("  \"actualStageStartTimes\":[");
   for (int i = 0; i < 20; i++) {
     f.printf("%s%lu", (i > 0) ? "," : "", (unsigned long)programState.actualStageStartTimes[i]);
   }
   f.print("]\n");
   f.print("}\n");
-  f.close();
 }
 
 // Removes the saved resume state file from LittleFS.
