@@ -61,17 +61,16 @@ function renderPrograms(progs) {
 
   // Only render the selected program
   if (progs.length > 0 && progs[selectedProgramIdx]) {
+    let html = '';
     const p = progs[selectedProgramIdx];
     const idx = selectedProgramIdx;
     const card = document.createElement('div');
     card.className = 'prog-card';
-    let html = `<h2>${p.name || 'Program ' + (idx+1)} <button data-delete="${idx}">Delete</button></h2>`;
-    // Only show custom stages UI, remove all classic stage fields
+    html += `<h2>${p.name || 'Program ' + (idx+1)} <button data-delete="${idx}">Delete</button></h2>`;
     html += `<label>Name: <input type="text" data-idx="${idx}" data-field="name" value="${p.name||''}"></label><br>`;
     html += `<label>Notes/Recipe:<br><textarea data-idx="${idx}" data-field="notes" rows="7" style="width:99%;min-height:7em;resize:vertical;">${p.notes||''}</textarea></label>`;
     html += `<label>Fermentation Baseline Temp (&deg;C): <input type="number" data-idx="${idx}" data-field="fermentBaselineTemp" value="${p.fermentBaselineTemp||20}" style="width:4em;"></label>\n`;
     html += `<label>Fermentation Q10 Factor: <input type="number" step="0.01" data-idx="${idx}" data-field="fermentQ10" value="${p.fermentQ10||2.0}" style="width:4em;"></label>\n`;
-    // Custom stages UI
     if (Array.isArray(p.customStages)) {
       const palette = [
         '#b0b0b0', '#ff9933', '#4caf50', '#2196f3', '#ffd600', '#bb8640', '#e57373', '#90caf9', '#ce93d8', '#80cbc4'
@@ -91,7 +90,6 @@ function renderPrograms(progs) {
           `Temp (&deg;C): <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-cfield='temp' value='${st.temp||0}' style='width:4em;' min='0' max='250'> ` +
           `<span style='font-size:0.9em;color:#666;'>${(st.temp||0) === 0 ? '(No heating)' : '(Heating active)'}</span><br>` +
           `Instructions:<br><textarea data-idx='${idx}' data-cidx='${cidx}' data-cfield='instructions' rows='2' style='width:99%;'>${st.instructions||''}</textarea><br>`;
-        // --- Mix section ---
         html += `<b>Mixing:</b> `;
         html += `<label><input type='checkbox' data-idx='${idx}' data-cidx='${cidx}' data-cfield='noMix'${st.noMix?' checked':''}> No Mixing in this stage</label>`;
         if (!st.noMix) {
@@ -113,6 +111,7 @@ function renderPrograms(progs) {
     } else {
       html += `<div><button type='button' data-addcustom='${idx}'>+ Add Custom Stage</button></div>`;
     }
+    html += `<input type="hidden" data-idx="${idx}" data-field="id" value="${typeof p.id === 'number' ? p.id : ''}" readonly>`;
     card.innerHTML = html;
     container.appendChild(card);
     // delete
@@ -179,36 +178,28 @@ function renderPrograms(progs) {
           inp.value = val.slice(0,200);
           val = inp.value;
         }
-        
-        // Handle duration conversion from hours/minutes to total minutes
         if(fld === 'durationHours' || fld === 'durationMinutes') {
           const currentStage = progs[i].customStages[c];
           let hours = 0, minutes = 0;
-          
           if(fld === 'durationHours') {
             hours = Math.max(0, Math.min(23, val || 0));
-            inp.value = hours; // Enforce limits
+            inp.value = hours;
             minutes = currentStage.min % 60;
           } else {
             minutes = Math.max(0, Math.min(59, val || 0));
-            inp.value = minutes; // Enforce limits
+            inp.value = minutes;
             hours = Math.floor(currentStage.min / 60);
           }
-          
           progs[i].customStages[c].min = hours * 60 + minutes;
-          renderPrograms(progs); // Re-render to update the total display
+          renderPrograms(progs);
           return;
         }
-        
         progs[i].customStages[c][fld] = val;
-        
-        // If temperature changed, re-render to update the heating indicator
         if(fld === 'temp') {
           renderPrograms(progs);
         }
       };
     });
-    // --- Mix/noMix toggle logic ---
     card.querySelectorAll('input[data-cfield="noMix"]').forEach(inp => {
       inp.onchange = () => {
         const i = parseInt(inp.getAttribute('data-idx'));
@@ -218,7 +209,6 @@ function renderPrograms(progs) {
         renderPrograms(progs);
       };
     });
-    // --- Fermentation toggle logic ---
     card.querySelectorAll('input[data-cfield="isFermentation"]').forEach(inp => {
       inp.onchange = () => {
         const i = parseInt(inp.getAttribute('data-idx'));
@@ -226,7 +216,6 @@ function renderPrograms(progs) {
         progs[i].customStages[c].isFermentation = inp.checked;
       };
     });
-    // --- Mix pattern editing logic ---
     card.querySelectorAll('[data-addmix]').forEach(btn => {
       const [pidx, cidx] = btn.getAttribute('data-addmix').split(',').map(Number);
       btn.onclick = () => {
@@ -253,7 +242,6 @@ function renderPrograms(progs) {
         progs[i].customStages[c].mixPattern[m][fld] = val;
       };
     });
-    // Move up/down logic
     card.querySelectorAll('[data-movecustom]').forEach(btn => {
       const [pidx, cidx, dir] = btn.getAttribute('data-movecustom').split(',');
       btn.onclick = () => {
@@ -290,8 +278,8 @@ function renderPrograms(progs) {
       }
     };
   }
-    // Render id as a hidden, non-editable field
-    html += `<input type="hidden" data-idx="${idx}" data-field="id" value="${typeof p.id === 'number' ? p.id : ''}" readonly>`;
+
+  // (Removed duplicate id field rendering; already handled in main block)
   // Save all
   if(document.getElementById('saveAll'))
     document.getElementById('saveAll').onclick = async () => {
