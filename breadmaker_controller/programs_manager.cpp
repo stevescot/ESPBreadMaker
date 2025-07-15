@@ -5,7 +5,6 @@
 // --- Programs storage ---
 std::vector<ProgramMetadata> programMetadata;
 Program activeProgram;
-int activeProgramId = -1;
 
 // --- Legacy compatibility ---
 std::vector<Program> programs;
@@ -71,7 +70,7 @@ void loadProgramMetadata() {
 // Load full program data for a specific program ID
 bool loadSpecificProgram(int programId) {
   // Check if already loaded
-  if (activeProgramId == programId && activeProgram.id == programId) {
+  if (programState.activeProgramId == programId && activeProgram.id == programId) {
     Serial.printf("[INFO] Program %d already loaded\n", programId);
     return true;
   }
@@ -132,7 +131,8 @@ bool loadSpecificProgram(int programId) {
         activeProgram.customStages.push_back(cs);
       }
       
-      activeProgramId = programId;
+      // Update the active program (this is the critical part that was missing)
+      programState.activeProgramId = programId;
       Serial.printf("[INFO] Loaded program '%s' with %zu stages\n", 
                     activeProgram.name.c_str(), activeProgram.customStages.size());
       
@@ -176,7 +176,7 @@ void updateLegacyProgramsVector() {
         programs[meta.id].fermentQ10 = meta.fermentQ10;
         
         // Only fill stages if this is the active program
-        if (meta.id == activeProgramId && activeProgram.id == meta.id) {
+        if (meta.id == programState.activeProgramId && activeProgram.id == meta.id) {
           programs[meta.id].customStages = activeProgram.customStages;
         } else {
           programs[meta.id].customStages.clear(); // Empty stages for non-active programs
@@ -195,12 +195,22 @@ void loadPrograms() {
 // Helper functions
 
 bool isProgramLoaded(int programId) {
-  return (activeProgramId == programId && activeProgram.id == programId);
+  // Check if it's the active program
+  if (programState.activeProgramId == programId && activeProgram.id == programId) {
+    return true;
+  }
+  
+  // Check if it's loaded in the programs vector
+  if (programId < programs.size() && programs[programId].id == programId && !programs[programId].customStages.empty()) {
+    return true;
+  }
+  
+  return false;
 }
 
 void unloadActiveProgram() {
   activeProgram = Program();
-  activeProgramId = -1;
+  programState.activeProgramId = -1;
   Serial.println("[INFO] Active program unloaded to free memory");
   updateLegacyProgramsVector();
 }
@@ -232,9 +242,9 @@ void savePrograms() {
   }
   
   // Update the active program in the JSON if it's loaded
-  if (activeProgramId >= 0 && activeProgram.id == activeProgramId) {
+  if (programState.activeProgramId >= 0 && activeProgram.id == programState.activeProgramId) {
     for (JsonObject pobj : doc.as<JsonArray>()) {
-      if (pobj["id"] == activeProgramId) {
+      if (pobj["id"] == programState.activeProgramId) {
         // Update the active program's data
         pobj["name"] = activeProgram.name;
         pobj["notes"] = activeProgram.notes;
@@ -286,7 +296,7 @@ const std::vector<ProgramMetadata>& getProgramMetadata() {
 
 // API function to get active program
 const Program* getActiveProgram() {
-  if (activeProgramId >= 0 && activeProgram.id == activeProgramId) {
+  if (programState.activeProgramId >= 0 && activeProgram.id == programState.activeProgramId) {
     return &activeProgram;
   }
   return nullptr;

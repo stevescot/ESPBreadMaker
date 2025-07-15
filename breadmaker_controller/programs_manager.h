@@ -51,7 +51,6 @@ struct Program {
 // --- Programs storage ---
 extern std::vector<ProgramMetadata> programMetadata; // Lightweight metadata for all programs
 extern Program activeProgram; // Only the currently active program is fully loaded
-extern int activeProgramId; // ID of the currently loaded program (-1 if none)
 
 // --- Legacy compatibility ---
 extern std::vector<Program> programs; // Maintained for backward compatibility

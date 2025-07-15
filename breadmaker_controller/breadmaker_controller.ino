@@ -389,6 +389,8 @@ void loadResumeState() {
   if (progIdx >= 0 && progIdx < (int)programs.size() && 
       programs[progIdx].id == progIdx && programs[progIdx].id != -1) {
     programState.activeProgramId = progIdx;
+    // Ensure the program is loaded into memory
+    ensureProgramLoaded(progIdx);
     updateActiveProgramVars();
   } else {
     // Fallback: select first valid program (id!=-1) or 0 if none
@@ -399,6 +401,8 @@ void loadResumeState() {
         break; 
       }
     }
+    // Ensure the fallback program is loaded into memory
+    ensureProgramLoaded(programState.activeProgramId);
     updateActiveProgramVars();
   }
   

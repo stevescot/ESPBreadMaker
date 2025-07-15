@@ -1056,6 +1056,15 @@ void streamStatusJson(Print& out) {
   // stage, stageStartTimes, programStart, elapsed, stageReadyAt, programReadyAt
   if (programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
     Program &p = programs[programState.activeProgramId];
+    
+    // Ensure the program stages are loaded for preview calculations
+    if (p.customStages.empty()) {
+      Serial.println("DEBUG: Program stages empty, loading program " + String(programState.activeProgramId));
+      ensureProgramLoaded(programState.activeProgramId);
+    } else {
+      Serial.println("DEBUG: Program " + String(programState.activeProgramId) + " has " + String(p.customStages.size()) + " stages");
+    }
+    
     // Determine preview or running mode
     bool previewMode = !programState.isRunning;
     // Stage label

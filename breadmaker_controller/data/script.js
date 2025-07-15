@@ -944,9 +944,10 @@ function showPlanSummary(s) {
           adjustedDuration = (st.min * 60) * s.fermentationFactor;
         }
         
-        // Show adjusted duration with indication if different from planned
-        if (Math.abs(adjustedDuration - (st.min * 60)) > 30) { // More than 30 seconds difference
-          durationCell = `<span title="Fermentation-adjusted duration">${formatDuration(adjustedDuration)}</span>`;
+        // Always show adjusted duration if it's different from planned, or if it's a fermentation stage
+        if (st.isFermentation || Math.abs(adjustedDuration - (st.min * 60)) > 30) { // More than 30 seconds difference
+          let adjustedMin = adjustedDuration / 60;
+          durationCell = `<span title="Fermentation-adjusted duration">${formatDuration(adjustedDuration)}<br><small>(${adjustedMin.toFixed(1)} min)</small></span>`;
         } else {
           durationCell = `${formatDuration(st.min * 60)}`;
         }
