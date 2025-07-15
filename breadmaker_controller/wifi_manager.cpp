@@ -52,6 +52,7 @@ void startCaptivePortal() {
   server.on("/", HTTP_GET, sendPortal);
   server.onNotFound(sendPortal);
 
+  // Captive portal detection endpoints (only needed in AP mode)
   const char* captiveEndpoints[] = {
     "/generate_204", "/fwlink", "/hotspot-detect.html", "/ncsi.txt", "/connecttest.txt", "/wpad.dat"
   };
@@ -72,4 +73,12 @@ void startCaptivePortal() {
     ESP.restart();
   });
   server.begin();
+}
+
+void cleanupCaptivePortalEndpoints() {
+  // Note: ESP8266 AsyncWebServer doesn't have a direct way to remove endpoints
+  // The endpoints will remain registered but inactive after WiFi connection
+  // This is a limitation of the current library
+  // TODO: Consider switching to a different web server library that supports endpoint removal
+  Serial.println("[WiFi] Captive portal endpoints remain registered but inactive");
 }

@@ -295,6 +295,28 @@ function updateStageProgress(currentStage, statusData) {
           div.appendChild(span);
         }
       }
+    } else if (!isIdle && i > activeIdx) {
+      // Show planned duration for future stages (fermentation-adjusted if available)
+      const stage = customStages[i];
+      let plannedDuration = stage.min * 60; // Default to raw duration
+      
+      // Try to calculate adjusted duration from predictedStageEndTimes
+      if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.predictedStageEndTimes[i-1]) {
+        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.predictedStageEndTimes[i-1];
+      } else if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.programStart && i === 0) {
+        // For first stage, use programStart as reference
+        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.programStart;
+      } else if (stage.isFermentation && typeof statusData.fermentationFactor === 'number' && statusData.fermentationFactor > 0) {
+        // Apply fermentation factor for fermentation stages
+        plannedDuration = (stage.min * 60) * statusData.fermentationFactor;
+      }
+      
+      if (plannedDuration > 0) {
+        const span = document.createElement('span');
+        span.className = 'stage-planned';
+        span.textContent = ' (' + formatDuration(plannedDuration) + ')';
+        div.appendChild(span);
+      }
     }
     cont.appendChild(div);
   }
@@ -590,26 +612,44 @@ function updateProgramReadyAt(s) {
     return;
   }
   let totalMin = prog.customStages.reduce((sum, st) => sum + (st.min || 0), 0);
+  
   // If running or scheduled, show actual finish time
   if (s.running || (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000))) {
     // Use firmware's calculated programReadyAt if available
     if (typeof s.programReadyAt === 'number' && s.programReadyAt > 0) {
       finishTs = s.programReadyAt * 1000;
     } else if (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000)) {
-      finishTs = (s.scheduledStart * 1000) + (totalMin * 60000);
-    } else if (s.stage && s.stage !== "Idle" && typeof s.stageIdx === "number" && typeof s.timeLeft === "number" && s.timeLeft > 0) {
-      let remainMin = 0;
-      for (let i = s.stageIdx + 1; i < prog.customStages.length; ++i) {
-        remainMin += prog.customStages[i].min || 0;
+      // For scheduled start, use predictedProgramEnd if available (accounts for fermentation)
+      if (typeof s.predictedProgramEnd === 'number' && s.predictedProgramEnd > 0) {
+        finishTs = s.predictedProgramEnd * 1000;
+      } else {
+        finishTs = (s.scheduledStart * 1000) + (totalMin * 60000);
       }
-      finishTs = Date.now() + (s.timeLeft * 1000) + (remainMin * 60000);
+    } else if (s.stage && s.stage !== "Idle" && typeof s.stageIdx === "number" && typeof s.timeLeft === "number" && s.timeLeft > 0) {
+      // Calculate remaining time using fermentation-adjusted predictions if available
+      if (typeof s.programReadyAt === 'number' && s.programReadyAt > 0) {
+        finishTs = s.programReadyAt * 1000;
+      } else {
+        // Fallback to raw calculation
+        let remainMin = 0;
+        for (let i = s.stageIdx + 1; i < prog.customStages.length; ++i) {
+          remainMin += prog.customStages[i].min || 0;
+        }
+        finishTs = Date.now() + (s.timeLeft * 1000) + (remainMin * 60000);
+      }
     } else {
       finishTs = Date.now() + (totalMin * 60000);
     }
     label = 'Program ready at:';
   } else {
-    // Not running, show 'if started now'
-    finishTs = Date.now() + (totalMin * 60000);
+    // Not running, show 'if started now' - use predictedProgramEnd if available
+    if (typeof s.predictedProgramEnd === 'number' && s.predictedProgramEnd > 0) {
+      // Use firmware's fermentation-adjusted prediction
+      finishTs = s.predictedProgramEnd * 1000;
+    } else {
+      // Fallback to raw calculation
+      finishTs = Date.now() + (totalMin * 60000);
+    }
     showIfStartedNow = true;
     label = 'If started now, ready at:';
   }
@@ -888,8 +928,28 @@ function showPlanSummary(s) {
         // Always show predicted duration if available
         durationCell = `<span title="Predicted by firmware">${formatDuration(predictedDurationMin * 60)}<br><small>(${predictedDurationMin.toFixed(1)} min)</small></span>`;
       } else {
-        // Fallback: show planned duration only (no local fermentation adjustment)
-        durationCell = `${formatDuration(st.min * 60)}`;
+        // Calculate fermentation-adjusted duration if fermentation data is available
+        let adjustedDuration = st.min * 60; // Default to raw duration
+        
+        // Try to calculate adjusted duration from predictedStageEndTimes
+        if (Array.isArray(s.predictedStageEndTimes) && s.predictedStageEndTimes[i] && s.predictedStageEndTimes[i-1]) {
+          adjustedDuration = s.predictedStageEndTimes[i] - s.predictedStageEndTimes[i-1];
+        } else if (Array.isArray(s.predictedStageEndTimes) && s.predictedStageEndTimes[i] && s.programStart) {
+          // For first stage, use programStart as reference
+          if (i === 0) {
+            adjustedDuration = s.predictedStageEndTimes[i] - s.programStart;
+          }
+        } else if (st.isFermentation && typeof s.fermentationFactor === 'number' && s.fermentationFactor > 0) {
+          // Apply fermentation factor for fermentation stages
+          adjustedDuration = (st.min * 60) * s.fermentationFactor;
+        }
+        
+        // Show adjusted duration with indication if different from planned
+        if (Math.abs(adjustedDuration - (st.min * 60)) > 30) { // More than 30 seconds difference
+          durationCell = `<span title="Fermentation-adjusted duration">${formatDuration(adjustedDuration)}</span>`;
+        } else {
+          durationCell = `${formatDuration(st.min * 60)}`;
+        }
       }
       // For completed (done) stages, override background to a grey shade
       let rowStyle = `color:#232323;`;

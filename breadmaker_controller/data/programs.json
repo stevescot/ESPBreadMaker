@@ -64,6 +64,8 @@
   {
     "id": 1,
     "name": "Bread - Sourdough In-Machine",
+    "fermentBaselineTemp": 20,
+    "fermentQ10": 2,
     "customStages": [
       {
         "label": "Initial Mix",
@@ -696,6 +698,7 @@
     ]
   },
   {
+    "id": 16,
     "name": "Utility - Melt Beeswax",
     "customStages": [
       {
@@ -727,6 +730,7 @@
     ]
   },
   {
+    "id": 17,
     "name": "Utility - Hot Towel Warmer",
     "customStages": [
       {
@@ -745,6 +749,7 @@
     ]
   },
   {
+    "id": 18,
     "name": "Utility - DIY Lotions",
     "customStages": [
       {

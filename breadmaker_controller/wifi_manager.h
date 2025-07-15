@@ -7,3 +7,4 @@ extern const char* WIFI_FILE;
 
 bool loadWiFiCreds(String &ssid, String &pass);
 void startCaptivePortal();
+void cleanupCaptivePortalEndpoints();
