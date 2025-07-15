@@ -52,13 +52,9 @@ struct Program {
 extern std::vector<ProgramMetadata> programMetadata; // Lightweight metadata for all programs
 extern Program activeProgram; // Only the currently active program is fully loaded
 
-// --- Legacy compatibility ---
-extern std::vector<Program> programs; // Maintained for backward compatibility
-
 // --- Program management functions ---
 void loadProgramMetadata(); // Load only names and basic info
 bool loadSpecificProgram(int programId); // Load full program data for specific program
-void savePrograms(); // Save all programs (reads from file when needed)
 
 // --- Helper functions ---
 bool isProgramLoaded(int programId); // Check if a program is currently loaded
@@ -69,6 +65,12 @@ size_t getAvailableMemory(); // Check available heap memory
 const std::vector<ProgramMetadata>& getProgramMetadata(); // Get metadata for all programs
 const Program* getActiveProgram(); // Get currently loaded program (null if none)
 bool ensureProgramLoaded(int programId); // Ensure a program is loaded, load if necessary
-void updateLegacyProgramsVector(); // Update legacy programs vector for compatibility
+
+// --- Helper functions for legacy migration ---
+size_t getProgramCount(); // Get program count (replaces programs.size())
+String getProgramName(int programId); // Get program name by ID 
+bool isProgramValid(int programId); // Check if program exists and is valid
+Program* getActiveProgramMutable(); // Get active program reference for modification
+int findProgramIdByName(const String& name); // Find program ID by name
 
 #endif // PROGRAMS_MANAGER_H

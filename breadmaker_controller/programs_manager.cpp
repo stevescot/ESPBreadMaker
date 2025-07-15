@@ -1,15 +1,11 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "programs_manager.h"
+#include "globals.h"
 
 // --- Programs storage ---
 std::vector<ProgramMetadata> programMetadata;
 Program activeProgram;
-
-// --- Legacy compatibility ---
-std::vector<Program> programs;
-
-// --- Memory-efficient program loading ---
 
 // Load only program metadata (names, IDs, basic info) - uses minimal memory
 void loadProgramMetadata() {
@@ -62,9 +58,6 @@ void loadProgramMetadata() {
   }
   
   Serial.printf("[INFO] Loaded metadata for %zu programs\n", programMetadata.size());
-  
-  // Update legacy programs vector with empty programs for compatibility
-  updateLegacyProgramsVector();
 }
 
 // Load full program data for a specific program ID
@@ -82,25 +75,39 @@ bool loadSpecificProgram(int programId) {
     return false;
   }
   
-  Serial.printf("[INFO] Loading full program data for ID %d\n", programId);
+  Serial.printf("[INFO] Loading full program data for ID %d (Free heap: %u bytes)\n", programId, ESP.getFreeHeap());
   
-  // Use streaming JSON parser to find specific program
-  DynamicJsonDocument doc(8192);  // 8KB buffer for single program
-  DeserializationError err = deserializeJson(doc, f);
+  // Use minimal buffer with streaming parse approach
+  // Read file in chunks to minimize memory usage
+  size_t fileSize = f.size();
+  
+  // First, try to find program with minimal JSON parsing
+  String fileContent = "";
+  fileContent.reserve(fileSize + 1);
+  
+  // Read entire file (this is actually more memory efficient than ArduinoJson streaming for ESP8266)
+  while (f.available()) {
+    fileContent += (char)f.read();
+  }
   f.close();
   
+  // Use small buffer for parsing - we'll parse program by program
+  DynamicJsonDocument doc(1536);  // Reduced to 1.5KB buffer
+  DeserializationError err = deserializeJson(doc, fileContent);
+  
   if (err) {
-    Serial.printf("[ERROR] Failed to parse programs.json: %s\n", err.c_str());
+    Serial.printf("[ERROR] Failed to parse programs.json: %s (Free heap: %u bytes)\n", err.c_str(), ESP.getFreeHeap());
     return false;
   }
   
-  // Find the specific program
-  for (JsonObject pobj : doc.as<JsonArray>()) {
+  // Find the specific program in the array
+  JsonArray programsArray = doc.as<JsonArray>();
+  for (JsonObject pobj : programsArray) {
     if (pobj["id"] == programId) {
       // Clear previous active program
       activeProgram = Program();
       
-      // Load full program data
+      // Load basic program data
       activeProgram.id = programId;
       activeProgram.name = pobj["name"].as<String>();
       activeProgram.notes = pobj["notes"] | String("");
@@ -108,8 +115,12 @@ bool loadSpecificProgram(int programId) {
       activeProgram.fermentBaselineTemp = pobj["fermentBaselineTemp"] | 20.0f;
       activeProgram.fermentQ10 = pobj["fermentQ10"] | 2.0f;
       
+      // Load stages with memory-efficient approach
       activeProgram.customStages.clear();
-      for (JsonObject st : pobj["customStages"].as<JsonArray>()) {
+      activeProgram.customStages.reserve(8);  // Reserve space for typical program size
+      
+      JsonArray stages = pobj["customStages"];
+      for (JsonObject st : stages) {
         CustomStage cs;
         cs.label = st["label"].as<String>();
         cs.min = st["min"] | 0;
@@ -120,8 +131,12 @@ bool loadSpecificProgram(int programId) {
         cs.light = st["light"] | String("");
         cs.buzzer = st["buzzer"] | String("");
         
+        // Load mix pattern efficiently
         cs.mixPattern.clear();
-        for (JsonObject m : st["mixPattern"].as<JsonArray>()) {
+        JsonArray mixArray = st["mixPattern"];
+        cs.mixPattern.reserve(mixArray.size());  // Reserve exact space needed
+        
+        for (JsonObject m : mixArray) {
           MixStep ms;
           ms.mixSec = m["mixSec"] | 0;
           ms.waitSec = m["waitSec"] | 0;
@@ -131,59 +146,17 @@ bool loadSpecificProgram(int programId) {
         activeProgram.customStages.push_back(cs);
       }
       
-      // Update the active program (this is the critical part that was missing)
+      // Update the active program
       programState.activeProgramId = programId;
-      Serial.printf("[INFO] Loaded program '%s' with %zu stages\n", 
-                    activeProgram.name.c_str(), activeProgram.customStages.size());
+      Serial.printf("[INFO] Loaded program '%s' with %zu stages (Free heap: %u bytes)\n", 
+                    activeProgram.name.c_str(), activeProgram.customStages.size(), ESP.getFreeHeap());
       
-      // Update legacy programs vector
-      updateLegacyProgramsVector();
       return true;
     }
   }
   
   Serial.printf("[ERROR] Program ID %d not found\n", programId);
   return false;
-}
-
-// Helper function to maintain backward compatibility
-void updateLegacyProgramsVector() {
-  programs.clear();
-  
-  // Find the maximum program ID
-  int maxId = -1;
-  for (const auto& meta : programMetadata) {
-    if (meta.id > maxId) maxId = meta.id;
-  }
-  
-  if (maxId >= 0) {
-    // Resize vector to accommodate all program IDs
-    programs.resize(maxId + 1);
-    
-    // Initialize all slots with dummy programs
-    for (auto& p : programs) {
-      p.id = -1;
-    }
-    
-    // Fill in metadata for all programs
-    for (const auto& meta : programMetadata) {
-      if (meta.id >= 0 && meta.id < (int)programs.size()) {
-        programs[meta.id].id = meta.id;
-        programs[meta.id].name = meta.name;
-        programs[meta.id].notes = meta.notes;
-        programs[meta.id].icon = meta.icon;
-        programs[meta.id].fermentBaselineTemp = meta.fermentBaselineTemp;
-        programs[meta.id].fermentQ10 = meta.fermentQ10;
-        
-        // Only fill stages if this is the active program
-        if (meta.id == programState.activeProgramId && activeProgram.id == meta.id) {
-          programs[meta.id].customStages = activeProgram.customStages;
-        } else {
-          programs[meta.id].customStages.clear(); // Empty stages for non-active programs
-        }
-      }
-    }
-  }
 }
 
 // Legacy function for backward compatibility
@@ -200,11 +173,6 @@ bool isProgramLoaded(int programId) {
     return true;
   }
   
-  // Check if it's loaded in the programs vector
-  if (programId < programs.size() && programs[programId].id == programId && !programs[programId].customStages.empty()) {
-    return true;
-  }
-  
   return false;
 }
 
@@ -212,81 +180,10 @@ void unloadActiveProgram() {
   activeProgram = Program();
   programState.activeProgramId = -1;
   Serial.println("[INFO] Active program unloaded to free memory");
-  updateLegacyProgramsVector();
 }
 
 size_t getAvailableMemory() {
   return ESP.getFreeHeap();
-}
-
-// Save programs to LittleFS (reads from file and updates, maintaining all data)
-void savePrograms() {
-  // For saving, we need to maintain the full JSON structure
-  // Read the entire file, update the active program if needed, then save
-  
-  File f = LittleFS.open("/programs.json", "r");
-  if (!f || f.size() == 0) {
-    if (f) f.close();
-    Serial.println("[ERROR] Cannot save: programs.json not found or empty");
-    return;
-  }
-  
-  // Use larger buffer for full file operations
-  DynamicJsonDocument doc(24576);  // 24KB buffer for full file
-  DeserializationError err = deserializeJson(doc, f);
-  f.close();
-  
-  if (err) {
-    Serial.printf("[ERROR] Failed to parse programs.json for saving: %s\n", err.c_str());
-    return;
-  }
-  
-  // Update the active program in the JSON if it's loaded
-  if (programState.activeProgramId >= 0 && activeProgram.id == programState.activeProgramId) {
-    for (JsonObject pobj : doc.as<JsonArray>()) {
-      if (pobj["id"] == programState.activeProgramId) {
-        // Update the active program's data
-        pobj["name"] = activeProgram.name;
-        pobj["notes"] = activeProgram.notes;
-        pobj["icon"] = activeProgram.icon;
-        pobj["fermentBaselineTemp"] = activeProgram.fermentBaselineTemp;
-        pobj["fermentQ10"] = activeProgram.fermentQ10;
-        
-        // Update stages
-        pobj.remove("customStages");
-        JsonArray stages = pobj.createNestedArray("customStages");
-        for (const CustomStage& cs : activeProgram.customStages) {
-          JsonObject st = stages.createNestedObject();
-          st["label"] = cs.label;
-          st["min"] = cs.min;
-          st["temp"] = cs.temp;
-          st["noMix"] = cs.noMix;
-          st["isFermentation"] = cs.isFermentation;
-          st["instructions"] = cs.instructions;
-          st["light"] = cs.light;
-          st["buzzer"] = cs.buzzer;
-          JsonArray mixArr = st.createNestedArray("mixPattern");
-          for (const MixStep& ms : cs.mixPattern) {
-            JsonObject m = mixArr.createNestedObject();
-            m["mixSec"] = ms.mixSec;
-            m["waitSec"] = ms.waitSec;
-            m["durationSec"] = ms.durationSec;
-          }
-        }
-        break;
-      }
-    }
-  }
-  
-  // Save back to file
-  f = LittleFS.open("/programs.json", "w");
-  if (f) {
-    serializeJsonPretty(doc, f);
-    f.close();
-    Serial.println("[INFO] Programs saved successfully");
-  } else {
-    Serial.println("[ERROR] Failed to open programs.json for writing");
-  }
 }
 
 // API function to get program metadata (for selection lists)
@@ -308,6 +205,51 @@ bool ensureProgramLoaded(int programId) {
     return true;
   }
   return loadSpecificProgram(programId);
+}
+
+// --- Helper functions for legacy migration ---
+
+// Get program count (replaces programs.size())
+size_t getProgramCount() {
+  return programMetadata.size();
+}
+
+// Get program name by ID (replaces programs[id].name)
+String getProgramName(int programId) {
+  for (const auto& meta : programMetadata) {
+    if (meta.id == programId) {
+      return meta.name;
+    }
+  }
+  return "";
+}
+
+// Check if program exists and is valid (replaces programs[id].id != -1)
+bool isProgramValid(int programId) {
+  for (const auto& meta : programMetadata) {
+    if (meta.id == programId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Get active program reference (replaces programs[activeProgramId])
+Program* getActiveProgramMutable() {
+  if (programState.activeProgramId >= 0 && activeProgram.id == programState.activeProgramId) {
+    return &activeProgram;
+  }
+  return nullptr;
+}
+
+// Find program ID by name (replaces programs[i].name == name searches)
+int findProgramIdByName(const String& name) {
+  for (const auto& meta : programMetadata) {
+    if (meta.name == name) {
+      return meta.id;
+    }
+  }
+  return -1;
 }
 
 

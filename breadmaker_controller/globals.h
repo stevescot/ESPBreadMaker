@@ -108,11 +108,3 @@ struct PIDControl {
 };
 extern PIDControl pid;
 #endif
-
-// Memory monitoring structure - helps track memory usage and fragmentation
-struct {
-  uint32_t minFreeHeap = 0xFFFFFFFF;
-  uint32_t maxFragmentation = 0;
-  unsigned long lastMemoryCheck = 0;
-  bool memoryWarningActive = false;
-} memoryMonitor;

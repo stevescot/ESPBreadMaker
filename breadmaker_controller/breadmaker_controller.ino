@@ -100,6 +100,13 @@ void checkAndSwitchPIDProfile();
 void updateTemperatureSampling();
 float getAveragedTemperature();
 void streamStatusJson(Print& out);
+void updateActiveProgramVars();
+void updateTimeProportionalHeater();
+void createDefaultPIDProfiles();
+bool ensureProgramLoaded(int programId);
+
+// --- Forward declaration for cache invalidation ---
+extern void invalidateStatusCache();
 
 // --- Forward declaration for stopBreadmaker (must be before any use) ---
 void stopBreadmaker();
@@ -196,7 +203,7 @@ void initialState(){
   Serial.println(F("[setup] Loading programs..."));
   loadProgramMetadata();
   Serial.print(F("[setup] Programs loaded. Count: "));
-  Serial.println(programs.size());
+  Serial.println(getProgramCount());
   updateActiveProgramVars(); // Initialize program variables after loading
   loadCalibration();
   Serial.println(F("[setup] Calibration loaded."));
@@ -386,8 +393,8 @@ void loadResumeState() {
   
   // Restore program by id with better validation
   int progIdx = doc["programIdx"] | -1;
-  if (progIdx >= 0 && progIdx < (int)programs.size() && 
-      programs[progIdx].id == progIdx && programs[progIdx].id != -1) {
+  if (progIdx >= 0 && progIdx < (int)getProgramCount() && 
+      isProgramValid(progIdx)) {
     programState.activeProgramId = progIdx;
     // Ensure the program is loaded into memory
     ensureProgramLoaded(progIdx);
@@ -395,8 +402,8 @@ void loadResumeState() {
   } else {
     // Fallback: select first valid program (id!=-1) or 0 if none
     programState.activeProgramId = 0;
-    for (size_t i = 0; i < programs.size(); ++i) {
-      if (programs[i].id != -1) { 
+    for (size_t i = 0; i < getProgramCount(); ++i) {
+      if (isProgramValid(i)) { 
         programState.activeProgramId = i; 
         break; 
       }
@@ -436,14 +443,18 @@ void loadResumeState() {
   }
 
   // Ensure indices are always valid after resume
-  if (programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
-    Program &p = programs[programState.activeProgramId];
-    if (programState.customStageIdx >= p.customStages.size()) programState.customStageIdx = 0;
-    if (!p.customStages.empty()) {
-      CustomStage &st = p.customStages[programState.customStageIdx];
-      if (!st.mixPattern.empty() && programState.customMixIdx >= st.mixPattern.size()) programState.customMixIdx = 0;
-    } else {
-      programState.customMixIdx = 0;
+  if (programState.activeProgramId >= 0 && isProgramValid(programState.activeProgramId)) {
+    if (ensureProgramLoaded(programState.activeProgramId)) {
+      Program* p = getActiveProgramMutable();
+      if (p != nullptr) {
+        if (programState.customStageIdx >= p->customStages.size()) programState.customStageIdx = 0;
+        if (!p->customStages.empty()) {
+          CustomStage &st = p->customStages[programState.customStageIdx];
+          if (!st.mixPattern.empty() && programState.customMixIdx >= st.mixPattern.size()) programState.customMixIdx = 0;
+        } else {
+          programState.customMixIdx = 0;
+        }
+      }
     }
   } else {
     programState.customStageIdx = 0;
@@ -451,48 +462,53 @@ void loadResumeState() {
   }
 
   // Fast-forward logic: if elapsed time > stage/mix durations, advance indices
-  if (programState.isRunning && programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
-    Program &p = programs[programState.activeProgramId];
-    // Fast-forward stages
-    size_t stageIdx = programState.customStageIdx;
-    unsigned long remainStageSec = elapsedStageSec;
-    while (stageIdx < p.customStages.size()) {
-      unsigned long stageDurSec = p.customStages[stageIdx].min * 60UL;
-      if (remainStageSec < stageDurSec) break;
-      remainStageSec -= stageDurSec;
-      stageIdx++;
-    }
-    if (stageIdx >= p.customStages.size()) {
-      // Program finished
-      programState.customStageIdx = 0;
-      programState.customMixIdx = 0;
-      programState.customStageStart = 0;
-      programState.customMixStepStart = 0;
-      programState.isRunning = false;
-      clearResumeState();
-      return;
-    }
-    programState.customStageIdx = stageIdx;
-    programState.customStageStart = millis() - remainStageSec * 1000UL;
-    if (programState.customStageStart == 0) programState.customStageStart = millis(); // Ensure nonzero for UI
-    // Fast-forward mix steps if mixPattern exists
-    CustomStage &st = p.customStages[programState.customStageIdx];
-    if (!st.mixPattern.empty()) {
-      size_t mixIdx = programState.customMixIdx;
-      unsigned long remainMixSec = elapsedMixSec;
-      while (mixIdx < st.mixPattern.size()) {
-        unsigned long mixDurSec = st.mixPattern[mixIdx].mixSec + st.mixPattern[mixIdx].waitSec;
-        if (remainMixSec < mixDurSec) break;
-        remainMixSec -= mixDurSec;
-        mixIdx++;
+  if (programState.isRunning && programState.activeProgramId >= 0 && isProgramValid(programState.activeProgramId)) {
+    if (ensureProgramLoaded(programState.activeProgramId)) {
+      Program* p = getActiveProgramMutable();
+      if (p != nullptr) {
+        // Fast-forward stages
+        size_t stageIdx = programState.customStageIdx;
+        unsigned long remainStageSec = elapsedStageSec;
+        while (stageIdx < p->customStages.size()) {
+          unsigned long stageDurSec = p->customStages[stageIdx].min * 60UL;
+          if (remainStageSec < stageDurSec) break;
+          remainStageSec -= stageDurSec;
+          stageIdx++;
+        }
+        if (stageIdx >= p->customStages.size()) {
+          // Program finished
+          programState.customStageIdx = 0;
+          programState.customMixIdx = 0;
+          programState.customStageStart = 0;
+          programState.customMixStepStart = 0;
+          programState.isRunning = false;
+          invalidateStatusCache();
+          clearResumeState();
+          return;
+        }
+        programState.customStageIdx = stageIdx;
+        programState.customStageStart = millis() - remainStageSec * 1000UL;
+        if (programState.customStageStart == 0) programState.customStageStart = millis(); // Ensure nonzero for UI
+        // Fast-forward mix steps if mixPattern exists
+        CustomStage &st = p->customStages[programState.customStageIdx];
+        if (!st.mixPattern.empty()) {
+          size_t mixIdx = programState.customMixIdx;
+          unsigned long remainMixSec = elapsedMixSec;
+          while (mixIdx < st.mixPattern.size()) {
+            unsigned long mixDurSec = st.mixPattern[mixIdx].mixSec + st.mixPattern[mixIdx].waitSec;
+            if (remainMixSec < mixDurSec) break;
+            remainMixSec -= mixDurSec;
+            mixIdx++;
+          }
+          if (mixIdx >= st.mixPattern.size()) mixIdx = 0;
+          programState.customMixIdx = mixIdx;
+          programState.customMixStepStart = millis() - remainMixSec * 1000UL;
+          if (programState.customMixStepStart == 0) programState.customMixStepStart = millis(); // Ensure nonzero for UI
+        } else {
+          programState.customMixIdx = 0;
+          programState.customMixStepStart = millis(); // Ensure nonzero for UI
+        }
       }
-      if (mixIdx >= st.mixPattern.size()) mixIdx = 0;
-      programState.customMixIdx = mixIdx;
-      programState.customMixStepStart = millis() - remainMixSec * 1000UL;
-      if (programState.customMixStepStart == 0) programState.customMixStepStart = millis(); // Ensure nonzero for UI
-    } else {
-      programState.customMixIdx = 0;
-      programState.customMixStepStart = millis(); // Ensure nonzero for UI
     }
   } else {
     // Not running or invalid program
@@ -547,13 +563,15 @@ void loop() {
   updateFermentationTiming(stageJustAdvanced);
 
   // --- Check for stage advancement and log ---
-  if (stageJustAdvanced && programs.size() > 0 && programState.activeProgramId < programs.size() && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-    Program &p = programs[programState.activeProgramId];
-    CustomStage &st = p.customStages[programState.customStageIdx];
-    if (st.isFermentation) {
-      if (debugSerial) Serial.printf("[STAGE ADVANCE] Fermentation stage advanced to %d\n", (int)programState.customStageIdx);
-    } else {
-      if (debugSerial) Serial.printf("[STAGE ADVANCE] Non-fermentation stage advanced to %d\n", (int)programState.customStageIdx);
+  if (stageJustAdvanced && getProgramCount() > 0 && programState.activeProgramId < getProgramCount()) {
+    Program *p = getActiveProgramMutable();
+    if (p && programState.customStageIdx < p->customStages.size()) {
+      CustomStage &st = p->customStages[programState.customStageIdx];
+      if (st.isFermentation) {
+        if (debugSerial) Serial.printf("[STAGE ADVANCE] Fermentation stage advanced to %d\n", (int)programState.customStageIdx);
+      } else {
+        if (debugSerial) Serial.printf("[STAGE ADVANCE] Non-fermentation stage advanced to %d\n", (int)programState.customStageIdx);
+      }
     }
   }
 
@@ -564,7 +582,7 @@ void loop() {
     handleScheduledStart(scheduledStartTriggered);
     yield(); delay(1); return;
   }
-  if (programs.size() == 0 || programState.activeProgramId >= programs.size()) {
+  if (getProgramCount() == 0 || programState.activeProgramId >= getProgramCount()) {
     stageJustAdvanced = false;
     stopBreadmaker(); yield(); delay(1); return;
   }
@@ -578,12 +596,13 @@ void loop() {
 // Updates fermentation timing, calculates weighted time, and advances stage if needed.
 // NOTE: This is the ONLY place where fermentation stages should advance to prevent race conditions.
 void updateFermentationTiming(bool &stageJustAdvanced) {
-  if (programs.size() > 0 && programState.activeProgramId < programs.size() && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-    Program &p = programs[programState.activeProgramId];
-    CustomStage &st = p.customStages[programState.customStageIdx];
-    if (st.isFermentation) {
-      float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
-      float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
+  if (getProgramCount() > 0 && programState.activeProgramId < getProgramCount()) {
+    Program *p = getActiveProgramMutable();
+    if (p && programState.customStageIdx < p->customStages.size()) {
+      CustomStage &st = p->customStages[programState.customStageIdx];
+      if (st.isFermentation) {
+        float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
+        float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
       float actualTemp = getAveragedTemperature();
       unsigned long nowMs = millis();
       if (fermentState.fermentLastUpdateMs == 0) {
@@ -606,8 +625,12 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         programState.customStageIdx++;
         programState.customStageStart = millis();
         resetFermentationTracking(actualTemp);
+        invalidateStatusCache();
         saveResumeState();
         stageJustAdvanced = true;
+      }
+      } else {
+        resetFermentationTracking(getAveragedTemperature());
       }
     } else {
       resetFermentationTracking(getAveragedTemperature());
@@ -688,6 +711,7 @@ void handleScheduledStart(bool &scheduledStartTriggered) {
     // Initialize fermentation tracking for the starting stage
     resetFermentationTracking(getAveragedTemperature());
     
+    invalidateStatusCache();
     saveResumeState();
     scheduledStart = 0;
     scheduledStartStage = -1;
@@ -697,20 +721,24 @@ void handleScheduledStart(bool &scheduledStartTriggered) {
 
 // Handles the execution and advancement of custom program stages, including mixing and fermentation.
 void handleCustomStages(bool &stageJustAdvanced) {
-  Program &p = programs[programState.activeProgramId];
-  if (!p.customStages.empty()) {
+  Program *p = getActiveProgramMutable();
+  if (!p || p->customStages.empty()) {
     stageJustAdvanced = false;
-    if (programState.customStageIdx >= p.customStages.size()) {
-      stageJustAdvanced = false;
-      stopBreadmaker();
-      programState.customStageIdx = 0;
-      programState.customStageStart = 0;
-      clearResumeState();
-      yield();
-      delay(1);
-      return;
-    }
-    CustomStage &st = p.customStages[programState.customStageIdx];
+    return;
+  }
+  
+  stageJustAdvanced = false;
+  if (programState.customStageIdx >= p->customStages.size()) {
+    stageJustAdvanced = false;
+    stopBreadmaker();
+    programState.customStageIdx = 0;
+    programState.customStageStart = 0;
+    clearResumeState();
+    yield();
+    delay(1);
+    return;
+  }
+  CustomStage &st = p->customStages[programState.customStageIdx];
     pid.Setpoint = st.temp;
     pid.Input = getAveragedTemperature();
     if (st.isFermentation) {
@@ -723,14 +751,14 @@ void handleCustomStages(bool &stageJustAdvanced) {
       unsigned long nowMs = millis();
       unsigned long elapsedInCurrentStage = (programState.customStageStart > 0) ? (nowMs - programState.customStageStart) : 0UL;
       double cumulativePredictedSec = 0.0;
-      for (size_t i = 0; i < p.customStages.size(); ++i) {
-        CustomStage &stage = p.customStages[i];
+      for (size_t i = 0; i < p->customStages.size(); ++i) {
+        CustomStage &stage = p->customStages[i];
         double plannedStageSec = (double)stage.min * 60.0;
         double adjustedStageSec = plannedStageSec;
         if (stage.isFermentation) {
           if (i < programState.customStageIdx) {
-            float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
-            float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
+            float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
+            float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
             float temp = fermentState.fermentLastTemp;
             float factor = pow(q10, (baseline - temp) / 10.0); // Q10: factor < 1 means faster at higher temp
             cumulativePredictedSec += plannedStageSec * factor; // Multiply: higher temp = less time
@@ -949,23 +977,35 @@ void handleCustomStages(bool &stageJustAdvanced) {
       yield();
       delay(1);
       return;
+    } else {
+      yield();
+      delay(100);
+      return;
     }
-  } else {
-    yield();
-    delay(100);
-    return;
-  }
 }
 
 // --- Update active program variables ---
 // Updates pointers and counters for the currently active breadmaker program.
 void updateActiveProgramVars() {
-  if (programs.size() > 0 && programState.activeProgramId < programs.size()) {
-    programState.customProgram = &programs[programState.activeProgramId];
-    programState.maxCustomStages = programState.customProgram->customStages.size();
+  if (getProgramCount() > 0 && programState.activeProgramId < getProgramCount() && isProgramValid(programState.activeProgramId)) {
+    // Ensure the program is loaded
+    if (!ensureProgramLoaded(programState.activeProgramId)) {
+      if (debugSerial) Serial.printf("[ERROR] Failed to load program %d\n", programState.activeProgramId);
+      programState.customProgram = nullptr;
+      programState.maxCustomStages = 0;
+      return;
+    }
+    
+    programState.customProgram = getActiveProgramMutable();
+    programState.maxCustomStages = programState.customProgram ? programState.customProgram->customStages.size() : 0;
+    
+    if (debugSerial) Serial.printf("[INFO] updateActiveProgramVars: Program %d loaded, customProgram=%p, stages=%zu\n", 
+                                   programState.activeProgramId, (void*)programState.customProgram, programState.maxCustomStages);
   } else {
     programState.customProgram = nullptr;
     programState.maxCustomStages = 0;
+    if (debugSerial) Serial.printf("[INFO] updateActiveProgramVars: No valid program (count=%zu, id=%d)\n", 
+                                   getProgramCount(), programState.activeProgramId);
   }
 }
 
@@ -1224,6 +1264,7 @@ void stopBreadmaker() {
   setMotor(false);
   setLight(false);
   setBuzzer(true); // Buzz for 200ms (handled non-blocking in loop)
+  invalidateStatusCache();
   clearResumeState();
 }
 
@@ -1301,7 +1342,7 @@ void loadSettings() {
   // Restore last selected program by ID if present, fallback to name for backward compatibility
   if (doc.containsKey("lastProgramId")) {
     int lastId = doc["lastProgramId"];
-    if (lastId >= 0 && lastId < (int)programs.size()) {
+    if (lastId >= 0 && lastId < (int)getProgramCount()) {
       programState.activeProgramId = lastId;
       Serial.print("[loadSettings] lastProgramId loaded: ");
       Serial.println(lastId);
@@ -1309,8 +1350,8 @@ void loadSettings() {
   } else if (doc.containsKey("lastProgram")) {
     // Deprecated: fallback to name for backward compatibility
     String lastProg = doc["lastProgram"].as<String>();
-    for (size_t i = 0; i < programs.size(); ++i) {
-      if (programs[i].name == lastProg) {
+    for (size_t i = 0; i < getProgramCount(); ++i) {
+      if (getProgramName(i) == lastProg) {
         programState.activeProgramId = i;
         Serial.print("[loadSettings] lastProgram loaded (deprecated): ");
         Serial.println(lastProg);
@@ -1341,10 +1382,10 @@ void saveSettings() {
   f.printf("  \"outputMode\":\"%s\",\n", (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog");
   f.printf("  \"debugSerial\":%s,\n", debugSerial ? "true" : "false");
   
-  if (programs.size() > 0) {
+  if (getProgramCount() > 0) {
     f.printf("  \"lastProgramId\":%d,\n", (int)programState.activeProgramId);
     f.print("  \"lastProgram\":\"");
-    f.print(programs[programState.activeProgramId].name);
+    f.print(getProgramName(programState.activeProgramId));
     f.print("\",\n");
   } else {
     f.print("  \"lastProgramId\":0,\n");

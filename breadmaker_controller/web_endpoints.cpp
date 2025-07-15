@@ -19,6 +19,18 @@ static unsigned long minFreeHeap = 0xFFFFFFFF;
 static unsigned long wifiReconnectCount = 0;
 static unsigned long lastWifiStatus = WL_CONNECTED;
 
+// Caching variables for frequently accessed endpoints
+static unsigned long lastStatusUpdate = 0;
+static unsigned long lastHaUpdate = 0;
+static const unsigned long STATUS_CACHE_MS = 1000;  // Cache for 1 second
+static const unsigned long HA_CACHE_MS = 3000;      // Cache HA for 3 seconds
+
+// Cache invalidation function - call this when state changes
+void invalidateStatusCache() {
+  lastStatusUpdate = 0;
+  lastHaUpdate = 0;
+}
+
 // Forward declarations for helpers and global variables used in endpoints
 extern bool debugSerial;
 extern unsigned long windowSize, onTime, startupTime;
@@ -204,9 +216,9 @@ void stateMachineEndpoints(AsyncWebServer& server)
     updateActiveProgramVars();
     
     // Debug: print active program info
-    if (debugSerial && programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
+    if (debugSerial && programState.activeProgramId < getProgramCount() && isProgramValid(programState.activeProgramId)) {
       Serial.printf_P(PSTR("[START] activeProgram='%s' (id=%u), customProgram=%p\n"), 
-                     programs[programState.activeProgramId].name.c_str(), 
+                     getProgramName(programState.activeProgramId).c_str(), 
                      (unsigned)programState.activeProgramId, (void*)programState.customProgram);
     }
 
@@ -276,6 +288,9 @@ void stateMachineEndpoints(AsyncWebServer& server)
     programState.customMixStepStart = 0;
     programState.programStartTime = time(nullptr);
     
+    // Invalidate cache when state changes
+    invalidateStatusCache();
+    
     // Initialize actual stage start times array
     for (int i = 0; i < MAX_PROGRAM_STAGES; i++) {
       if (i < startStageIdx) {
@@ -325,6 +340,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
     if (debugSerial) Serial.println(F("[ACTION] /stop called"));
     updateActiveProgramVars();
     stopBreadmaker();
+    invalidateStatusCache();
     AsyncResponseStream *response = req->beginResponseStream("application/json");
     streamStatusJson(*response);
     req->send(response);
@@ -332,6 +348,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
   server.on("/pause", HTTP_GET, [](AsyncWebServerRequest* req){
     if (debugSerial) Serial.println(F("[ACTION] /pause called"));
     programState.isRunning = false;
+    invalidateStatusCache();
     setMotor(false);
     setHeater(false);
     setLight(false);
@@ -343,6 +360,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
   server.on("/resume", HTTP_GET, [](AsyncWebServerRequest* req){
     if (debugSerial) Serial.println(F("[ACTION] /resume called"));
     programState.isRunning = true;
+    invalidateStatusCache();
     // Do NOT reset actualStageStartTimes[customStageIdx] on resume if it was already set.
     // Only set it if it was never set (i.e., just started this stage for the first time).
     if (programState.customStageIdx < MAX_PROGRAM_STAGES && programState.actualStageStartTimes[programState.customStageIdx] == 0) {
@@ -358,17 +376,19 @@ void stateMachineEndpoints(AsyncWebServer& server)
   });
   server.on("/advance", HTTP_GET, [](AsyncWebServerRequest* req){
     if (debugSerial) Serial.println(F("[ACTION] /advance called"));
-    if (programState.activeProgramId >= programs.size()) { stopBreadmaker(); AsyncResponseStream *response = req->beginResponseStream("application/json"); streamStatusJson(*response); req->send(response); return; }
-    Program &p = programs[programState.activeProgramId];
+    if (programState.activeProgramId >= getProgramCount()) { stopBreadmaker(); AsyncResponseStream *response = req->beginResponseStream("application/json"); streamStatusJson(*response); req->send(response); return; }
+    Program *p = getActiveProgramMutable();
+    if (!p) { stopBreadmaker(); AsyncResponseStream *response = req->beginResponseStream("application/json"); streamStatusJson(*response); req->send(response); return; }
     programState.customStageIdx++;
-    if (programState.customStageIdx >= p.customStages.size()) {
-      stopBreadmaker(); programState.customStageIdx = 0; programState.customStageStart = 0; AsyncResponseStream *response = req->beginResponseStream("application/json"); streamStatusJson(*response); req->send(response); return;
+    if (programState.customStageIdx >= p->customStages.size()) {
+      stopBreadmaker(); programState.customStageIdx = 0; programState.customStageStart = 0; invalidateStatusCache(); AsyncResponseStream *response = req->beginResponseStream("application/json"); streamStatusJson(*response); req->send(response); return;
     }
     programState.customStageStart = millis();
     programState.customMixIdx = 0;
     programState.customMixStepStart = 0;
     programState.isRunning = true;
     if (programState.customStageIdx == 0) programState.programStartTime = time(nullptr);
+    invalidateStatusCache();
     // Record actual start time of this stage
     if (programState.customStageIdx < MAX_PROGRAM_STAGES) programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
 
@@ -377,13 +397,13 @@ void stateMachineEndpoints(AsyncWebServer& server)
     fermentState.fermentationFactor = 1.0;
     fermentState.predictedCompleteTime = 0;
     fermentState.lastFermentAdjust = 0;
-    if (programState.activeProgramId < programs.size()) {
-      Program &p = programs[programState.activeProgramId];
-      if (programState.customStageIdx < p.customStages.size()) {
-        CustomStage &st = p.customStages[programState.customStageIdx];
+    if (programState.activeProgramId < getProgramCount()) {
+      Program *p = getActiveProgramMutable();
+      if (p && programState.customStageIdx < p->customStages.size()) {
+        CustomStage &st = p->customStages[programState.customStageIdx];
         if (st.isFermentation) {
-          float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
-          float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
+          float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
+          float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
           float actualTemp = getAveragedTemperature();
           fermentState.initialFermentTemp = actualTemp;
           fermentState.fermentationFactor = pow(q10, (baseline - actualTemp) / 10.0);
@@ -406,11 +426,11 @@ void stateMachineEndpoints(AsyncWebServer& server)
     updateActiveProgramVars();
     // Robust null and bounds checks
     // If current program is a dummy slot, clamp to first valid program
-    if (programState.activeProgramId >= programs.size() || programs[programState.activeProgramId].id == -1) {
+    if (programState.activeProgramId >= getProgramCount() || !isProgramValid(programState.activeProgramId)) {
         // Find first valid program
         size_t firstValid = 0;
-        for (size_t i = 0; i < programs.size(); ++i) {
-            if (programs[i].id != -1) { firstValid = i; break; }
+        for (size_t i = 0; i < getProgramCount(); ++i) {
+            if (isProgramValid(i)) { firstValid = i; break; }
         }
         programState.activeProgramId = firstValid;
         updateActiveProgramVars();
@@ -431,8 +451,16 @@ void stateMachineEndpoints(AsyncWebServer& server)
         req->send(response);
         return;
     }
-    Program &p = programs[programState.activeProgramId];
-    size_t numStages = p.customStages.size();
+    Program *p = getActiveProgramMutable();
+    if (!p) {
+        Serial.printf_P(PSTR("[ERROR] /back: Unable to get active program\n"));
+        stopBreadmaker();
+        AsyncResponseStream *response = req->beginResponseStream("application/json");
+        streamStatusJson(*response);
+        req->send(response);
+        return;
+    }
+    size_t numStages = p->customStages.size();
     if (numStages == 0) {
         Serial.printf_P(PSTR("[ERROR] /back: Program at id %u has zero stages\n"), (unsigned)programState.activeProgramId);
         stopBreadmaker();
@@ -458,6 +486,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
     programState.customMixStepStart = 0;
     programState.isRunning = true;
     if (programState.customStageIdx == 0) programState.programStartTime = time(nullptr);
+    invalidateStatusCache();
     // Record actual start time of this stage when going back
     if (programState.customStageIdx < numStages && programState.customStageIdx < MAX_PROGRAM_STAGES) programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
     saveResumeState();
@@ -486,6 +515,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
           programState.activeProgramId = id;
           updateActiveProgramVars();
           programState.isRunning = false;
+          invalidateStatusCache();
           saveSettings();
           saveResumeState();
           
@@ -554,6 +584,7 @@ void manualOutputEndpoints(AsyncWebServer& server)
     if (req->hasParam("on")) {
       int on = req->getParam("on")->value().toInt();
       setMotor(on != 0);
+      invalidateStatusCache();
     }
     AsyncResponseStream *response = req->beginResponseStream("application/json");
     streamStatusJson(*response);
@@ -564,6 +595,7 @@ void manualOutputEndpoints(AsyncWebServer& server)
       int on = req->getParam("on")->value().toInt();
       setLight(on != 0);
       if (on) lightOnTime = millis();
+      invalidateStatusCache();
     }
     AsyncResponseStream *response = req->beginResponseStream("application/json");
     streamStatusJson(*response);
@@ -1039,8 +1071,8 @@ void streamStatusJson(Print& out) {
   // running
   out.printf("\"running\":%s,", programState.isRunning ? "true" : "false");
   // program
-  if (programState.activeProgramId < programs.size()) {
-    out.printf("\"program\":\"%s\",", programs[programState.activeProgramId].name.c_str());
+  if (programState.activeProgramId < getProgramCount()) {
+    out.printf("\"program\":\"%s\",", getProgramName(programState.activeProgramId).c_str());
     out.printf("\"programId\":%u,", (unsigned)programState.activeProgramId);
   } else {
     out.print("\"program\":\"\",\"programId\":0,");
@@ -1054,23 +1086,24 @@ void streamStatusJson(Print& out) {
   time_t programReadyAt = 0;
   double fermentationStageTimeLeft = 0.0;
   // stage, stageStartTimes, programStart, elapsed, stageReadyAt, programReadyAt
-  if (programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
-    Program &p = programs[programState.activeProgramId];
+  if (programState.activeProgramId < getProgramCount() && isProgramValid(programState.activeProgramId)) {
+    Program *p = getActiveProgramMutable();
+    if (p) {
     
     // Ensure the program stages are loaded for preview calculations
-    if (p.customStages.empty()) {
+    if (p->customStages.empty()) {
       Serial.println("DEBUG: Program stages empty, loading program " + String(programState.activeProgramId));
       ensureProgramLoaded(programState.activeProgramId);
     } else {
-      Serial.println("DEBUG: Program " + String(programState.activeProgramId) + " has " + String(p.customStages.size()) + " stages");
+      Serial.println("DEBUG: Program " + String(programState.activeProgramId) + " has " + String(p->customStages.size()) + " stages");
     }
     
     // Determine preview or running mode
     bool previewMode = !programState.isRunning;
     // Stage label
-    if (programState.isRunning && programState.customStageIdx < p.customStages.size()) {
+    if (programState.isRunning && programState.customStageIdx < p->customStages.size()) {
       out.print("\"stage\":\"");
-      out.print(p.customStages[programState.customStageIdx].label.c_str());
+      out.print(p->customStages[programState.customStageIdx].label.c_str());
       out.print("\",");
     } else {
       out.print("\"stage\":\"Idle\",");
@@ -1078,14 +1111,14 @@ void streamStatusJson(Print& out) {
     // --- Predicted (temperature-adjusted) stage end times ---
     out.print("\"predictedStageEndTimes\":[");
     float actualTemp = getAveragedTemperature();
-    float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
-    float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
+    float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
+    float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
     float fermentationFactorForProgram = pow(q10, (baseline - actualTemp) / 10.0);
     // Use programStartTime if running, otherwise use now as preview start
     unsigned long programStartUnix = (unsigned long)(programState.isRunning ? programState.programStartTime : time(nullptr));
     double cumulativePredictedSec = 0.0;
-    for (size_t i = 0; i < p.customStages.size(); ++i) {
-      CustomStage &stage = p.customStages[i];
+    for (size_t i = 0; i < p->customStages.size(); ++i) {
+      CustomStage &stage = p->customStages[i];
       double plannedStageSec = (double)stage.min * 60.0;
       double adjustedStageSec = plannedStageSec;
       if (stage.isFermentation) {
@@ -1103,10 +1136,10 @@ void streamStatusJson(Print& out) {
     // --- Legacy: stageStartTimes array (now fermentation-adjusted for consistency) ---
     out.print("\"stageStartTimes\":[");
     time_t t = programState.isRunning ? programState.programStartTime : time(nullptr);
-    for (size_t i = 0; i < p.customStages.size(); ++i) {
+    for (size_t i = 0; i < p->customStages.size(); ++i) {
       if (i > 0) out.print(",");
       out.printf("%lu", (unsigned long)t);
-      CustomStage &stage = p.customStages[i];
+      CustomStage &stage = p->customStages[i];
       double plannedStageSec = (double)stage.min * 60.0;
       double adjustedStageSec = plannedStageSec;
       if (stage.isFermentation) {
@@ -1121,8 +1154,8 @@ void streamStatusJson(Print& out) {
     // Calculate stageReadyAt and programReadyAt (legacy, not adjusted)
     stageReadyAt = 0;
     programReadyAt = 0;
-    if (programState.customStageIdx < p.customStages.size()) {
-      CustomStage &st = p.customStages[programState.customStageIdx];
+    if (programState.customStageIdx < p->customStages.size()) {
+      CustomStage &st = p->customStages[programState.customStageIdx];
       if (st.isFermentation) {
         // Calculate temperature-adjusted time left for fermentation stage
         double plannedStageSec = (double)st.min * 60.0;
@@ -1146,8 +1179,8 @@ void streamStatusJson(Print& out) {
           // Preview mode - calculate fermentation-adjusted stage ready time
           time_t previewStart = programState.isRunning ? programState.programStartTime : time(nullptr);
           time_t cumulativeTime = previewStart;
-          for (size_t i = 0; i <= programState.customStageIdx && i < p.customStages.size(); ++i) {
-            CustomStage &stage = p.customStages[i];
+          for (size_t i = 0; i <= programState.customStageIdx && i < p->customStages.size(); ++i) {
+            CustomStage &stage = p->customStages[i];
             double plannedStageSec = (double)stage.min * 60.0;
             double adjustedStageSec = plannedStageSec;
             if (stage.isFermentation) {
@@ -1160,12 +1193,12 @@ void streamStatusJson(Print& out) {
         
         if (programState.actualStageStartTimes[programState.customStageIdx] > 0) {
           unsigned long actualElapsedInStage = (millis() - programState.customStageStart) / 1000UL;
-          unsigned long plannedStageDuration = (unsigned long)p.customStages[programState.customStageIdx].min * 60UL;
+          unsigned long plannedStageDuration = (unsigned long)p->customStages[programState.customStageIdx].min * 60UL;
           unsigned long timeLeftInCurrentStage = (actualElapsedInStage < plannedStageDuration) ? (plannedStageDuration - actualElapsedInStage) : 0;
           stageLeft = (int)timeLeftInCurrentStage;
           programReadyAt = now + (time_t)timeLeftInCurrentStage;
-          for (size_t i = programState.customStageIdx + 1; i < p.customStages.size(); ++i) {
-            CustomStage &stage = p.customStages[i];
+          for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
+            CustomStage &stage = p->customStages[i];
             double plannedStageSec = (double)stage.min * 60.0;
             double adjustedStageSec = plannedStageSec;
             if (stage.isFermentation) {
@@ -1176,8 +1209,8 @@ void streamStatusJson(Print& out) {
         } else {
           // Preview mode or start of program - use fermentation-adjusted times
           programReadyAt = programState.isRunning ? programState.programStartTime : time(nullptr);
-          for (size_t i = 0; i < p.customStages.size(); ++i) {
-            CustomStage &stage = p.customStages[i];
+          for (size_t i = 0; i < p->customStages.size(); ++i) {
+            CustomStage &stage = p->customStages[i];
             double plannedStageSec = (double)stage.min * 60.0;
             double adjustedStageSec = plannedStageSec;
             if (stage.isFermentation) {
@@ -1187,8 +1220,8 @@ void streamStatusJson(Print& out) {
           }
           
           // For preview mode, calculate stage time left
-          if (!programState.isRunning && programState.customStageIdx < p.customStages.size()) {
-            CustomStage &currentStage = p.customStages[programState.customStageIdx];
+          if (!programState.isRunning && programState.customStageIdx < p->customStages.size()) {
+            CustomStage &currentStage = p->customStages[programState.customStageIdx];
             double plannedStageSec = (double)currentStage.min * 60.0;
             double adjustedStageSec = plannedStageSec;
             if (currentStage.isFermentation) {
@@ -1198,6 +1231,7 @@ void streamStatusJson(Print& out) {
           }
         }
       }
+    }
     }
   } else {
     out.print("\"stage\":\"Idle\",");
@@ -1262,6 +1296,30 @@ void homeAssistantEndpoint(AsyncWebServer& server)
 {
   // --- Home Assistant integration endpoint (matches template configuration.yaml) ---
   server.on("/ha", HTTP_GET, [](AsyncWebServerRequest* req){
+    unsigned long now = millis();
+    
+    // Check if we can use cached values
+    if (now - lastHaUpdate < HA_CACHE_MS) {
+      // Return cached basic state values without expensive calculations
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      response->print("{");
+      response->printf("\"state\":\"%s\",", programState.isRunning ? "running" : "idle");
+      response->printf("\"temperature\":%.1f,", tempAvg.averagedTemperature);
+      response->printf("\"setpoint\":%.1f,", pid.Setpoint);
+      response->printf("\"motor\":%s,", outputStates.motor ? "true" : "false");
+      response->printf("\"light\":%s,", outputStates.light ? "true" : "false");
+      response->printf("\"buzzer\":%s,", outputStates.buzzer ? "true" : "false");
+      response->printf("\"heater\":%s,", outputStates.heater ? "true" : "false");
+      response->printf("\"manual_mode\":%s,", programState.manualMode ? "true" : "false");
+      response->printf("\"cached\":true");
+      response->print("}");
+      req->send(response);
+      return;
+    }
+    
+    // Update cache timestamp and return full detailed response
+    lastHaUpdate = now;
+    
     AsyncResponseStream *response = req->beginResponseStream("application/json");
     response->print("{");
     
@@ -1278,15 +1336,16 @@ void homeAssistantEndpoint(AsyncWebServer& server)
     response->printf("\"manual_mode\":%s,", programState.manualMode ? "true" : "false");
     
     // Program and stage info
-    if (programState.activeProgramId < programs.size()) {
-      response->printf("\"program\":\"%s\",", programs[programState.activeProgramId].name.c_str());
+    if (programState.activeProgramId < getProgramCount()) {
+      response->printf("\"program\":\"%s\",", getProgramName(programState.activeProgramId).c_str());
       
-      if (programState.isRunning && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-        response->printf("\"stage\":\"%s\",", programs[programState.activeProgramId].customStages[programState.customStageIdx].label.c_str());
+      Program *p = getActiveProgramMutable();
+      if (programState.isRunning && p && programState.customStageIdx < p->customStages.size()) {
+        response->printf("\"stage\":\"%s\",", p->customStages[programState.customStageIdx].label.c_str());
         
         // Calculate stage time left in minutes (as expected by template)
         unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-        int stageTimeMin = programs[programState.activeProgramId].customStages[programState.customStageIdx].min;
+        int stageTimeMin = p->customStages[programState.customStageIdx].min;
         int timeLeftMin = stageTimeMin - (elapsed / 60);
         if (timeLeftMin < 0) timeLeftMin = 0;
         response->printf("\"stage_time_left\":%d,", timeLeftMin);
@@ -1301,24 +1360,25 @@ void homeAssistantEndpoint(AsyncWebServer& server)
     }
     
     // Timing information (Unix timestamps as expected)
-    time_t now = time(nullptr);
+    time_t currentTime = time(nullptr);
     time_t stageReadyAt = 0;
     time_t programReadyAt = 0;
     
-    if (programState.isRunning && programState.activeProgramId < programs.size() && 
-        programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-      
-      unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-      int stageTimeMin = programs[programState.activeProgramId].customStages[programState.customStageIdx].min;
-      int timeLeftSec = (stageTimeMin * 60) - elapsed;
-      if (timeLeftSec < 0) timeLeftSec = 0;
-      
-      stageReadyAt = now + timeLeftSec;
-      
-      // Calculate total program time remaining
-      programReadyAt = stageReadyAt;
-      for (size_t i = programState.customStageIdx + 1; i < programs[programState.activeProgramId].customStages.size(); ++i) {
-        programReadyAt += programs[programState.activeProgramId].customStages[i].min * 60;
+    if (programState.isRunning && programState.activeProgramId < getProgramCount()) {
+      Program *p = getActiveProgramMutable();
+      if (p && programState.customStageIdx < p->customStages.size()) {
+        unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+        int stageTimeMin = p->customStages[programState.customStageIdx].min;
+        int timeLeftSec = (stageTimeMin * 60) - elapsed;
+        if (timeLeftSec < 0) timeLeftSec = 0;
+        
+        stageReadyAt = currentTime + timeLeftSec;
+        
+        // Calculate total program time remaining
+        programReadyAt = stageReadyAt;
+        for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
+          programReadyAt += p->customStages[i].min * 60;
+        }
       }
     }
     
