@@ -2,3 +2,4 @@ breadmaker_controller/data/wifi.json
 breadmaker_controller/build/breadmaker_controller.ino.map
 breadmaker_controller/build/breadmaker_controller.ino.elf
 breadmaker_controller/build/breadmaker_controller.ino.bin
+/breadmaker_controller/build
