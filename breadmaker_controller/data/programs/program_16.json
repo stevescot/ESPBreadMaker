@@ -1,0 +1,32 @@
+{
+  "id": 16,
+  "name": "Utility - Melt Beeswax",
+  "customStages": [
+    {
+      "label": "Melt",
+      "min": 15,
+      "temp": 65,
+      "mixPattern": [
+        {
+          "mixSec": 10,
+          "waitSec": 290,
+          "durationSec": 300
+        }
+      ],
+      "instructions": "Add beeswax pieces. For candle or cosmetic making. Use container you can dispose of or dedicate to wax."
+    },
+    {
+      "label": "Hold",
+      "min": 30,
+      "temp": 65,
+      "mixPattern": [
+        {
+          "mixSec": 5,
+          "waitSec": 295,
+          "durationSec": 300
+        }
+      ],
+      "instructions": "Keeps wax liquid for pouring. Add oils or scents if desired."
+    }
+  ]
+}

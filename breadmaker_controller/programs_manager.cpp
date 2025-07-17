@@ -11,29 +11,30 @@ Program activeProgram;
 void loadProgramMetadata() {
   programMetadata.clear();
   
-  File f = LittleFS.open("/programs.json", "r");
+  // Use lightweight index file instead of full programs.json
+  File f = LittleFS.open("/programs_index.json", "r");
   if (!f || f.size() == 0) {
     if (f) f.close();
-    Serial.println("[ERROR] programs.json not found or empty");
+    Serial.println("[ERROR] programs_index.json not found or empty");
     return;
   }
   
   size_t fileSize = f.size();
-  Serial.printf("[INFO] Loading program metadata, file size: %zu bytes\n", fileSize);
+  Serial.printf("[INFO] Loading program metadata from index, file size: %zu bytes\n", fileSize);
   
-  // Use smaller buffer for streaming parse - we only need basic info
-  DynamicJsonDocument doc(4096);  // 4KB buffer for metadata parsing
+  // Much smaller buffer needed for index file
+  DynamicJsonDocument doc(4096);  // 4KB buffer should be plenty for index
   DeserializationError err = deserializeJson(doc, f);
   f.close();
   
   if (err) {
-    Serial.printf("[ERROR] Failed to parse programs.json metadata: %s\n", err.c_str());
+    Serial.printf("[ERROR] Failed to parse programs_index.json: %s\n", err.c_str());
     return;
   }
   
   Serial.printf("[INFO] Parsing program metadata (memory usage: %zu bytes)\n", doc.memoryUsage());
   
-  // Extract only metadata - don't load full stage data
+  // Extract metadata from index
   for (JsonObject pobj : doc.as<JsonArray>()) {
     ProgramMetadata meta;
     
@@ -68,95 +69,77 @@ bool loadSpecificProgram(int programId) {
     return true;
   }
   
-  File f = LittleFS.open("/programs.json", "r");
+  // Load individual program file instead of entire programs.json
+  String programFileName = "/programs/program_" + String(programId) + ".json";
+  File f = LittleFS.open(programFileName, "r");
   if (!f || f.size() == 0) {
     if (f) f.close();
-    Serial.println("[ERROR] programs.json not found or empty");
+    Serial.printf("[ERROR] Program file %s not found or empty\n", programFileName.c_str());
     return false;
   }
   
-  Serial.printf("[INFO] Loading full program data for ID %d (Free heap: %u bytes)\n", programId, ESP.getFreeHeap());
+  Serial.printf("[INFO] Loading program from %s (Free heap: %u bytes)\n", programFileName.c_str(), ESP.getFreeHeap());
   
-  // Use minimal buffer with streaming parse approach
-  // Read file in chunks to minimize memory usage
-  size_t fileSize = f.size();
-  
-  // First, try to find program with minimal JSON parsing
-  String fileContent = "";
-  fileContent.reserve(fileSize + 1);
-  
-  // Read entire file (this is actually more memory efficient than ArduinoJson streaming for ESP8266)
-  while (f.available()) {
-    fileContent += (char)f.read();
-  }
+  // Much smaller buffer needed for individual program file (max ~2.5KB)
+  DynamicJsonDocument doc(3072);  // 3KB buffer - plenty for individual program
+  DeserializationError err = deserializeJson(doc, f);
   f.close();
   
-  // Use small buffer for parsing - we'll parse program by program
-  DynamicJsonDocument doc(1536);  // Reduced to 1.5KB buffer
-  DeserializationError err = deserializeJson(doc, fileContent);
-  
   if (err) {
-    Serial.printf("[ERROR] Failed to parse programs.json: %s (Free heap: %u bytes)\n", err.c_str(), ESP.getFreeHeap());
+    Serial.printf("[ERROR] Failed to parse %s: %s (Free heap: %u bytes)\n", programFileName.c_str(), err.c_str(), ESP.getFreeHeap());
     return false;
   }
   
-  // Find the specific program in the array
-  JsonArray programsArray = doc.as<JsonArray>();
-  for (JsonObject pobj : programsArray) {
-    if (pobj["id"] == programId) {
-      // Clear previous active program
-      activeProgram = Program();
-      
-      // Load basic program data
-      activeProgram.id = programId;
-      activeProgram.name = pobj["name"].as<String>();
-      activeProgram.notes = pobj["notes"] | String("");
-      activeProgram.icon = pobj["icon"] | String("");
-      activeProgram.fermentBaselineTemp = pobj["fermentBaselineTemp"] | 20.0f;
-      activeProgram.fermentQ10 = pobj["fermentQ10"] | 2.0f;
-      
-      // Load stages with memory-efficient approach
-      activeProgram.customStages.clear();
-      activeProgram.customStages.reserve(8);  // Reserve space for typical program size
-      
-      JsonArray stages = pobj["customStages"];
-      for (JsonObject st : stages) {
-        CustomStage cs;
-        cs.label = st["label"].as<String>();
-        cs.min = st["min"] | 0;
-        cs.temp = st["temp"] | 0.0;
-        cs.noMix = st["noMix"] | false;
-        cs.isFermentation = st["isFermentation"] | false;
-        cs.instructions = st["instructions"] | String("");
-        cs.light = st["light"] | String("");
-        cs.buzzer = st["buzzer"] | String("");
-        
-        // Load mix pattern efficiently
-        cs.mixPattern.clear();
-        JsonArray mixArray = st["mixPattern"];
-        cs.mixPattern.reserve(mixArray.size());  // Reserve exact space needed
-        
-        for (JsonObject m : mixArray) {
-          MixStep ms;
-          ms.mixSec = m["mixSec"] | 0;
-          ms.waitSec = m["waitSec"] | 0;
-          ms.durationSec = m["durationSec"] | 0;
-          cs.mixPattern.push_back(ms);
-        }
-        activeProgram.customStages.push_back(cs);
-      }
-      
-      // Update the active program
-      programState.activeProgramId = programId;
-      Serial.printf("[INFO] Loaded program '%s' with %zu stages (Free heap: %u bytes)\n", 
-                    activeProgram.name.c_str(), activeProgram.customStages.size(), ESP.getFreeHeap());
-      
-      return true;
+  // Clear previous active program
+  activeProgram = Program();
+  
+  // Load program data from single program object
+  JsonObject pobj = doc.as<JsonObject>();
+  
+  activeProgram.id = programId;
+  activeProgram.name = pobj["name"].as<String>();
+  activeProgram.notes = pobj["notes"] | String("");
+  activeProgram.icon = pobj["icon"] | String("");
+  activeProgram.fermentBaselineTemp = pobj["fermentBaselineTemp"] | 20.0f;
+  activeProgram.fermentQ10 = pobj["fermentQ10"] | 2.0f;
+  
+  // Load stages with memory-efficient approach
+  activeProgram.customStages.clear();
+  JsonArray stages = pobj["customStages"];
+  activeProgram.customStages.reserve(stages.size());  // Reserve exact space needed
+  
+  for (JsonObject st : stages) {
+    CustomStage cs;
+    cs.label = st["label"].as<String>();
+    cs.min = st["min"] | 0;
+    cs.temp = st["temp"] | 0.0;
+    cs.noMix = st["noMix"] | false;
+    cs.isFermentation = st["isFermentation"] | false;
+    cs.instructions = st["instructions"] | String("");
+    cs.light = st["light"] | String("");
+    cs.buzzer = st["buzzer"] | String("");
+    
+    // Load mix pattern efficiently
+    cs.mixPattern.clear();
+    JsonArray mixArray = st["mixPattern"];
+    cs.mixPattern.reserve(mixArray.size());  // Reserve exact space needed
+    
+    for (JsonObject m : mixArray) {
+      MixStep ms;
+      ms.mixSec = m["mixSec"] | 0;
+      ms.waitSec = m["waitSec"] | 0;
+      ms.durationSec = m["durationSec"] | 0;
+      cs.mixPattern.push_back(ms);
     }
+    activeProgram.customStages.push_back(cs);
   }
   
-  Serial.printf("[ERROR] Program ID %d not found\n", programId);
-  return false;
+  // Update the active program
+  programState.activeProgramId = programId;
+  Serial.printf("[INFO] Loaded program '%s' with %zu stages (Free heap: %u bytes)\n", 
+                activeProgram.name.c_str(), activeProgram.customStages.size(), ESP.getFreeHeap());
+  
+  return true;
 }
 
 // Legacy function for backward compatibility
@@ -201,10 +184,15 @@ const Program* getActiveProgram() {
 
 // API function to ensure a program is loaded
 bool ensureProgramLoaded(int programId) {
+  Serial.printf("[DEBUG] ensureProgramLoaded called with ID %d\n", programId);
   if (isProgramLoaded(programId)) {
+    Serial.printf("[DEBUG] Program ID %d already loaded\n", programId);
     return true;
   }
-  return loadSpecificProgram(programId);
+  Serial.printf("[DEBUG] Program ID %d not loaded, attempting to load...\n", programId);
+  bool result = loadSpecificProgram(programId);
+  Serial.printf("[DEBUG] loadSpecificProgram returned: %s\n", result ? "true" : "false");
+  return result;
 }
 
 // --- Helper functions for legacy migration ---

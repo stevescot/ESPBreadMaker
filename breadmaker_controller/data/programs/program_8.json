@@ -1,0 +1,19 @@
+{
+  "id": 8,
+  "name": "Dairy - Soft Cheese",
+  "customStages": [
+    {
+      "label": "Heat Milk",
+      "min": 30,
+      "temp": 85,
+      "mixPattern": [
+        {
+          "mixSec": 20,
+          "waitSec": 280,
+          "durationSec": 300
+        }
+      ],
+      "instructions": "Add 2L milk and starter culture at the beginning of this stage. Add 1/4 tsp rennet if required. Remove curds when formed."
+    }
+  ]
+}

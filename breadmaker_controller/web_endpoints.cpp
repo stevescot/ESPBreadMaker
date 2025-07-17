@@ -5,9 +5,14 @@
 #include "programs_manager.h"
 #include "outputs_manager.h"
 #include <PID_v1.h>
-#include <ESP8266WiFi.h>
+#include <WiFi.h>
 #include "calibration.h"
 #include <LittleFS.h>
+#include "ota_manager.h"
+
+#ifdef ESP32
+#include <esp_system.h>
+#endif
 // Add other includes as needed
 
 // Performance tracking variables
@@ -78,6 +83,8 @@ void pidProfileEndpoints(AsyncWebServer& server);
 void homeAssistantEndpoint(AsyncWebServer& server);
 void calibrationEndpoints(AsyncWebServer& server);
 void fileEndPoints(AsyncWebServer& server);
+void programsEndpoints(AsyncWebServer& server);
+void otaEndpoints(AsyncWebServer& server);
 
 // Core endpoints previously in setup()
 void coreEndpoints(AsyncWebServer& server) {
@@ -106,7 +113,7 @@ void coreEndpoints(AsyncWebServer& server) {
     server.on("/api/output_mode", HTTP_GET, [](AsyncWebServerRequest* req){
         AsyncResponseStream *response = req->beginResponseStream("application/json");
         response->print("{");
-        response->printf("\"mode\":\"%s\"", (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog");
+        response->print("\"mode\":\"digital\"");
         response->print("}");
         req->send(response);
     });
@@ -114,12 +121,12 @@ void coreEndpoints(AsyncWebServer& server) {
         [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
             DynamicJsonDocument doc(128);
             if (deserializeJson(doc, data, len)) { req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); return; }
-            const char* mode = doc["mode"] | "analog";
-            outputMode = (strcmp(mode, "digital") == 0) ? OUTPUT_DIGITAL : OUTPUT_ANALOG;
+            // Always set to digital mode (analog mode removed)
+            outputMode = OUTPUT_DIGITAL;
             saveSettings();
             AsyncResponseStream *response = req->beginResponseStream("application/json");
             response->print("{");
-            response->printf("\"mode\":\"%s\"", (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog");
+            response->print("\"mode\":\"digital\"");
             response->print("}");
             req->send(response);
         }
@@ -156,6 +163,8 @@ void registerWebEndpoints(AsyncWebServer& server) {
     homeAssistantEndpoint(server);
     calibrationEndpoints(server);
     fileEndPoints(server);
+    programsEndpoints(server);
+    otaEndpoints(server);
 }
 
 // --- Move the full definitions of these functions from your .ino here ---
@@ -500,6 +509,13 @@ void stateMachineEndpoints(AsyncWebServer& server)
     if (req->hasParam("idx")) {
       int id = req->getParam("idx")->value().toInt();
       
+      if (debugSerial) {
+        Serial.printf("[DEBUG] /select called with ID %d, programMetadata size: %zu\n", id, programMetadata.size());
+        for (const auto& meta : programMetadata) {
+          Serial.printf("[DEBUG] Available program ID: %d, Name: %s\n", meta.id, meta.name.c_str());
+        }
+      }
+      
       // Check if program ID exists in metadata
       bool programExists = false;
       for (const auto& meta : programMetadata) {
@@ -510,6 +526,7 @@ void stateMachineEndpoints(AsyncWebServer& server)
       }
       
       if (programExists) {
+        if (debugSerial) Serial.printf("[DEBUG] Program ID %d exists in metadata, attempting to load...\n", id);
         // Load the specific program on-demand
         if (ensureProgramLoaded(id)) {
           programState.activeProgramId = id;
@@ -523,10 +540,12 @@ void stateMachineEndpoints(AsyncWebServer& server)
           req->send(200, "text/plain", "Selected");
           return;
         } else {
+          if (debugSerial) Serial.printf("[ERROR] Failed to load program ID %d\n", id);
           req->send(500, "text/plain", "Failed to load program");
           return;
         }
       }
+      if (debugSerial) Serial.printf("[ERROR] Program ID %d not found in metadata\n", id);
       req->send(400, "text/plain", "Bad program id");
       return;
     }
@@ -1063,584 +1082,342 @@ void pidProfileEndpoints(AsyncWebServer& server)
   );
 }
 
-// --- Streaming status JSON function ---
-void streamStatusJson(Print& out) {
-  out.print("{");
-  // scheduledStart
-  out.printf("\"scheduledStart\":%lu,", (unsigned long)scheduledStart);
-  // running
-  out.printf("\"running\":%s,", programState.isRunning ? "true" : "false");
-  // program
-  if (programState.activeProgramId < getProgramCount()) {
-    out.printf("\"program\":\"%s\",", getProgramName(programState.activeProgramId).c_str());
-    out.printf("\"programId\":%u,", (unsigned)programState.activeProgramId);
-  } else {
-    out.print("\"program\":\"\",\"programId\":0,");
-  }
-  // nowMs, now
-  unsigned long nowMs = millis();
-  time_t now = time(nullptr);
-  unsigned long es = 0;
-  int stageLeft = 0;
-  time_t stageReadyAt = 0;
-  time_t programReadyAt = 0;
-  double fermentationStageTimeLeft = 0.0;
-  // stage, stageStartTimes, programStart, elapsed, stageReadyAt, programReadyAt
-  if (programState.activeProgramId < getProgramCount() && isProgramValid(programState.activeProgramId)) {
-    Program *p = getActiveProgramMutable();
-    if (p) {
-    
-    // Ensure the program stages are loaded for preview calculations
-    if (p->customStages.empty()) {
-      Serial.println("DEBUG: Program stages empty, loading program " + String(programState.activeProgramId));
-      ensureProgramLoaded(programState.activeProgramId);
-    } else {
-      Serial.println("DEBUG: Program " + String(programState.activeProgramId) + " has " + String(p->customStages.size()) + " stages");
-    }
-    
-    // Determine preview or running mode
-    bool previewMode = !programState.isRunning;
-    // Stage label
-    if (programState.isRunning && programState.customStageIdx < p->customStages.size()) {
-      out.print("\"stage\":\"");
-      out.print(p->customStages[programState.customStageIdx].label.c_str());
-      out.print("\",");
-    } else {
-      out.print("\"stage\":\"Idle\",");
-    }
-    // --- Predicted (temperature-adjusted) stage end times ---
-    out.print("\"predictedStageEndTimes\":[");
-    float actualTemp = getAveragedTemperature();
-    float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
-    float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
-    float fermentationFactorForProgram = pow(q10, (baseline - actualTemp) / 10.0);
-    // Use programStartTime if running, otherwise use now as preview start
-    unsigned long programStartUnix = (unsigned long)(programState.isRunning ? programState.programStartTime : time(nullptr));
-    double cumulativePredictedSec = 0.0;
-    for (size_t i = 0; i < p->customStages.size(); ++i) {
-      CustomStage &stage = p->customStages[i];
-      double plannedStageSec = (double)stage.min * 60.0;
-      double adjustedStageSec = plannedStageSec;
-      if (stage.isFermentation) {
-        adjustedStageSec = plannedStageSec * fermentationFactorForProgram;
-      }
-      cumulativePredictedSec += adjustedStageSec;
-      if (i > 0) out.print(",");
-      out.printf("%lu", (unsigned long)(programStartUnix + (unsigned long)(cumulativePredictedSec)));
-    }
-    out.print("],");
-    // Always report the program's fermentation factor (for display in UI)
-    fermentState.fermentationFactor = fermentationFactorForProgram;
-    // --- Predicted (temperature-adjusted) program end time ---
-    out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)(programStartUnix + (unsigned long)(cumulativePredictedSec)));
-    // --- Legacy: stageStartTimes array (now fermentation-adjusted for consistency) ---
-    out.print("\"stageStartTimes\":[");
-    time_t t = programState.isRunning ? programState.programStartTime : time(nullptr);
-    for (size_t i = 0; i < p->customStages.size(); ++i) {
-      if (i > 0) out.print(",");
-      out.printf("%lu", (unsigned long)t);
-      CustomStage &stage = p->customStages[i];
-      double plannedStageSec = (double)stage.min * 60.0;
-      double adjustedStageSec = plannedStageSec;
-      if (stage.isFermentation) {
-        adjustedStageSec = plannedStageSec * fermentationFactorForProgram;
-      }
-      t += (time_t)adjustedStageSec;
-    }
-    out.print("],");
-    out.printf("\"programStart\":%lu,", (unsigned long)programStartUnix);
-    // elapsed
-    es = (programState.customStageStart == 0) ? 0 : (nowMs - programState.customStageStart) / 1000;
-    // Calculate stageReadyAt and programReadyAt (legacy, not adjusted)
-    stageReadyAt = 0;
-    programReadyAt = 0;
-    if (programState.customStageIdx < p->customStages.size()) {
-      CustomStage &st = p->customStages[programState.customStageIdx];
-      if (st.isFermentation) {
-        // Calculate temperature-adjusted time left for fermentation stage
-        double plannedStageSec = (double)st.min * 60.0;
-        double elapsedSec = fermentState.fermentWeightedSec;
-        double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
-        elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
-        double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor);
-        if (remainSec < 0) remainSec = 0;
-        fermentationStageTimeLeft = remainSec * fermentState.fermentLastFactor;
-        stageLeft = (int)fermentationStageTimeLeft;
-      } else {
-        if (programState.actualStageStartTimes[programState.customStageIdx] > 0) {
-          // Running mode - apply fermentation factor to current stage
-          double plannedStageSec = (double)st.min * 60.0;
-          double adjustedStageSec = plannedStageSec;
-          if (st.isFermentation) {
-            adjustedStageSec = plannedStageSec * fermentationFactorForProgram;
-          }
-          stageReadyAt = programState.actualStageStartTimes[programState.customStageIdx] + (time_t)adjustedStageSec;
-        } else {
-          // Preview mode - calculate fermentation-adjusted stage ready time
-          time_t previewStart = programState.isRunning ? programState.programStartTime : time(nullptr);
-          time_t cumulativeTime = previewStart;
-          for (size_t i = 0; i <= programState.customStageIdx && i < p->customStages.size(); ++i) {
-            CustomStage &stage = p->customStages[i];
-            double plannedStageSec = (double)stage.min * 60.0;
-            double adjustedStageSec = plannedStageSec;
-            if (stage.isFermentation) {
-              adjustedStageSec = plannedStageSec * fermentationFactorForProgram;
-            }
-            cumulativeTime += (time_t)adjustedStageSec;
-          }
-          stageReadyAt = cumulativeTime;
-        }
-        
-        if (programState.actualStageStartTimes[programState.customStageIdx] > 0) {
-          unsigned long actualElapsedInStage = (millis() - programState.customStageStart) / 1000UL;
-          unsigned long plannedStageDuration = (unsigned long)p->customStages[programState.customStageIdx].min * 60UL;
-          unsigned long timeLeftInCurrentStage = (actualElapsedInStage < plannedStageDuration) ? (plannedStageDuration - actualElapsedInStage) : 0;
-          stageLeft = (int)timeLeftInCurrentStage;
-          programReadyAt = now + (time_t)timeLeftInCurrentStage;
-          for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
-            CustomStage &stage = p->customStages[i];
-            double plannedStageSec = (double)stage.min * 60.0;
-            double adjustedStageSec = plannedStageSec;
-            if (stage.isFermentation) {
-              adjustedStageSec = plannedStageSec * fermentationFactorForProgram;
-            }
-            programReadyAt += (time_t)adjustedStageSec;
-          }
-        } else {
-          // Preview mode or start of program - use fermentation-adjusted times
-          programReadyAt = programState.isRunning ? programState.programStartTime : time(nullptr);
-          for (size_t i = 0; i < p->customStages.size(); ++i) {
-            CustomStage &stage = p->customStages[i];
-            double plannedStageSec = (double)stage.min * 60.0;
-            double adjustedStageSec = plannedStageSec;
-            if (stage.isFermentation) {
-              adjustedStageSec = plannedStageSec * fermentationFactorForProgram;
-            }
-            programReadyAt += (time_t)adjustedStageSec;
-          }
-          
-          // For preview mode, calculate stage time left
-          if (!programState.isRunning && programState.customStageIdx < p->customStages.size()) {
-            CustomStage &currentStage = p->customStages[programState.customStageIdx];
-            double plannedStageSec = (double)currentStage.min * 60.0;
-            double adjustedStageSec = plannedStageSec;
-            if (currentStage.isFermentation) {
-              adjustedStageSec = plannedStageSec * fermentationFactorForProgram;
-            }
-            stageLeft = (int)adjustedStageSec;
-          }
-        }
-      }
-    }
-    }
-  } else {
-    out.print("\"stage\":\"Idle\",");
-    out.print("\"predictedStageEndTimes\":[],");
-    out.print("\"predictedProgramEnd\":0,");
-    out.print("\"stageStartTimes\":[],");
-    out.print("\"programStart\":0,");
-  }
-  out.printf("\"elapsed\":%lu,", es);
-  out.printf("\"setTemp\":%.2f,", pid.Setpoint);
-  out.printf("\"timeLeft\":%d,", stageLeft);
-  out.printf("\"stageReadyAt\":%lu,", (unsigned long)stageReadyAt);
-  out.printf("\"programReadyAt\":%lu,", (unsigned long)programReadyAt);
-  out.printf("\"temp\":%.2f,", tempAvg.averagedTemperature);
-  out.printf("\"motor\":%s,", motorState ? "true" : "false");
-  out.printf("\"light\":%s,", lightState ? "true" : "false");
-  out.printf("\"buzzer\":%s,", buzzerState ? "true" : "false");
-  out.printf("\"stageStartTime\":%lu,", (unsigned long)programState.customStageStart);
-  out.printf("\"manualMode\":%s,", programState.manualMode ? "true" : "false");
-  // PID status
-  out.printf("\"input\":%.2f,", pid.Input);
-  out.printf("\"output\":%.2f,", pid.Output * 100.0);
-  out.printf("\"pid_output\":%.6f,", pid.Output);
-  out.printf("\"kp\":%.6f,", pid.Kp);
-  out.printf("\"ki\":%.6f,", pid.Ki);
-  out.printf("\"kd\":%.6f,", pid.Kd);
-  out.printf("\"sample_time_ms\":%lu,", pid.sampleTime);
-  // startup delay
-  out.printf("\"startupDelayComplete\":%s,", isStartupDelayComplete() ? "true" : "false");
-  if (!isStartupDelayComplete()) {
-    out.printf("\"startupDelayRemainingMs\":%lu,", STARTUP_DELAY_MS - (millis() - startupTime));
-  } else {
-    out.print("\"startupDelayRemainingMs\":0,");
-  }
-  // actualStageStartTimes
-  out.print("\"actualStageStartTimes\":[");
-  for (int i = 0; i < 20; i++) {
-    if (i > 0) out.print(",");
-    out.printf("%lu", (unsigned long)programState.actualStageStartTimes[i]);
-  }
-  out.print("],");
-  // stageIdx, mixIdx, heater, buzzer
-  out.printf("\"stageIdx\":%u,", (unsigned)programState.customStageIdx);
-  out.printf("\"mixIdx\":%u,", (unsigned)programState.customMixIdx);
-  out.printf("\"heater\":%s,", heaterState ? "true" : "false");
-  out.printf("\"buzzer\":%s,", buzzerState ? "true" : "false");
-  // fermentation info
-  out.printf("\"fermentationFactor\":%.2f,", fermentState.fermentationFactor);
-  out.printf("\"predictedCompleteTime\":%lu,", (unsigned long)fermentState.predictedCompleteTime);
-  // Also update programReadyAt to match predictedCompleteTime if running
-  if (programState.isRunning) {
-    out.printf("\"programReadyAt\":%lu,", (unsigned long)fermentState.predictedCompleteTime);
-  }
-  // --- WiFi signal strength ---
-  out.printf("\"wifiRssi\":%d,", WiFi.RSSI());
-  out.printf("\"wifiConnected\":%s,", (WiFi.status() == WL_CONNECTED) ? "true" : "false");
-  out.printf("\"initialFermentTemp\":%.2f", fermentState.initialFermentTemp);
-  out.print("}");
-}
-
-void homeAssistantEndpoint(AsyncWebServer& server)
-{
-  // --- Home Assistant integration endpoint (matches template configuration.yaml) ---
-  server.on("/ha", HTTP_GET, [](AsyncWebServerRequest* req){
-    unsigned long now = millis();
-    
-    // Check if we can use cached values
-    if (now - lastHaUpdate < HA_CACHE_MS) {
-      // Return cached basic state values without expensive calculations
-      AsyncResponseStream *response = req->beginResponseStream("application/json");
-      response->print("{");
-      response->printf("\"state\":\"%s\",", programState.isRunning ? "running" : "idle");
-      response->printf("\"temperature\":%.1f,", tempAvg.averagedTemperature);
-      response->printf("\"setpoint\":%.1f,", pid.Setpoint);
-      response->printf("\"motor\":%s,", outputStates.motor ? "true" : "false");
-      response->printf("\"light\":%s,", outputStates.light ? "true" : "false");
-      response->printf("\"buzzer\":%s,", outputStates.buzzer ? "true" : "false");
-      response->printf("\"heater\":%s,", outputStates.heater ? "true" : "false");
-      response->printf("\"manual_mode\":%s,", programState.manualMode ? "true" : "false");
-      response->printf("\"cached\":true");
-      response->print("}");
-      req->send(response);
-      return;
-    }
-    
-    // Update cache timestamp and return full detailed response
-    lastHaUpdate = now;
-    
+// Programs management endpoints - bridge between programs editor and hybrid system
+void programsEndpoints(AsyncWebServer& server) {
+  // Legacy programs.json endpoint - synthesizes a single JSON from all program files
+  server.on("/programs.json", HTTP_GET, [](AsyncWebServerRequest* req){
     AsyncResponseStream *response = req->beginResponseStream("application/json");
-    response->print("{");
+    response->print("[");
     
-    // Basic status - matches template expectations
-    response->printf("\"state\":\"%s\",", programState.isRunning ? "running" : "idle");
-    response->printf("\"temperature\":%.1f,", tempAvg.averagedTemperature);
-    response->printf("\"setpoint\":%.1f,", pid.Setpoint);
-    
-    // Output states (direct boolean values as expected)
-    response->printf("\"motor\":%s,", outputStates.motor ? "true" : "false");
-    response->printf("\"light\":%s,", outputStates.light ? "true" : "false");
-    response->printf("\"buzzer\":%s,", outputStates.buzzer ? "true" : "false");
-    response->printf("\"heater\":%s,", outputStates.heater ? "true" : "false");
-    response->printf("\"manual_mode\":%s,", programState.manualMode ? "true" : "false");
-    
-    // Program and stage info
-    if (programState.activeProgramId < getProgramCount()) {
-      response->printf("\"program\":\"%s\",", getProgramName(programState.activeProgramId).c_str());
+    bool first = true;
+    for (const auto& meta : programMetadata) {
+      if (!first) response->print(",");
+      first = false;
       
-      Program *p = getActiveProgramMutable();
-      if (programState.isRunning && p && programState.customStageIdx < p->customStages.size()) {
-        response->printf("\"stage\":\"%s\",", p->customStages[programState.customStageIdx].label.c_str());
-        
-        // Calculate stage time left in minutes (as expected by template)
-        unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-        int stageTimeMin = p->customStages[programState.customStageIdx].min;
-        int timeLeftMin = stageTimeMin - (elapsed / 60);
-        if (timeLeftMin < 0) timeLeftMin = 0;
-        response->printf("\"stage_time_left\":%d,", timeLeftMin);
-      } else {
-        response->print("\"stage\":\"Idle\",");
-        response->print("\"stage_time_left\":0,");
-      }
-    } else {
-      response->print("\"program\":\"\",");
-      response->print("\"stage\":\"Idle\",");
-      response->print("\"stage_time_left\":0,");
-    }
-    
-    // Timing information (Unix timestamps as expected)
-    time_t currentTime = time(nullptr);
-    time_t stageReadyAt = 0;
-    time_t programReadyAt = 0;
-    
-    if (programState.isRunning && programState.activeProgramId < getProgramCount()) {
-      Program *p = getActiveProgramMutable();
-      if (p && programState.customStageIdx < p->customStages.size()) {
-        unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-        int stageTimeMin = p->customStages[programState.customStageIdx].min;
-        int timeLeftSec = (stageTimeMin * 60) - elapsed;
-        if (timeLeftSec < 0) timeLeftSec = 0;
-        
-        stageReadyAt = currentTime + timeLeftSec;
-        
-        // Calculate total program time remaining
-        programReadyAt = stageReadyAt;
-        for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
-          programReadyAt += p->customStages[i].min * 60;
+      // Load the specific program data
+      String programFileName = "/programs/program_" + String(meta.id) + ".json";
+      File f = LittleFS.open(programFileName, "r");
+      if (f && f.size() > 0) {
+        // Stream the program JSON directly
+        while (f.available()) {
+          response->write(f.read());
         }
+        f.close();
+      } else {
+        // Fallback: create minimal program structure from metadata
+        response->printf("{\"id\":%d,\"name\":\"%s\",\"notes\":\"%s\",\"icon\":\"%s\",\"fermentBaselineTemp\":%.1f,\"fermentQ10\":%.1f,\"customStages\":[]}",
+                        meta.id, meta.name.c_str(), meta.notes.c_str(), meta.icon.c_str(), meta.fermentBaselineTemp, meta.fermentQ10);
       }
     }
     
-    response->printf("\"stage_ready_at\":%lu,", (unsigned long)stageReadyAt);
-    response->printf("\"program_ready_at\":%lu,", (unsigned long)programReadyAt);
-    
-    // Health section (comprehensive system information as expected by template)
-    response->print("\"health\":{");
-    
-    // System info
-    response->printf("\"uptime_sec\":%lu,", millis() / 1000);
-    response->printf("\"firmware_version\":\"%s\",", FIRMWARE_BUILD_DATE);
-    response->printf("\"build_date\":\"%s\",", FIRMWARE_BUILD_DATE);
-    response->printf("\"reset_reason\":\"%s\",", ESP.getResetReason().c_str());
-    response->printf("\"chip_id\":\"%08X\",", ESP.getChipId());
-    
-    // Memory information
-    response->print("\"memory\":{");
-    response->printf("\"free_heap\":%u,", ESP.getFreeHeap());
-    response->printf("\"max_free_block\":%u,", ESP.getMaxFreeBlockSize());
-    response->printf("\"min_free_heap\":%lu,", minFreeHeap == 0xFFFFFFFF ? ESP.getFreeHeap() : minFreeHeap);
-    response->printf("\"fragmentation\":%.1f", (ESP.getHeapFragmentation()));
-    response->print("},");
-    
-    // Performance information (real-time tracking)
-    response->print("\"performance\":{");
-    
-    // Calculate CPU usage estimate and average loop time
-    float avgLoopTime = loopCount > 0 ? (float)totalLoopTime / loopCount : 0.0;
-    float cpuUsage = avgLoopTime > 0 ? (avgLoopTime / 1000.0) * 100.0 : 0.0; // Rough CPU usage estimation
-    if (cpuUsage > 100.0) cpuUsage = 100.0;
-    
-    response->printf("\"cpu_usage\":%.2f,", cpuUsage);
-    response->printf("\"avg_loop_time_us\":%.0f,", avgLoopTime);
-    response->printf("\"max_loop_time_us\":%lu,", maxLoopTime);
-    response->printf("\"loop_count\":%lu", loopCount);
-    response->print("},");
-    
-    // Network information
-    response->print("\"network\":{");
-    response->printf("\"connected\":%s,", (WiFi.status() == WL_CONNECTED) ? "true" : "false");
-    response->printf("\"rssi\":%d,", WiFi.RSSI());
-    response->print("\"reconnect_count\":");
-    response->print(wifiReconnectCount);
-    response->print(",");
-    response->printf("\"ip\":\"%s\"", WiFi.localIP().toString().c_str());
-    response->print("},");
-    
-    // Filesystem information
-    response->print("\"filesystem\":{");
-    FSInfo fsInfo;
-    LittleFS.info(fsInfo);
-    response->printf("\"usedBytes\":%u,", fsInfo.usedBytes);
-    response->printf("\"totalBytes\":%u", fsInfo.totalBytes);
-    response->print("}");
-    
-    response->print("}"); // Close health section
-    response->print("}"); // Close main JSON
-    req->send(response);
-  });
-}
-
-// --- Calibration endpoints ---
-void calibrationEndpoints(AsyncWebServer& server) {
-  // Temperature calibration endpoints
-  server.on("/api/calibration", HTTP_GET, [](AsyncWebServerRequest* req){
-    AsyncResponseStream *response = req->beginResponseStream("application/json");
-    response->print("{");
-    response->printf("\"raw\":%d,", analogRead(A0));  // Current raw RTD reading
-    response->printf("\"temp\":%.2f,", readTemperature());  // Current calibrated temperature
-    response->print("\"table\":[");
-    for (size_t i = 0; i < rtdCalibTable.size(); ++i) {
-      if (i > 0) response->print(",");
-      response->printf("{\"raw\":%d,\"temp\":%.2f}", rtdCalibTable[i].raw, rtdCalibTable[i].temp);
-    }
-    response->print("]}");
+    response->print("]");
     req->send(response);
   });
   
-  server.on("/api/calibration", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
-    [](AsyncWebServerRequest* req, uint8_t *data, size_t len, size_t, size_t){
-      DynamicJsonDocument doc(2048);
+  // Save programs.json - splits into individual program files and updates index
+  server.on("/programs.json", HTTP_POST, [](AsyncWebServerRequest* req){
+    req->send(200, "application/json", "{\"status\":\"saved\"}");
+  }, NULL, [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+    DynamicJsonDocument doc(32768); // 32KB buffer for all programs
+    DeserializationError error = deserializeJson(doc, data, len);
+    
+    if (error) {
+      req->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+      return;
+    }
+    
+    // Clear existing program files
+    for (const auto& meta : programMetadata) {
+      String programFileName = "/programs/program_" + String(meta.id) + ".json";
+      LittleFS.remove(programFileName);
+    }
+    
+    // Clear metadata
+    programMetadata.clear();
+    
+    // Process each program in the array
+    JsonArray programsArray = doc.as<JsonArray>();
+    for (JsonObject prog : programsArray) {
+      int id = prog["id"];
+      String name = prog["name"].as<String>();
+      
+      // Create individual program file
+      String programFileName = "/programs/program_" + String(id) + ".json";
+      File f = LittleFS.open(programFileName, "w");
+      if (f) {
+        serializeJson(prog, f);
+        f.close();
+      }
+      
+      // Update metadata
+      ProgramMetadata meta;
+      meta.id = id;
+      meta.name = name;
+      meta.notes = prog["notes"] | String("");
+      meta.icon = prog["icon"] | String("");
+      meta.fermentBaselineTemp = prog["fermentBaselineTemp"] | 20.0f;
+      meta.fermentQ10 = prog["fermentQ10"] | 2.0f;
+      
+      // Count stages
+      if (prog.containsKey("customStages")) {
+        meta.stageCount = prog["customStages"].size();
+      }
+      
+      programMetadata.push_back(meta);
+    }
+    
+    // Update programs index
+    File indexFile = LittleFS.open("/programs_index.json", "w");
+    if (indexFile) {
+      indexFile.print("[");
+      for (size_t i = 0; i < programMetadata.size(); ++i) {
+        if (i > 0) indexFile.print(",");
+        indexFile.printf("{\"id\":%d,\"name\":\"%s\",\"notes\":\"%s\",\"icon\":\"%s\",\"fermentBaselineTemp\":%.1f,\"fermentQ10\":%.1f}",
+                        programMetadata[i].id, programMetadata[i].name.c_str(), programMetadata[i].notes.c_str(), 
+                        programMetadata[i].icon.c_str(), programMetadata[i].fermentBaselineTemp, programMetadata[i].fermentQ10);
+      }
+      indexFile.print("]");
+      indexFile.close();
+    }
+    
+    Serial.printf("[PROGRAMS] Saved %zu programs to individual files\n", programMetadata.size());
+  });
+  
+  // Get individual program by ID
+  server.on("/api/programs", HTTP_GET, [](AsyncWebServerRequest* req){
+    if (!req->hasParam("id")) {
+      // Return programs list (metadata only)
+      AsyncResponseStream *response = req->beginResponseStream("application/json");
+      response->print("[");
+      for (size_t i = 0; i < programMetadata.size(); ++i) {
+        if (i > 0) response->print(",");
+        response->printf("{\"id\":%d,\"name\":\"%s\",\"notes\":\"%s\",\"icon\":\"%s\",\"fermentBaselineTemp\":%.1f,\"fermentQ10\":%.1f,\"stageCount\":%zu}",
+                        programMetadata[i].id, programMetadata[i].name.c_str(), programMetadata[i].notes.c_str(), 
+                        programMetadata[i].icon.c_str(), programMetadata[i].fermentBaselineTemp, programMetadata[i].fermentQ10, programMetadata[i].stageCount);
+      }
+      response->print("]");
+      req->send(response);
+    } else {
+      // Return specific program
+      int id = req->getParam("id")->value().toInt();
+      String programFileName = "/programs/program_" + String(id) + ".json";
+      req->send(LittleFS, programFileName, "application/json");
+    }
+  });
+  
+  // Save individual program
+  server.on("/api/programs", HTTP_POST, [](AsyncWebServerRequest* req){
+    req->send(200, "application/json", "{\"status\":\"saved\"}");
+  }, NULL, [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+    DynamicJsonDocument doc(8192); // 8KB buffer for single program
+    DeserializationError error = deserializeJson(doc, data, len);
+    
+    if (error) {
+      req->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+      return;
+    }
+    
+    int id = doc["id"];
+    String name = doc["name"].as<String>();
+    
+    // Save individual program file
+    String programFileName = "/programs/program_" + String(id) + ".json";
+    File f = LittleFS.open(programFileName, "w");
+    if (f) {
+      serializeJson(doc, f);
+      f.close();
+    }
+    
+    // Update metadata
+    bool found = false;
+    for (auto& meta : programMetadata) {
+      if (meta.id == id) {
+        meta.name = name;
+        meta.notes = doc["notes"] | String("");
+        meta.icon = doc["icon"] | String("");
+        meta.fermentBaselineTemp = doc["fermentBaselineTemp"] | 20.0f;
+        meta.fermentQ10 = doc["fermentQ10"] | 2.0f;
+        if (doc.containsKey("customStages")) {
+          meta.stageCount = doc["customStages"].size();
+        }
+        found = true;
+        break;
+      }
+    }
+    
+    if (!found) {
+      // Add new program metadata
+      ProgramMetadata meta;
+      meta.id = id;
+      meta.name = name;
+      meta.notes = doc["notes"] | String("");
+      meta.icon = doc["icon"] | String("");
+      meta.fermentBaselineTemp = doc["fermentBaselineTemp"] | 20.0f;
+      meta.fermentQ10 = doc["fermentQ10"] | 2.0f;
+      if (doc.containsKey("customStages")) {
+        meta.stageCount = doc["customStages"].size();
+      }
+      programMetadata.push_back(meta);
+    }
+    
+    // Update programs index
+    File indexFile = LittleFS.open("/programs_index.json", "w");
+    if (indexFile) {
+      indexFile.print("[");
+      for (size_t i = 0; i < programMetadata.size(); ++i) {
+        if (i > 0) indexFile.print(",");
+        indexFile.printf("{\"id\":%d,\"name\":\"%s\",\"notes\":\"%s\",\"icon\":\"%s\",\"fermentBaselineTemp\":%.1f,\"fermentQ10\":%.1f}",
+                        programMetadata[i].id, programMetadata[i].name.c_str(), programMetadata[i].notes.c_str(), 
+                        programMetadata[i].icon.c_str(), programMetadata[i].fermentBaselineTemp, programMetadata[i].fermentQ10);
+      }
+      indexFile.print("]");
+      indexFile.close();
+    }
+    
+    Serial.printf("[PROGRAMS] Saved program %d: %s\n", id, name.c_str());
+  });
+  
+  // Delete program
+  server.on("/api/programs", HTTP_DELETE, [](AsyncWebServerRequest* req){
+    if (!req->hasParam("id")) {
+      req->send(400, "application/json", "{\"error\":\"Missing id parameter\"}");
+      return;
+    }
+    
+    int id = req->getParam("id")->value().toInt();
+    
+    // Delete program file
+    String programFileName = "/programs/program_" + String(id) + ".json";
+    if (LittleFS.remove(programFileName)) {
+      // Remove from metadata
+      for (auto it = programMetadata.begin(); it != programMetadata.end(); ++it) {
+        if (it->id == id) {
+          programMetadata.erase(it);
+          break;
+        }
+      }
+      
+      // Update programs index
+      File indexFile = LittleFS.open("/programs_index.json", "w");
+      if (indexFile) {
+        indexFile.print("[");
+        for (size_t i = 0; i < programMetadata.size(); ++i) {
+          if (i > 0) indexFile.print(",");
+          indexFile.printf("{\"id\":%d,\"name\":\"%s\",\"notes\":\"%s\",\"icon\":\"%s\",\"fermentBaselineTemp\":%.1f,\"fermentQ10\":%.1f}",
+                          programMetadata[i].id, programMetadata[i].name.c_str(), programMetadata[i].notes.c_str(), 
+                          programMetadata[i].icon.c_str(), programMetadata[i].fermentBaselineTemp, programMetadata[i].fermentQ10);
+        }
+        indexFile.print("]");
+        indexFile.close();
+      }
+      
+      Serial.printf("[PROGRAMS] Deleted program %d\n", id);
+      req->send(200, "application/json", "{\"status\":\"deleted\"}");
+    } else {
+      req->send(404, "application/json", "{\"error\":\"Program not found\"}");
+    }
+  });
+}
+
+// OTA endpoints for web interface management
+void otaEndpoints(AsyncWebServer& server) {
+  // OTA status endpoint
+  server.on("/api/ota/status", HTTP_GET, [](AsyncWebServerRequest* req){
+    AsyncResponseStream *response = req->beginResponseStream("application/json");
+    response->print("{");
+    response->printf("\"enabled\":%s,", otaStatus.enabled ? "true" : "false");
+    response->printf("\"inProgress\":%s,", otaStatus.inProgress ? "true" : "false");
+    response->printf("\"progress\":%d,", otaStatus.progress);
+    response->printf("\"hostname\":\"%s\",", otaStatus.hostname.c_str());
+    if (otaStatus.error.length() > 0) {
+      response->printf("\"error\":\"%s\",", otaStatus.error.c_str());
+    } else {
+      response->print("\"error\":null,");
+    }
+    response->printf("\"wifiConnected\":%s", WiFi.status() == WL_CONNECTED ? "true" : "false");
+    response->print("}");
+    req->send(response);
+  });
+  
+  // Enable/disable OTA
+  server.on("/api/ota/enable", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+      DynamicJsonDocument doc(256);
       if (deserializeJson(doc, data, len)) { 
         req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); 
         return; 
       }
       
-      rtdCalibTable.clear();
-      for (JsonObject pt : doc["table"].as<JsonArray>()) {
-        CalibPoint p = { pt["raw"], pt["temp"] };
-        rtdCalibTable.push_back(p);
+      if (doc.containsKey("enabled")) {
+        enableOTA(doc["enabled"]);
+        saveSettings();
+        req->send(200, "application/json", "{\"status\":\"OTA setting updated\"}");
+      } else {
+        req->send(400, "application/json", "{\"error\":\"Missing enabled field\"}");
       }
-      saveCalibration();
-      req->send(200, "application/json", "{\"status\":\"saved\"}");
     }
   );
-}
-
-// --- File management endpoints ---
-void fileEndPoints(AsyncWebServer& server) {
-  // Serve static files from LittleFS
-  server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
   
-  // File upload endpoint
-  server.on("/api/upload", HTTP_POST, [](AsyncWebServerRequest* req){
-    req->send(200, "application/json", "{\"status\":\"upload_complete\"}");
-  }, [](AsyncWebServerRequest* req, String filename, size_t index, uint8_t *data, size_t len, bool final){
-    static File uploadFile;
-    static String uploadPath;
-    
-    if (index == 0) {
-      // Start of upload - create file
-      String folder = "/";
-      if (req->hasParam("folder", true)) {
-        folder = req->getParam("folder", true)->value();
-        if (!folder.startsWith("/")) folder = "/" + folder;
-        if (!folder.endsWith("/")) folder += "/";
+  // Set OTA password
+  server.on("/api/ota/password", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+      DynamicJsonDocument doc(256);
+      if (deserializeJson(doc, data, len)) { 
+        req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); 
+        return; 
       }
       
-      uploadPath = folder + filename;
-      Serial.printf("Starting upload: %s\n", uploadPath.c_str());
-      
-      // Ensure directory structure exists by creating any missing parent directories
-      String dir = uploadPath.substring(0, uploadPath.lastIndexOf('/'));
-      if (dir.length() > 1) {
-        // Create directory structure by creating a dummy file and removing it
-        String dummyFile = dir + "/.dummy";
-        File tempFile = LittleFS.open(dummyFile, "w");
-        if (tempFile) {
-          tempFile.close();
-          LittleFS.remove(dummyFile);
+      if (doc.containsKey("password")) {
+        String password = doc["password"].as<String>();
+        if (password.length() >= 8) {
+          setOTAPassword(password);
+          saveSettings();
+          req->send(200, "application/json", "{\"status\":\"OTA password updated\"}");
+        } else {
+          req->send(400, "application/json", "{\"error\":\"Password must be at least 8 characters\"}");
         }
+      } else {
+        req->send(400, "application/json", "{\"error\":\"Missing password field\"}");
+      }
+    }
+  );
+  
+  // Set OTA hostname
+  server.on("/api/ota/hostname", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL,
+    [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t){
+      DynamicJsonDocument doc(256);
+      if (deserializeJson(doc, data, len)) { 
+        req->send(400, "application/json", "{\"error\":\"Bad JSON\"}"); 
+        return; 
       }
       
-      uploadFile = LittleFS.open(uploadPath, "w");
-      if (!uploadFile) {
-        Serial.printf("Failed to create file: %s\n", uploadPath.c_str());
-        return;
+      if (doc.containsKey("hostname")) {
+        String hostname = doc["hostname"].as<String>();
+        if (hostname.length() > 0 && hostname.length() <= 32) {
+          setOTAHostname(hostname);
+          saveSettings();
+          req->send(200, "application/json", "{\"status\":\"OTA hostname updated\"}");
+        } else {
+          req->send(400, "application/json", "{\"error\":\"Hostname must be 1-32 characters\"}");
+        }
+      } else {
+        req->send(400, "application/json", "{\"error\":\"Missing hostname field\"}");
       }
     }
-    
-    // Write data chunk
-    if (len) {
-      uploadFile.write(data, len);
-    }
-    
-    if (final) {
-      // End of upload - close file
-      uploadFile.close();
-      Serial.printf("Upload complete: %s (%d bytes)\n", uploadPath.c_str(), index + len);
-    }
-  });
-
-  // Enhanced file listing with folder support
-  server.on("/api/files", HTTP_GET, [](AsyncWebServerRequest* req){
-    String folder = "/";
-    if (req->hasParam("folder")) {
-      folder = req->getParam("folder")->value();
-      if (!folder.startsWith("/")) folder = "/" + folder;
-      if (!folder.endsWith("/")) folder += "/";
-    }
-    
+  );
+  
+  // OTA information endpoint
+  server.on("/api/ota/info", HTTP_GET, [](AsyncWebServerRequest* req){
     AsyncResponseStream *response = req->beginResponseStream("application/json");
-    response->print("{\"folders\":[");
-    
-    // List directories first
-    Dir dir = LittleFS.openDir(folder);
-    bool firstFolder = true;
-    while (dir.next()) {
-      if (dir.isDirectory()) {
-        if (!firstFolder) response->print(",");
-        firstFolder = false;
-        response->printf("\"%s\"", dir.fileName().c_str());
-      }
-    }
-    
-    response->print("],\"files\":[");
-    
-    // List files
-    dir = LittleFS.openDir(folder);
-    bool firstFile = true;
-    while (dir.next()) {
-      if (dir.isFile()) {
-        if (!firstFile) response->print(",");
-        firstFile = false;
-        response->printf("{\"name\":\"%s\",\"size\":%u}", dir.fileName().c_str(), dir.fileSize());
-      }
-    }
-    
-    response->print("]}");
+    response->print("{");
+    response->printf("\"instructions\":\"Use Arduino IDE or PlatformIO to upload firmware via OTA\",");
+    response->printf("\"hostname\":\"%s\",", otaStatus.hostname.c_str());
+    response->printf("\"ip\":\"%s\",", WiFi.localIP().toString().c_str());
+    response->printf("\"port\":3232,");
+    response->print("\"requirements\":\"Password required for uploads\",");
+    response->print("\"compatible\":\"Arduino IDE 1.8.13+ or PlatformIO\"");
+    response->print("}");
     req->send(response);
-  });
-
-  // File delete endpoint (enhanced for folder support)
-  server.on("/api/delete", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL, [](AsyncWebServerRequest* req, uint8_t *data, size_t len, size_t index, size_t total){
-    DynamicJsonDocument doc(1024);
-    deserializeJson(doc, (char*)data);
-    
-    String filename = doc["filename"];
-    String folder = doc["folder"] | "/";
-    
-    if (!folder.endsWith("/")) folder += "/";
-          String fullPath = folder + filename;
-    
-    if (LittleFS.remove(fullPath)) {
-      req->send(200, "application/json", "{\"status\":\"deleted\"}");
-    } else {
-      req->send(404, "application/json", "{\"error\":\"File not found\"}");
-    }
-  });
-
-  // Create folder endpoint
-  server.on("/api/create_folder", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL, [](AsyncWebServerRequest* req, uint8_t *data, size_t len, size_t index, size_t total){
-    DynamicJsonDocument doc(1024);
-    deserializeJson(doc, (char*)data);
-    
-    String parent = doc["parent"] | "/";
-    String name = doc["name"];
-    
-    if (!parent.endsWith("/")) parent += "/";
-    String fullPath = parent + name;
-    
-    
-    // Create a dummy file to ensure the directory exists, then remove it
-    // This is a workaround for ESP8266 LittleFS which doesn't have true directory support
-    String dummyFile = fullPath + "/.dummy";
-    File f = LittleFS.open(dummyFile, "w");
-    if (f) {
-      f.close();
-      LittleFS.remove(dummyFile);
-      req->send(200, "application/json", "{\"status\":\"created\"}");
-    } else {
-      req->send(500, "application/json", "{\"error\":\"Failed to create folder\"}");
-    }
-  });
-
-  // Delete folder endpoint
-  server.on("/api/delete_folder", HTTP_POST, [](AsyncWebServerRequest* req){}, NULL, [](AsyncWebServerRequest* req, uint8_t *data, size_t len, size_t index, size_t total){
-    DynamicJsonDocument doc(1024);
-    deserializeJson(doc, (char*)data);
-    
-    String folder = doc["folder"] | "/";
-    String name = doc["name"];
-    
-    if (!folder.endsWith("/")) folder += "/";
-    String folderPath = folder + name + "/";
-    
-    // Delete all files in the folder (ESP8266 LittleFS doesn't have true directories)
-    Dir dir = LittleFS.openDir(folderPath);
-    bool success = true;
-    while (dir.next()) {
-      String filePath = folderPath + dir.fileName();
-      if (!LittleFS.remove(filePath)) {
-        success = false;
-      }
-    }
-    
-    if (success) {
-      req->send(200, "application/json", "{\"status\":\"deleted\"}");
-    } else {
-      req->send(500, "application/json", "{\"error\":\"Failed to delete all files in folder\"}");
-    }
   });
 }
 

@@ -1,7 +1,7 @@
 #include "wifi_manager.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
-#include <ESP8266WiFi.h>
+#include <WiFi.h>           // ESP32 WiFi library
 #include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
 

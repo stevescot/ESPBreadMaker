@@ -1,0 +1,32 @@
+{
+  "id": 14,
+  "name": "Utility - Sanitize Container",
+  "customStages": [
+    {
+      "label": "Heat",
+      "min": 10,
+      "temp": 85,
+      "mixPattern": [
+        {
+          "mixSec": 0,
+          "waitSec": 600,
+          "durationSec": 600
+        }
+      ],
+      "instructions": "Fill with water. Place clean jars or containers to be sanitized."
+    },
+    {
+      "label": "Hold",
+      "min": 10,
+      "temp": 85,
+      "mixPattern": [
+        {
+          "mixSec": 0,
+          "waitSec": 600,
+          "durationSec": 600
+        }
+      ],
+      "instructions": "Keep containers submerged. Remove carefully when done."
+    }
+  ]
+}

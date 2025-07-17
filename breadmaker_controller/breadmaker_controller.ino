@@ -1,26 +1,23 @@
-#include <functional>
-
-
-// Maximum number of program stages supported (now in globals.cpp)
-#include "globals.h"
-
-// --- Temperature safety flags ---
-bool thermalRunawayDetected = false;
-bool sensorFaultDetected = false;
-// --- Active program index (ID) now in programState ---
 /*
+ESP32 TTGO T-Display Breadmaker Controller
+==========================================
+
 FEATURES:
  - Replaces breadmaker logic board: controls motor, heater, light
  - Manual icon toggles (motor, heater, light, buzzer)
  - LittleFS for persistent storage (programs, UI)
- - Status shows stage, time left (d:h:m:s), state of outputs, temperature (RTD analog input on A0)
+ - Status shows stage, time left (d:h:m:s), state of outputs, temperature (RTD analog input)
+ - Built-in TFT display for local status and control
+ - Enhanced memory capacity for larger program collections
 
 */
 
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266mDNS.h>
-#include <LittleFS.h>
+#include <functional>       // For std::function
+#include <WiFi.h>          // ESP32 WiFi library
+#include <ESPmDNS.h>       // ESP32 mDNS library
+#include <ArduinoOTA.h>    // ESP32 OTA updates
+#include <LittleFS.h>      // ESP32 LittleFS support
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <PID_v1.h>
@@ -29,11 +26,16 @@ FEATURES:
 #include <time.h>
 #include <DNSServer.h>
 #include <EEPROM.h>
+#include <TFT_eSPI.h>      // ESP32 TFT display library
+#include <SPI.h>           // SPI for display
+#include "globals.h"       // Must be included for global definitions
+#include "display_manager.h"  // TFT display management
 #include "calibration.h"
 #include "programs_manager.h"
 #include "wifi_manager.h"
 #include "outputs_manager.h"
 #include "web_endpoints.h"
+#include "ota_manager.h"   // OTA update support
 
 // --- Firmware build date ---
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
@@ -41,10 +43,17 @@ FEATURES:
 // --- Web server---
 AsyncWebServer server(80); // Main web server
 
-// --- Pin assignments ---
-// PIN_RTD now defined in globals.cpp
-// (Output pins are defined in outputs_manager.cpp)
+// --- TFT Display (TTGO T-Display) ---
+TFT_eSPI tft = TFT_eSPI();  // Create TFT instance
 
+// --- Temperature safety flags ---
+bool thermalRunawayDetected = false;
+bool sensorFaultDetected = false;
+
+// --- Pin assignments ---
+// PIN_RTD now defined in globals.h (GPIO34 for ESP32)
+// Output pins are defined in outputs_manager.cpp
+// Display pins are handled by TFT_eSPI library
 
 #define DEFAULT_KP 0.11
 #define DEFAULT_KI 0.00005
@@ -74,6 +83,9 @@ int scheduledStartStage = -1; // Stage to start at when scheduled (-1 = start fr
 unsigned long lightOnTime = 0;    // When was the light turned on?
 unsigned long buzzStart = 0;      // When was the buzzer turned on?
 bool buzzActive = false;          // Is the buzzer currently active?
+
+// --- Fermentation rate limiting ---
+unsigned long lastFermentUpdate = 0;  // Rate limiting for fermentation updates
 
 /// --- Captive portal DNS and AP ---
 DNSServer dnsServer;
@@ -121,15 +133,19 @@ void deleteFolderRecursive(const String& path) {
     if (debugSerial) Serial.printf("[deleteFolderRecursive] WARNING: Path '%s' does not exist.\n", path.c_str());
     return;
   }
-  Dir dir = LittleFS.openDir(path);
-  while (dir.next()) {
-    String filePath = path + "/" + dir.fileName();
-    if (dir.isDirectory()) {
-      deleteFolderRecursive(filePath);
-    } else {
-      if (!LittleFS.remove(filePath) && debugSerial) {
-        Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove file '%s'\n", filePath.c_str());
+  File root = LittleFS.open(path);
+  if (root && root.isDirectory()) {
+    File file = root.openNextFile();
+    while (file) {
+      String filePath = path + "/" + file.name();
+      if (file.isDirectory()) {
+        deleteFolderRecursive(filePath);
+      } else {
+        if (!LittleFS.remove(filePath) && debugSerial) {
+          Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove file '%s'\n", filePath.c_str());
+        }
       }
+      file = root.openNextFile();
     }
   }
   if (!LittleFS.rmdir(path) && debugSerial) {
@@ -260,6 +276,9 @@ void initialState(){
       if (WiFi.status() == WL_CONNECTED) {
         Serial.print(F("[wifi] Connected! IP address: "));
         Serial.println(WiFi.localIP());
+        
+        // Initialize OTA after successful WiFi connection
+        otaManagerInit();
       } else {
         Serial.println(F("[wifi] Failed to connect. Starting AP mode."));
         if (!disableHotspot) {
@@ -277,6 +296,10 @@ void initialState(){
 // configures PID and temperature averaging, and waits for NTP time sync.
 void setup() {
   initialState();
+  
+  // Initialize TFT display
+  displayManagerInit();
+  
   registerWebEndpoints(server);
 
   
@@ -525,6 +548,16 @@ void loadResumeState() {
 // Helper to reset fermentation tracking variables
 // Resets all fermentation tracking variables to initial values for a new fermentation stage.
 void resetFermentationTracking(float temp) {
+  // Add rate limiting to prevent excessive resets
+  static unsigned long lastResetTime = 0;
+  unsigned long now = millis();
+  if (now - lastResetTime < 1000) {
+    return; // Skip reset if less than 1 second since last reset
+  }
+  lastResetTime = now;
+  
+  if (debugSerial) Serial.printf("[FERMENT] Tracking reset: temp=%.1f, previous weighted=%.1fs, clearing all timers\n", temp, fermentState.fermentWeightedSec);
+  
   fermentState.initialFermentTemp = 0.0;
   fermentState.fermentationFactor = 1.0;
   fermentState.predictedCompleteTime = 0;
@@ -533,6 +566,19 @@ void resetFermentationTracking(float temp) {
   fermentState.fermentLastFactor = 1.0;
   fermentState.fermentLastUpdateMs = 0;
   fermentState.fermentWeightedSec = 0.0;
+  
+  // Reset rate limiting to allow immediate update for new stage
+  lastFermentUpdate = 0;
+  
+  if (debugSerial) Serial.printf("[FERMENT] Tracking reset complete: all variables cleared\n");
+}
+
+// Helper to reset fermentation rate limiting
+void resetFermentationRateLimit() {
+  // This function allows external code to reset the rate limiting
+  // when needed (e.g., when starting a new fermentation stage)
+  extern unsigned long lastFermentUpdate;
+  // We'll use a different approach - make the rate limiting variable global
 }
 
 // --- Helper function declarations ---
@@ -553,9 +599,22 @@ void loop() {
   updatePerformanceMetrics(); // Track performance for Home Assistant endpoint
   updateTemperatureSampling();
   updateBuzzerTone();
+  updateDisplay(); // Update TFT display
+  otaManagerLoop(); // Handle OTA updates
+  
   float temp = getAveragedTemperature();
   static bool stageJustAdvanced = false;
   static bool scheduledStartTriggered = false;
+  
+  // Rate limiting for main loop to prevent excessive CPU usage
+  static unsigned long lastMainLoopUpdate = 0;
+  unsigned long nowMs = millis();
+  if (nowMs - lastMainLoopUpdate < 50) { // 50ms for balanced CPU usage and fermentation accuracy
+    yield();
+    delay(10);
+    return;
+  }
+  lastMainLoopUpdate = nowMs;
 
   // Check and switch PID profile based on temperature
   checkAndSwitchPIDProfile();
@@ -580,16 +639,16 @@ void loop() {
     checkDelayedResume();
     handleManualMode();
     handleScheduledStart(scheduledStartTriggered);
-    yield(); delay(1); return;
+    yield(); delay(100); return;  // Increased delay for idle state
   }
   if (getProgramCount() == 0 || programState.activeProgramId >= getProgramCount()) {
     stageJustAdvanced = false;
-    stopBreadmaker(); yield(); delay(1); return;
+    stopBreadmaker(); yield(); delay(100); return;  // Increased delay for error state
   }
   handleCustomStages(stageJustAdvanced);
   temp = getAveragedTemperature();
   yield();
-  delay(1);
+  delay(100);  // Increased delay to reduce CPU load significantly
 }
 
 // --- Helper function definitions ---
@@ -603,37 +662,83 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
       if (st.isFermentation) {
         float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
         float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
-      float actualTemp = getAveragedTemperature();
-      unsigned long nowMs = millis();
-      if (fermentState.fermentLastUpdateMs == 0) {
-        fermentState.fermentLastTemp = actualTemp;
-        fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0); // Q10: factor < 1 means faster at higher temp
-        fermentState.fermentLastUpdateMs = nowMs;
-        fermentState.fermentWeightedSec = 0.0;
-      } else if (programState.isRunning) {
-        double elapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
-        fermentState.fermentWeightedSec += elapsedSec * fermentState.fermentLastFactor;
-        fermentState.fermentLastTemp = actualTemp;
-        fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
-        fermentState.fermentLastUpdateMs = nowMs;
-      }
-      fermentState.fermentationFactor = fermentState.fermentLastFactor; // For reference: multiply planned time by this factor for Q10
-      double plannedStageSec = (double)st.min * 60.0;
-      double epsilon = 0.05;
-      if (!stageJustAdvanced && (fermentState.fermentWeightedSec + epsilon >= plannedStageSec)) {
-        if (debugSerial) Serial.printf("[FERMENT] Auto-advance: weighted %.1fs >= planned %.1fs\n", fermentState.fermentWeightedSec, plannedStageSec);
-        programState.customStageIdx++;
-        programState.customStageStart = millis();
-        resetFermentationTracking(actualTemp);
-        invalidateStatusCache();
-        saveResumeState();
-        stageJustAdvanced = true;
-      }
+        float actualTemp = getAveragedTemperature();
+        unsigned long nowMs = millis();
+        
+        // Rate limiting for fermentation updates to prevent excessive processing
+        if (nowMs - lastFermentUpdate < 5000 && fermentState.fermentLastUpdateMs > 0) {
+          // Skip update if less than 5 seconds since last update
+          return;
+        }
+        lastFermentUpdate = nowMs;
+        
+        if (fermentState.fermentLastUpdateMs == 0) {
+          fermentState.fermentLastTemp = actualTemp;
+          fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0); // Q10: factor < 1 means faster at higher temp
+          fermentState.fermentLastUpdateMs = nowMs;
+          fermentState.fermentWeightedSec = 0.0;
+          if (debugSerial) Serial.printf("[FERMENT] Stage %d (%s) initialized: temp=%.1f, baseline=%.1f, q10=%.1f, factor=%.3f, planned=%.1fs (%.1f hours)\n", 
+                                        programState.customStageIdx, st.label.c_str(), actualTemp, baseline, q10, 
+                                        fermentState.fermentLastFactor, (double)st.min * 60.0, (double)st.min / 60.0);
+        } else if (programState.isRunning) {
+          // Prevent overflow: Check if millis() has wrapped around
+          if (nowMs < fermentState.fermentLastUpdateMs) {
+            if (debugSerial) Serial.println("[FERMENT] WARNING: millis() overflow detected, resetting tracking");
+            fermentState.fermentLastUpdateMs = nowMs;
+            return;
+          }
+          
+          double elapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
+          // Sanity check: prevent accumulation of unreasonably large time periods
+          if (elapsedSec > 1800.0) { // More than 30 minutes since last update
+            if (debugSerial) Serial.printf("[FERMENT] WARNING: Large time gap detected (%.1fs), capping at 1800s\n", elapsedSec);
+            elapsedSec = 1800.0;
+          }
+          
+          double previousWeightedSec = fermentState.fermentWeightedSec;
+          double incrementalWeightedSec = elapsedSec * fermentState.fermentLastFactor;
+          fermentState.fermentWeightedSec += incrementalWeightedSec;
+          fermentState.fermentLastTemp = actualTemp;
+          fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
+          fermentState.fermentLastUpdateMs = nowMs;
+          
+          // Enhanced debug output with detailed accumulation info
+          if (debugSerial) {
+            Serial.printf("[FERMENT] Stage %d (%s) update: real_elapsed=%.1fs, factor=%.3f, increment=%.1fs, weighted=%.1fs->%.1fs (%.1f%% complete), temp=%.1f, target=%.1fs (%.1f hours)\n", 
+                         programState.customStageIdx, st.label.c_str(), elapsedSec, fermentState.fermentLastFactor, 
+                         incrementalWeightedSec, previousWeightedSec, fermentState.fermentWeightedSec, 
+                         (fermentState.fermentWeightedSec / ((double)st.min * 60.0)) * 100.0, 
+                         actualTemp, (double)st.min * 60.0, (double)st.min / 60.0);
+          }
+        }
+        fermentState.fermentationFactor = fermentState.fermentLastFactor; // For reference: multiply planned time by this factor for Q10
+        double plannedStageSec = (double)st.min * 60.0;
+        double epsilon = 0.05;
+        if (!stageJustAdvanced && (fermentState.fermentWeightedSec + epsilon >= plannedStageSec)) {
+          if (debugSerial) Serial.printf("[FERMENT] Auto-advance: Stage %d (%s) COMPLETE - weighted %.1fs >= planned %.1fs (%.1f%% complete, %.1f hours actual)\n", 
+                                        programState.customStageIdx, st.label.c_str(), fermentState.fermentWeightedSec, plannedStageSec, 
+                                        (fermentState.fermentWeightedSec / plannedStageSec) * 100.0, fermentState.fermentWeightedSec / 3600.0);
+          programState.customStageIdx++;
+          programState.customStageStart = millis();
+          
+          // Optimize fermentation stage transition: batch operations and add yield points
+          yield(); // Allow other tasks to run
+          resetFermentationTracking(actualTemp);
+          yield(); // Allow other tasks to run
+          invalidateStatusCache();
+          yield(); // Allow other tasks to run
+          saveResumeState();
+          yield(); // Allow other tasks to run
+          
+          stageJustAdvanced = true;
+        }
       } else {
-        resetFermentationTracking(getAveragedTemperature());
+        // Don't continuously reset fermentation tracking for non-fermentation stages
+        // This was causing continuous loop in debug output
       }
     } else {
-      resetFermentationTracking(getAveragedTemperature());
+      // Don't continuously reset fermentation tracking when no valid stage
+      // This was causing continuous loop in debug output
     }
   } else {
     stageJustAdvanced = false;
@@ -741,11 +846,22 @@ void handleCustomStages(bool &stageJustAdvanced) {
   CustomStage &st = p->customStages[programState.customStageIdx];
     pid.Setpoint = st.temp;
     pid.Input = getAveragedTemperature();
+    
+    // Track fermentation stage transitions to prevent continuous reset calls
+    static bool wasLastStageFermentation = false;
+    
     if (st.isFermentation) {
       // Already handled at top of loop
     } else {
-      resetFermentationTracking(getAveragedTemperature());
+      // Only reset fermentation tracking once when entering a non-fermentation stage
+      if (wasLastStageFermentation) {
+        resetFermentationTracking(getAveragedTemperature());
+        wasLastStageFermentation = false;
+      }
     }
+    
+    // Update tracking flag for next iteration
+    wasLastStageFermentation = st.isFermentation;
     if (fermentState.lastFermentAdjust == 0 || millis() - fermentState.lastFermentAdjust > 600000) {
       fermentState.lastFermentAdjust = millis();
       unsigned long nowMs = millis();
@@ -939,14 +1055,18 @@ void handleCustomStages(bool &stageJustAdvanced) {
     } else {
       // Safety for fermentation stages: if real time is way beyond expected (4x), force advance
       unsigned long elapsedMs = millis() - programState.customStageStart;
-      // Prevent overflow: limit calculation and use safe max time
-      unsigned long safeMin = (st.min > 17) ? 17 : st.min; // 17 * 4 * 60000 = max safe value
-      if (st.min > 17 && debugSerial) {
-        Serial.printf("[WARN] Fermentation stage %u minutes too long for 4x safety calc, using 17 min limit\n", st.min);
+      // Safety limit: allow up to 4x the planned stage duration
+      unsigned long maxStageMs = (unsigned long)st.min * 60000UL * 4; // 4x expected time as safety limit
+      // For very long stages, cap at 24 hours (1440 minutes) to prevent overflow
+      if (st.min > 360) { // If stage is > 6 hours, cap safety at 24 hours
+        maxStageMs = 1440UL * 60000UL; // 24 hours maximum
+        if (debugSerial) {
+          Serial.printf("[WARN] Fermentation stage %u minutes is very long, capping safety timeout at 24 hours\n", st.min);
+        }
       }
-      unsigned long maxStageMs = safeMin * 60000UL * 4; // 4x expected time as safety limit
       if (maxStageMs > 0 && elapsedMs > maxStageMs && !stageComplete) {
-        if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of stuck fermentation stage %d after %lu minutes (4x limit reached)\n", (int)programState.customStageIdx, elapsedMs / 60000UL);
+        if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of stuck fermentation stage %d after %lu minutes (4x limit reached: %lu min planned, %lu min safety limit)\n", 
+                                      (int)programState.customStageIdx, elapsedMs / 60000UL, (unsigned long)st.min, maxStageMs / 60000UL);
         stageComplete = true;
         // Reset fermentation tracking to prevent issues in next stage
         resetFermentationTracking(getAveragedTemperature());
@@ -970,12 +1090,20 @@ void handleCustomStages(bool &stageJustAdvanced) {
       programState.customStageStart = millis();
       programState.customMixIdx = 0;
       programState.customMixStepStart = 0;
+      
+      // Optimize stage transition: batch operations and add yield points
+      yield(); // Allow other tasks to run
       saveResumeState();
+      yield(); // Allow other tasks to run
+      invalidateStatusCache();
+      yield(); // Allow other tasks to run
+      
       stageJustAdvanced = true;
       if (debugSerial) Serial.printf("[ADVANCE] Stage advanced to %d\n", programState.customStageIdx);
-      getAveragedTemperature();
+      
+      // Reduce CPU load during transition
       yield();
-      delay(1);
+      delay(50); // Increased delay to reduce CPU spike
       return;
     } else {
       yield();
@@ -1286,8 +1414,8 @@ void loadSettings() {
     debugSerial = true;
     return;
   }
-  const char* mode = doc["outputMode"] | "analog";
-  outputMode = (strcmp(mode, "digital") == 0) ? OUTPUT_DIGITAL : OUTPUT_ANALOG;
+  const char* mode = doc["outputMode"] | "digital";
+  outputMode = OUTPUT_DIGITAL;  // Always digital mode (analog removed)
   debugSerial = doc["debugSerial"] | true;
   
   // Load PID parameters - backward compatibility
@@ -1339,6 +1467,14 @@ void loadSettings() {
                  tempAvg.tempSampleCount, tempAvg.tempRejectCount, tempAvg.tempSampleInterval);
   }
   
+  // Load OTA settings
+  otaStatus.enabled = doc["otaEnabled"] | true;
+  otaStatus.hostname = doc["otaHostname"] | "breadmaker-controller";
+  if (debugSerial) {
+    Serial.printf("[loadSettings] OTA settings loaded: enabled=%s, hostname=%s\n", 
+                 otaStatus.enabled ? "true" : "false", otaStatus.hostname.c_str());
+  }
+  
   // Restore last selected program by ID if present, fallback to name for backward compatibility
   if (doc.containsKey("lastProgramId")) {
     int lastId = doc["lastProgramId"];
@@ -1360,7 +1496,7 @@ void loadSettings() {
     }
   }
   Serial.print("[loadSettings] outputMode loaded: ");
-  Serial.println(mode);
+  Serial.println("digital");  // Always digital mode now
   Serial.print("[loadSettings] debugSerial: ");
   Serial.println(debugSerial ? "true" : "false");
   f.close();
@@ -1379,7 +1515,7 @@ void saveSettings() {
   
   // Stream JSON directly to file - much more memory efficient than building large strings
   f.print("{\n");
-  f.printf("  \"outputMode\":\"%s\",\n", (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog");
+  f.printf("  \"outputMode\":\"%s\",\n", "digital");  // Always digital mode
   f.printf("  \"debugSerial\":%s,\n", debugSerial ? "true" : "false");
   
   if (getProgramCount() > 0) {
@@ -1408,7 +1544,13 @@ void saveSettings() {
   // Temperature averaging parameters
   f.printf("  \"tempSampleCount\":%d,\n", tempAvg.tempSampleCount);
   f.printf("  \"tempRejectCount\":%d,\n", tempAvg.tempRejectCount);
-  f.printf("  \"tempSampleInterval\":%lu\n", tempAvg.tempSampleInterval);
+  f.printf("  \"tempSampleInterval\":%lu,\n", tempAvg.tempSampleInterval);
+  
+  // OTA settings
+  f.printf("  \"otaEnabled\":%s,\n", otaStatus.enabled ? "true" : "false");
+  f.print("  \"otaHostname\":\"");
+  f.print(otaStatus.hostname);
+  f.print("\"\n");
   
   f.print("}\n");
   f.close();

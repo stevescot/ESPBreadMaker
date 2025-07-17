@@ -4,7 +4,8 @@
 constexpr int MAX_PROGRAM_STAGES = 20;
 constexpr int MAX_TEMP_SAMPLES = 50;
 constexpr unsigned long STARTUP_DELAY_MS = 15000UL;
-constexpr int PIN_RTD = A0;
+// ESP32 TTGO T-Display analog pin for RTD temperature sensor
+constexpr int PIN_RTD = 34;  // ADC1_CH6 - good for analog input, no DAC interference
 
 // --- Fermentation tracking state struct ---
 typedef struct {

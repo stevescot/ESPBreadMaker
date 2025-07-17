@@ -1,0 +1,60 @@
+{
+  "id": 19,
+  "name": "TEST - Fermentation Only",
+  "fermentBaselineTemp": 20,
+  "fermentQ10": 2,
+  "customStages": [
+    {
+      "label": "Initial Rest",
+      "min": 1,
+      "temp": 0,
+      "noMix": true,
+      "instructions": "1-minute initial rest stage (non-fermentation) to start the test."
+    },
+    {
+      "label": "Short Ferment Test",
+      "min": 5,
+      "temp": 25,
+      "noMix": true,
+      "isFermentation": true,
+      "instructions": "5-minute fermentation test stage to verify Q10 timing logic."
+    },
+    {
+      "label": "Mid Rest",
+      "min": 2,
+      "temp": 0,
+      "noMix": true,
+      "instructions": "2-minute mid rest stage (non-fermentation) between fermentation tests."
+    },
+    {
+      "label": "Medium Ferment Test",
+      "min": 10,
+      "temp": 25,
+      "noMix": true,
+      "isFermentation": true,
+      "instructions": "10-minute fermentation test stage to verify consistent timing."
+    },
+    {
+      "label": "Pre-Long Rest",
+      "min": 1,
+      "temp": 0,
+      "noMix": true,
+      "instructions": "1-minute pre-long rest stage (non-fermentation) before long ferment."
+    },
+    {
+      "label": "Long Ferment Test",
+      "min": 900,
+      "temp": 25,
+      "noMix": true,
+      "isFermentation": true,
+      "instructions": "900-minute (15-hour) fermentation test stage to verify extended timing."
+    },
+    {
+      "label": "Final Rest",
+      "min": 2,
+      "temp": 0,
+      "noMix": true,
+      "instructions": "Final 2-minute rest stage (non-fermentation) to complete the test."
+    }
+  ]
+}

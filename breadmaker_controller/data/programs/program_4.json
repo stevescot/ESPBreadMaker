@@ -1,0 +1,54 @@
+{
+  "id": 4,
+  "name": "Bread - Whole Wheat",
+  "customStages": [
+    {
+      "label": "Mix",
+      "min": 12,
+      "temp": 25,
+      "mixPattern": [
+        {
+          "mixSec": 360,
+          "waitSec": 360
+        }
+      ],
+      "instructions": "Add 300g whole wheat flour, 200g bread flour, 350g water, 8g instant yeast, 10g salt, 30g honey at the beginning of this stage."
+    },
+    {
+      "label": "Bulk Ferment",
+      "min": 70,
+      "temp": 27,
+      "noMix": true
+    },
+    {
+      "label": "Knockdown",
+      "min": 2,
+      "temp": 25,
+      "mixPattern": [
+        {
+          "mixSec": 60,
+          "waitSec": 60
+        }
+      ]
+    },
+    {
+      "label": "Proof",
+      "min": 45,
+      "temp": 27,
+      "noMix": true
+    },
+    {
+      "label": "Bake",
+      "min": 45,
+      "temp": 180,
+      "noMix": true
+    },
+    {
+      "label": "Cool",
+      "min": 10,
+      "temp": 25,
+      "noMix": true,
+      "instructions": "Remove bread when cool."
+    }
+  ]
+}
