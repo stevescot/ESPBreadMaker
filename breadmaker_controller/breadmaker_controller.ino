@@ -5,7 +5,7 @@ ESP32 TTGO T-Display Breadmaker Controller
 FEATURES:
  - Replaces breadmaker logic board: controls motor, heater, light
  - Manual icon toggles (motor, heater, light, buzzer)
- - LittleFS for persistent storage (programs, UI)
+ - FFat for persistent storage (programs, UI)
  - Status shows stage, time left (d:h:m:s), state of outputs, temperature (RTD analog input)
  - Built-in TFT display for local status and control
  - Enhanced memory capacity for larger program collections
@@ -17,19 +17,19 @@ FEATURES:
 #include <WiFi.h>          // ESP32 WiFi library
 #include <ESPmDNS.h>       // ESP32 mDNS library
 #include <ArduinoOTA.h>    // ESP32 OTA updates
-#include <LittleFS.h>      // ESP32 LittleFS support
-#include <ESPAsyncWebServer.h>
+#include <FFat.h>      // ESP32 FATFS support for 16MB
+#include <WebServer.h>     // Standard ESP32 WebServer (stable alternative to AsyncWebServer)
 #include <ArduinoJson.h>
 #include <PID_v1.h>
 #include <map>
 #include <vector>
 #include <time.h>
-#include <DNSServer.h>
 #include <EEPROM.h>
-#include <TFT_eSPI.h>      // ESP32 TFT display library
-#include <SPI.h>           // SPI for display
+
 #include "globals.h"       // Must be included for global definitions
-#include "display_manager.h"  // TFT display management
+#include "display_manager.h"  // LovyanGFX display management
+#include "missing_stubs.h"    // Missing function implementations
+// #include "capacitive_buttons.h" // REMOVED: Capacitive touch buttons (GPIO conflicts)
 #include "calibration.h"
 #include "programs_manager.h"
 #include "wifi_manager.h"
@@ -41,10 +41,7 @@ FEATURES:
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 
 // --- Web server---
-AsyncWebServer server(80); // Main web server
-
-// --- TFT Display (TTGO T-Display) ---
-TFT_eSPI tft = TFT_eSPI();  // Create TFT instance
+WebServer server(80); // Standard ESP32 WebServer (stable, no crashes)
 
 // --- Temperature safety flags ---
 bool thermalRunawayDetected = false;
@@ -53,7 +50,7 @@ bool sensorFaultDetected = false;
 // --- Pin assignments ---
 // PIN_RTD now defined in globals.h (GPIO34 for ESP32)
 // Output pins are defined in outputs_manager.cpp
-// Display pins are handled by TFT_eSPI library
+// Display pins are handled by LovyanGFX library
 
 #define DEFAULT_KP 0.11
 #define DEFAULT_KI 0.00005
@@ -87,8 +84,8 @@ bool buzzActive = false;          // Is the buzzer currently active?
 // --- Fermentation rate limiting ---
 unsigned long lastFermentUpdate = 0;  // Rate limiting for fermentation updates
 
-/// --- Captive portal DNS and AP ---
-DNSServer dnsServer;
+/// --- WiFi Configuration ---
+// WiFi credentials and connectivity management
 const char* apSSID = "BreadmakerSetup";
 
 // --- Output mode setting ---
@@ -116,6 +113,7 @@ void updateActiveProgramVars();
 void updateTimeProportionalHeater();
 void createDefaultPIDProfiles();
 bool ensureProgramLoaded(int programId);
+void setupOTA(); // OTA update support
 
 // --- Forward declaration for cache invalidation ---
 extern void invalidateStatusCache();
@@ -127,13 +125,13 @@ void stopBreadmaker();
 bool isStartupDelayComplete();
 
 // --- Delete Folder API endpoint ---
-// Recursively deletes a folder and all its contents from the LittleFS filesystem.
+// Recursively deletes a folder and all its contents from the FFat filesystem.
 void deleteFolderRecursive(const String& path) {
-  if (!LittleFS.exists(path)) {
+  if (!FFat.exists(path)) {
     if (debugSerial) Serial.printf("[deleteFolderRecursive] WARNING: Path '%s' does not exist.\n", path.c_str());
     return;
   }
-  File root = LittleFS.open(path);
+  File root = FFat.open(path);
   if (root && root.isDirectory()) {
     File file = root.openNextFile();
     while (file) {
@@ -141,35 +139,36 @@ void deleteFolderRecursive(const String& path) {
       if (file.isDirectory()) {
         deleteFolderRecursive(filePath);
       } else {
-        if (!LittleFS.remove(filePath) && debugSerial) {
+        if (!FFat.remove(filePath) && debugSerial) {
           Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove file '%s'\n", filePath.c_str());
         }
       }
       file = root.openNextFile();
     }
   }
-  if (!LittleFS.rmdir(path) && debugSerial) {
+  if (!FFat.rmdir(path) && debugSerial) {
     Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove directory '%s'\n", path.c_str());
   }
 }
 
-// Helper function to send a JSON error response
+// Helper function to send a JSON error response (WebServer compatible)
 // Sends a JSON-formatted error message to the client with a specified HTTP status code.
-void sendJsonError(AsyncWebServerRequest* req, const String& error, const String& message, int code = 400) {
-  AsyncResponseStream *response = req->beginResponseStream("application/json");
-  response->print("{");
-  response->print("\"error\":\"");
-  response->print(error);
-  response->print("\",");
-  response->print("\"message\":\"");
-  response->print(message);
-  response->print("\"}");
-  req->send(response);
+void sendJsonError(WebServer& server, const String& error, const String& message, int code = 400) {
+  String response = "{";
+  response += "\"error\":\"" + error + "\",";
+  response += "\"message\":\"" + message + "\"";
+  response += "}";
+  server.send(code, "application/json", response);
 }
 
 // Initializes all hardware, outputs, file systems, and loads configuration and calibration data.
 // Also sets up WiFi, mDNS, and captive portal as needed.
 void initialState(){
+  startupTime = millis(); // Record startup time for sensor stabilization delay
+  Serial.begin(115200);
+  delay(100);
+  Serial.println(F("[setup] Booting..."));
+  
   // --- Ensure all outputs are OFF immediately on boot/reset ---
   setHeater(false);
   setMotor(false);
@@ -177,7 +176,7 @@ void initialState(){
   setBuzzer(false);
   outputsManagerInit(); // Initialize output pins and set all outputs OFF
 
-    // Start mDNS responder for breadmaker.local
+  // Start mDNS responder for breadmaker.local
   if (WiFi.status() == WL_CONNECTED) {
     if (MDNS.begin("breadmaker")) {
       Serial.println(F("[mDNS] mDNS responder started: http://breadmaker.local/"));
@@ -185,7 +184,10 @@ void initialState(){
       Serial.println(F("[mDNS] Error setting up MDNS responder!"));
     }
   }
+  
   // --- Serve files from /templates/ for Home Assistant YAML downloads ---
+  // COMMENTED OUT: Needs to be ported from AsyncWebServer to standard WebServer
+  /*
   server.on("/templates/", HTTP_GET, [](AsyncWebServerRequest* req) {
     if (!req->hasParam("file")) {
       req->send(400, "text/plain", "Missing file parameter");
@@ -205,17 +207,24 @@ void initialState(){
     if (filename.endsWith(".yaml")) contentType = "text/yaml";
     else if (filename.endsWith(".json")) contentType = "application/json";
     else if (filename.endsWith(".html")) contentType = "text/html";
-    req->send(LittleFS, path, contentType);
+    req->send(FFat, path, contentType);
   });
-  startupTime = millis(); // Record startup time for sensor stabilization delay
-  Serial.begin(115200);
-  delay(100);
-  Serial.println(F("[setup] Booting..."));
-  if (!LittleFS.begin()) {
-    Serial.println(F("[setup] LittleFS mount failed! Halting."));
-    while (1) delay(1000);
+  */
+  
+  // Initialize FFat with better error handling
+  Serial.println(F("[setup] Initializing FFat filesystem..."));
+  if (!FFat.begin(false)) {
+    Serial.println(F("[setup] FFat mount failed, attempting format..."));
+    if (!FFat.begin(true)) {
+      Serial.println(F("[setup] FFat format failed! Continuing without filesystem."));
+      // Don't halt - continue without FFat for debugging
+    } else {
+      Serial.println(F("[setup] FFat formatted and mounted successfully."));
+    }
+  } else {
+    Serial.println(F("[setup] FFat mounted successfully."));
   }
-  Serial.println(F("[setup] LittleFS mounted."));
+  Serial.println(F("[setup] FFat mounted."));
   Serial.println(F("[setup] Loading programs..."));
   loadProgramMetadata();
   Serial.print(F("[setup] Programs loaded. Count: "));
@@ -227,85 +236,142 @@ void initialState(){
   Serial.println(F("[setup] Settings loaded."));
   loadResumeState();
   Serial.println(F("[setup] Resume state loaded."));
+}
 
-  // --- WiFi connection debug output ---
-  Serial.println(F("[wifi] Reading WiFi config..."));
-  // --- Load disableHotspot setting ---
-  bool disableHotspot = false;
-  {
-    File sf = LittleFS.open("/settings.json", "r");
-    if (sf) {
-      DynamicJsonDocument sdoc(512);
-      if (!deserializeJson(sdoc, sf)) {
-        disableHotspot = sdoc["disableHotspot"] | false;
-      }
-      sf.close();
-    }
-  }
-  File wf = LittleFS.open("/wifi.json", "r");
-  if (!wf) {
-    Serial.println(F("[wifi] wifi.json not found! Starting AP mode."));
-    if (!disableHotspot) {
-      WiFi.mode(WIFI_AP);
-      startCaptivePortal();
-    }
-  } else {
-    DynamicJsonDocument wdoc(256);
-    DeserializationError werr = deserializeJson(wdoc, wf);
-    if (werr) {
-      Serial.print(F("[wifi] Failed to parse wifi.json: "));
-      Serial.println(werr.c_str());
-      if (!disableHotspot) {
-        WiFi.mode(WIFI_AP);
-        startCaptivePortal();
-      }
+// Initialize WiFi connection after core systems are ready
+void initializeWiFi() {
+  Serial.println(F("[wifi] Starting WiFi initialization..."));
+  
+  // Add significant delay for ESP32 WiFi subsystem stability
+  delay(2000);
+  
+  // Check for any issues before WiFi init
+  Serial.println(F("[wifi] Pre-WiFi system check..."));
+  Serial.printf("[wifi] Free heap: %d bytes\n", ESP.getFreeHeap());
+  
+  // Very simple WiFi initialization to avoid TCP stack issues
+  try {
+    Serial.println(F("[wifi] Setting WiFi mode to OFF..."));
+    WiFi.mode(WIFI_OFF);
+    delay(1000);
+    
+    // Check if wifi.json exists
+    Serial.println(F("[wifi] Checking for WiFi configuration..."));
+    File wf = FFat.open("/wifi.json", "r");
+    if (!wf) {
+      Serial.println(F("[wifi] No WiFi config found. Starting WiFiManager captive portal."));
+      Serial.println(F("[wifi] Note: Web server temporarily disabled to save memory during WiFi setup"));
+      
+      // Start reliable WiFiManager captive portal (uses tzapu library)
+      startWiFiManagerPortal();
+      Serial.println(F("[wifi] WiFiManager completed - device should now be connected"));
+      
+      // After WiFi setup, we could restart to enable full web server
+      Serial.println(F("[wifi] Restarting to enable full web interface..."));
+      delay(2000);
+      ESP.restart();
+      return;
     } else {
-      const char* ssid = wdoc["ssid"] | "";
-      const char* pass = wdoc["pass"] | "";
-      Serial.print(F("[wifi] Connecting to SSID: "));
-      Serial.println(ssid);
-      WiFi.mode(disableHotspot ? WIFI_STA : WIFI_AP_STA); // Only AP+STA if not disabled
-      WiFi.begin(ssid, pass);
-      int tries = 0;
-      while (WiFi.status() != WL_CONNECTED && tries < 40) {
-        delay(250);
-        Serial.print(F("."));
-        tries++;
-      }
-      Serial.println();
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.print(F("[wifi] Connected! IP address: "));
-        Serial.println(WiFi.localIP());
+      // Try to connect to saved network
+      DynamicJsonDocument wdoc(256);
+      DeserializationError err = deserializeJson(wdoc, wf);
+      wf.close();
+      
+      if (!err) {
+        const char* ssid = wdoc["ssid"] | "";
+        const char* pass = wdoc["pass"] | "";
         
-        // Initialize OTA after successful WiFi connection
-        otaManagerInit();
-      } else {
-        Serial.println(F("[wifi] Failed to connect. Starting AP mode."));
-        if (!disableHotspot) {
-          WiFi.mode(WIFI_AP);
-          startCaptivePortal();
+        if (strlen(ssid) > 0) {
+          Serial.printf("[wifi] Connecting to: %s\n", ssid);
+          
+          WiFi.mode(WIFI_STA);
+          delay(300);
+          WiFi.begin(ssid, pass);
+          
+          // Simple connection attempt with timeout
+          int attempts = 0;
+          while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+            delay(500);
+            Serial.print(".");
+            attempts++;
+          }
+          Serial.println();
+          
+          if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("[wifi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+            
+            // Initialize OTA only after successful connection
+            delay(500);
+            otaManagerInit();
+            
+            Serial.println(F("[wifi] WiFi connected successfully - WebServer already started"));
+          } else {
+            Serial.println(F("[wifi] Connection failed, starting AP mode"));
+            WiFi.mode(WIFI_AP);
+            delay(300);
+            WiFi.softAP("BreadmakerSetup", "breadmaker123");
+            Serial.printf("[wifi] AP mode IP: %s\n", WiFi.softAPIP().toString().c_str());
+          }
         }
       }
     }
-    wf.close();
+    
+    // Start mDNS after WiFi is stable
+    delay(500);
+    if (MDNS.begin("breadmaker")) {
+      Serial.println(F("[mDNS] mDNS started: http://breadmaker.local/"));
+    }
+    
+  } catch (...) {
+    Serial.println(F("[wifi] WiFi initialization failed, continuing without network"));
   }
+  
+  Serial.println(F("[wifi] WiFi initialization complete"));
 }
 
 
 // Arduino setup function. Initializes system state, registers web endpoints, starts the web server,
 // configures PID and temperature averaging, and waits for NTP time sync.
 void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.println(F("=== ESP32 TTGO T-Display Breadmaker Controller ==="));
+  Serial.println(F("[setup] Starting setup() function..."));
+  Serial.printf("[setup] Free heap at start: %d bytes\n", ESP.getFreeHeap());
+  
   initialState();
   
   // Initialize TFT display
-  displayManagerInit();
+  Serial.println(F("[setup] Initializing display..."));
+  try {
+    displayManagerInit();
+    Serial.println(F("[setup] Display initialized successfully"));
+  } catch (...) {
+    Serial.println(F("[setup] Display initialization failed, continuing..."));
+  }
   
-  registerWebEndpoints(server);
+  // Initialize capacitive touch buttons
+  // REMOVED: capacitiveButtonsInit(); // Capacitive touch buttons disabled due to GPIO boot conflicts
+  
+  // Give the system time to stabilize after hardware init
+  delay(1000);
+  Serial.println(F("[setup] Hardware initialization complete, starting services..."));
+  
+  Serial.println(F("[setup] Starting WiFi initialization first..."));
+  initializeWiFi();
+  
+  // Initialize WebServer AFTER WiFi is stable to prevent LWIP crashes
+  Serial.println(F("[setup] WiFi initialization complete, now starting WebServer..."));
+  registerWebEndpoints(server);  // Now compatible with standard WebServer
+  // server.serveStatic("/", FFat, "/");  // Static files handled by onNotFound in registerWebEndpoints
+  // Note: server.begin() is now called inside registerWebEndpoints()
+  Serial.println(F("[setup] Standard WebServer started successfully!"));
+  
+  delay(1000);  // Give WiFi time to stabilize
+  
+  Serial.println(F("[setup] Starting OTA services..."));
+  setupOTA();
 
-  
-  server.serveStatic("/", LittleFS, "/");
-  server.begin();
-  Serial.println(F("HTTP server started"));
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   
   // --- Initialize PID controller ---
@@ -347,7 +413,7 @@ void setup() {
 const char* RESUME_FILE = "/resume.json";
 unsigned long lastResumeSave = 0;
 
-// Saves the current breadmaker state (program, stage, timing, etc.) to LittleFS for resume after reboot.
+// Saves the current breadmaker state (program, stage, timing, etc.) to FFat for resume after reboot.
 // Includes throttling to prevent excessive writes under load conditions.
 void saveResumeState() {
   // Throttle saves: minimum 2 seconds between saves to reduce wear and memory pressure
@@ -357,7 +423,7 @@ void saveResumeState() {
   }
   lastResumeSave = now;
   
-  File f = LittleFS.open(RESUME_FILE, "w");
+  File f = FFat.open(RESUME_FILE, "w");
   if (!f) {
     if (debugSerial) Serial.println("[saveResumeState] ERROR: Failed to open resume file for writing!");
     return;
@@ -392,13 +458,13 @@ void serializeResumeStateJson(Print& f) {
 
 // Removes the saved resume state file from LittleFS.
 void clearResumeState() {
-  LittleFS.remove(RESUME_FILE);
+  FFat.remove(RESUME_FILE);
 }
 
-// Loads the breadmaker's previous state from LittleFS and restores program, stage, and timing.
+// Loads the breadmaker's previous state from FFat and restores program, stage, and timing.
 // Optimized for memory efficiency and better error handling.
 void loadResumeState() {
-  File f = LittleFS.open(RESUME_FILE, "r");
+  File f = FFat.open(RESUME_FILE, "r");
   if (!f) return;
   
   // Use a smaller buffer since resume files are typically <400 bytes
@@ -600,7 +666,12 @@ void loop() {
   updateTemperatureSampling();
   updateBuzzerTone();
   updateDisplay(); // Update TFT display
-  otaManagerLoop(); // Handle OTA updates
+  ArduinoOTA.handle(); // Handle OTA updates
+  server.handleClient(); // Handle web server requests - CRITICAL for web interface!
+  // REMOVED: capacitiveButtonsUpdate(); // Capacitive touch buttons disabled due to GPIO boot conflicts
+  checkSerialWifiConfig(); // Check for serial WiFi configuration commands
+  
+  // WiFiManager handles DNS internally, no need for manual processing
   
   float temp = getAveragedTemperature();
   static bool stageJustAdvanced = false;
@@ -750,7 +821,7 @@ void checkDelayedResume() {
   static bool delayedResumeChecked = false;
   if (!delayedResumeChecked && isStartupDelayComplete()) {
     delayedResumeChecked = true;
-    File f = LittleFS.open(RESUME_FILE, "r");
+    File f = FFat.open(RESUME_FILE, "r");
     if (f) {
       DynamicJsonDocument doc(256);
       DeserializationError err = deserializeJson(doc, f);
@@ -1112,659 +1183,153 @@ void handleCustomStages(bool &stageJustAdvanced) {
     }
 }
 
-// --- Update active program variables ---
-// Updates pointers and counters for the currently active breadmaker program.
-void updateActiveProgramVars() {
-  if (getProgramCount() > 0 && programState.activeProgramId < getProgramCount() && isProgramValid(programState.activeProgramId)) {
-    // Ensure the program is loaded
-    if (!ensureProgramLoaded(programState.activeProgramId)) {
-      if (debugSerial) Serial.printf("[ERROR] Failed to load program %d\n", programState.activeProgramId);
-      programState.customProgram = nullptr;
-      programState.maxCustomStages = 0;
-      return;
-    }
+// Serial WiFi configuration helper
+void checkSerialWifiConfig() {
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
     
-    programState.customProgram = getActiveProgramMutable();
-    programState.maxCustomStages = programState.customProgram ? programState.customProgram->customStages.size() : 0;
-    
-    if (debugSerial) Serial.printf("[INFO] updateActiveProgramVars: Program %d loaded, customProgram=%p, stages=%zu\n", 
-                                   programState.activeProgramId, (void*)programState.customProgram, programState.maxCustomStages);
-  } else {
-    programState.customProgram = nullptr;
-    programState.maxCustomStages = 0;
-    if (debugSerial) Serial.printf("[INFO] updateActiveProgramVars: No valid program (count=%zu, id=%d)\n", 
-                                   getProgramCount(), programState.activeProgramId);
-  }
-}
-
-// --- Temperature averaging functions ---
-// Samples the temperature sensor, applies outlier rejection and weighted averaging, and updates the global temperature value.
-void updateTemperatureSampling() {
-  unsigned long nowMs = millis();
-  
-  // Sample at the configured interval
-  if (nowMs - tempAvg.lastTempSample >= tempAvg.tempSampleInterval) {
-    tempAvg.lastTempSample = nowMs;
-    // Take a new temperature sample
-    float rawTemp = readTemperature();
-    tempAvg.tempSamples[tempAvg.tempSampleIndex] = rawTemp;
-    tempAvg.tempSampleIndex = (tempAvg.tempSampleIndex + 1) % tempAvg.tempSampleCount;
-    // Mark samples as ready once we've filled the array at least once
-    if (tempAvg.tempSampleIndex == 0 && !tempAvg.tempSamplesReady) {
-      tempAvg.tempSamplesReady = true;
-    }
-    // Calculate averaged temperature if we have enough samples
-    if (tempAvg.tempSamplesReady && tempAvg.tempSampleCount > 0) {
-      // Step 1: Copy and sort samples for outlier rejection
-      float sortedSamples[MAX_TEMP_SAMPLES];
-      for (int i = 0; i < tempAvg.tempSampleCount; i++) {
-        sortedSamples[i] = tempAvg.tempSamples[i];
-      }
-      // Simple bubble sort
-      for (int i = 0; i < tempAvg.tempSampleCount - 1; i++) {
-        for (int j = 0; j < tempAvg.tempSampleCount - i - 1; j++) {
-          if (sortedSamples[j] > sortedSamples[j + 1]) {
-            float temp = sortedSamples[j];
-            sortedSamples[j] = sortedSamples[j + 1];
-            sortedSamples[j + 1] = temp;
-          }
-        }
-      }
-      // Step 2: Get clean samples (reject outliers if we have enough samples)
-      float cleanSamples[MAX_TEMP_SAMPLES];
-      int cleanCount = 0;
-      int effectiveSamples = tempAvg.tempSampleCount - (2 * tempAvg.tempRejectCount);
-      if (effectiveSamples >= 3) {
-        for (int i = tempAvg.tempRejectCount; i < tempAvg.tempSampleCount - tempAvg.tempRejectCount; i++) {
-          cleanSamples[cleanCount++] = sortedSamples[i];
+    if (cmd.startsWith("wifi:")) {
+      // Format: wifi:SSID,PASSWORD
+      int commaIndex = cmd.indexOf(',', 5);
+      if (commaIndex > 5) {
+        String ssid = cmd.substring(5, commaIndex);
+        String pass = cmd.substring(commaIndex + 1);
+        
+        Serial.printf("[WIFI CONFIG] Setting up WiFi: %s\n", ssid.c_str());
+        
+        // Save to wifi.json
+        DynamicJsonDocument doc(256);
+        doc["ssid"] = ssid;
+        doc["pass"] = pass;
+        
+        File f = FFat.open("/wifi.json", "w");
+        if (f) {
+          serializeJson(doc, f);
+          f.close();
+          Serial.println("[WIFI CONFIG] WiFi configuration saved!");
+          Serial.println("[WIFI CONFIG] Restarting to apply new WiFi settings...");
+          delay(1000);
+          ESP.restart();
+        } else {
+          Serial.println("[WIFI CONFIG] ERROR: Failed to save WiFi configuration");
         }
       } else {
-        for (int i = 0; i < tempAvg.tempSampleCount; i++) {
-          cleanSamples[cleanCount++] = sortedSamples[i];
-        }
+        Serial.println("[WIFI CONFIG] Invalid format. Use: wifi:SSID,PASSWORD");
       }
-      // Step 3: Detect trend direction and strength
-      float firstHalf = 0.0, secondHalf = 0.0;
-      int halfSize = cleanCount / 2;
-      for (int i = 0; i < halfSize; i++) {
-        firstHalf += cleanSamples[i];
+    } else if (cmd == "wifi:help") {
+      Serial.println(F("[WIFI CONFIG] WiFi Configuration Commands:"));
+      Serial.println(F("[WIFI CONFIG] wifi:SSID,PASSWORD - Set WiFi credentials"));
+      Serial.println(F("[WIFI CONFIG] wifi:status - Show current WiFi status"));
+      Serial.println(F("[WIFI CONFIG] wifi:reset - Reset WiFi configuration"));
+      Serial.println(F("[WIFI CONFIG] wifi:help - Show this help"));
+    } else if (cmd == "wifi:status") {
+      Serial.printf("[WIFI CONFIG] WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf("[WIFI CONFIG] IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("[WIFI CONFIG] SSID: %s\n", WiFi.SSID().c_str());
+      } else if (WiFi.getMode() == WIFI_AP) {
+        Serial.printf("[WIFI CONFIG] AP Mode IP: %s\n", WiFi.softAPIP().toString().c_str());
       }
-      for (int i = halfSize; i < cleanCount; i++) {
-        secondHalf += cleanSamples[i];
-      }
-      firstHalf /= halfSize;
-      secondHalf /= (cleanCount - halfSize);
-      float trendStrength = secondHalf - firstHalf;
-      float absTrendStrength = fabs(trendStrength);
-      // Step 4: ALWAYS apply weighted average (adaptive weighting based on trend)
-      float weightedSum = 0.0;
-      float totalWeight = 0.0;
-      for (int i = 0; i < cleanCount; i++) {
-        float weight = 0.5 + (1.5 * i) / (cleanCount - 1);
-        weightedSum += cleanSamples[i] * weight;
-        totalWeight += weight;
-      }
-      tempAvg.averagedTemperature = weightedSum / totalWeight;
-      // Debug output occasionally
-      if (debugSerial && (nowMs % 30000 < tempAvg.tempSampleInterval)) {
-        Serial.printf("[TEMP_AVG] Raw: %.2f°C, Filtered: %.2f°C, Trend: %.2f°C (from %d samples, mode: %s)\n",
-                     rawTemp, tempAvg.averagedTemperature, trendStrength, cleanCount,
-                     (absTrendStrength > 0.2) ? "TREND" : "STABLE");
-      }
-    } else {
-      tempAvg.averagedTemperature = rawTemp;
-    }
-  }
-}
-
-// Returns the most recently calculated averaged temperature.
-float getAveragedTemperature() {
-  return tempAvg.averagedTemperature;
-}
-
-// --- Time-proportional PID control function ---
-// Implements time-proportional relay control for the heater using PID output and dynamic windowing.
-void updateTimeProportionalHeater() {
-  unsigned long nowMs = millis();
-  
-  // Initialize window start time if not set
-  if (windowStartTime == 0) {
-    windowStartTime = nowMs;
-    lastPIDOutput = pid.Output; // Initialize last PID output
-  }
-  
-  // Check for dynamic window restart conditions
-  bool shouldRestartWindow = false;
-  unsigned long elapsed = nowMs - windowStartTime;
-  
-  // Dynamic window restart logic:
-  // If PID output changes significantly AND we've been in this window for at least MIN_WINDOW_TIME
-  if (elapsed >= MIN_WINDOW_TIME) {
-    double outputChange = fabs(pid.Output - lastPIDOutput);
-    
-    // Case 1: Large increase in output (e.g., needs more heat quickly)
-    if (outputChange >= PID_CHANGE_THRESHOLD && pid.Output > lastPIDOutput) {
-      // If we're currently in the OFF part of the window and need much more heat
-      if (elapsed >= onTime && pid.Output > 0.7) { // Need >70% output but heater is OFF
-        shouldRestartWindow = true;
-        if (debugSerial) {
-          Serial.printf("[PID-DYNAMIC] Restarting window: Output jumped from %.2f to %.2f (need more heat)\n", 
-                       lastPIDOutput, pid.Output);
-        }
-      }
-    }
-    
-    // Case 2: Large decrease in output (e.g., overheating, need to turn off quickly)
-    else if (outputChange >= PID_CHANGE_THRESHOLD && pid.Output < lastPIDOutput) {
-      // If we're currently in the ON part of the window and need much less heat
-      if (elapsed < onTime && pid.Output < 0.3) { // Need <30% output but heater is ON
-        shouldRestartWindow = true;
-        if (debugSerial) {
-          Serial.printf("[PID-DYNAMIC] Restarting window: Output dropped from %.2f to %.2f (reduce heat)\n", 
-                       lastPIDOutput, pid.Output);
-        }
-      }
-    }
-  }
-  
-  // Check if we need to start a new window (normal timing or dynamic restart)
-  if (nowMs - windowStartTime >= windowSize || shouldRestartWindow) {
-    // Track dynamic restart events
-    if (shouldRestartWindow) {
-      dynamicRestart.lastDynamicRestart = nowMs;
-      dynamicRestart.dynamicRestartCount++;
-      // Determine restart reason
-      if (pid.Output > lastPIDOutput && pid.Output > 0.7) {
-        dynamicRestart.lastDynamicRestartReason = "Need more heat (output increased to " + String((pid.Output*100), 1) + "%)";
-      } else if (pid.Output < lastPIDOutput && pid.Output < 0.3) {
-        dynamicRestart.lastDynamicRestartReason = "Reduce heat (output decreased to " + String((pid.Output*100), 1) + "%)";
+    } else if (cmd == "wifi:reset") {
+      if (FFat.remove("/wifi.json")) {
+        Serial.println("[WIFI CONFIG] WiFi configuration reset. Restarting...");
+        delay(1000);
+        ESP.restart();
       } else {
-        dynamicRestart.lastDynamicRestartReason = "Output change (from " + String((lastPIDOutput*100), 1) + "% to " + String((pid.Output*100), 1) + "%)";
+        Serial.println("[WIFI CONFIG] No WiFi configuration to reset");
       }
-      if (debugSerial) {
-        Serial.printf("[PID-DYNAMIC] Restart #%u: %s (elapsed: %lums)\n", 
-                     dynamicRestart.dynamicRestartCount, dynamicRestart.lastDynamicRestartReason.c_str(), elapsed);
-      }
-    }
-    
-    windowStartTime = nowMs;
-    lastPIDOutput = pid.Output; // Update the last known PID output
-    
-    // Calculate ON time for this window based on PID output (0.0 to 1.0)
-    onTime = (unsigned long)(pid.Output * windowSize);
-    
-    // Relay protection: smart minimum ON/OFF times
-    const unsigned long minOnTime = 1000;   // Minimum 1 second ON (was 5s - too aggressive!)
-    const unsigned long minOffTime = 1000;  // Minimum 1 second OFF 
-    const float minOutputThreshold = 0.02;  // Below 2% output, turn OFF completely
-\
-    // If output is very low, just turn OFF completely (avoid excessive short cycling)
-    if (pid.Output < minOutputThreshold) {
-      onTime = 0;  // Complete OFF
-    }
-    // If output is 100% (or very close), force ON for entire window
-    else if (pid.Output >= 0.999f) {
-      onTime = windowSize;
-    }
-    // Otherwise apply minimum ON/OFF time logic
-    else {
-      if (onTime > 0 && onTime < minOnTime) {
-        onTime = minOnTime;  // Extend very short ON periods to protect relay
-      }
-      // Ensure minimum OFF time, but only if there is actually an OFF period
-      if (onTime > 0 && onTime < windowSize && (windowSize - onTime) < minOffTime) {
-        onTime = windowSize - minOffTime;  // Ensure minimum OFF time
-      }
-    }
-    
-    if (debugSerial && millis() % 15000 < 50) {  // Debug every 15 seconds
-      Serial.printf("[PID-RELAY] Setpoint: %.1f°C, Input: %.1f°C, Output: %.2f, OnTime: %lums/%lums (%.1f%%) %s\n", 
-                   pid.Setpoint, pid.Input, pid.Output, onTime, windowSize, (onTime * 100.0 / windowSize),
-                   shouldRestartWindow ? "[DYNAMIC]" : "[NORMAL]");
     }
   }
+}
+
+// === OTA Update Support ===
+void setupOTA() {
+  Serial.println("[OTA] Setting up Over-The-Air updates...");
   
-  // Determine heater state based on position within current window
-  elapsed = nowMs - windowStartTime; // Recalculate elapsed after potential window restart
-  bool heaterShouldBeOn = (elapsed < onTime);
-  setHeater(heaterShouldBeOn);
-}
-
-// --- Enhanced heater status reporting for debugging ---
-// Streams detailed heater and PID status as JSON for debugging purposes.
-void streamHeaterDebugStatus(Print& out) {
-  unsigned long nowMs = millis();
-  unsigned long elapsed = (windowStartTime > 0) ? (nowMs - windowStartTime) : 0;
-  float windowProgress = (windowSize > 0) ? ((float)elapsed / windowSize) * 100 : 0;
-  float onTimePercent = (windowSize > 0) ? ((float)onTime / windowSize) * 100 : 0;
-
-  bool canRestartNow = (elapsed >= MIN_WINDOW_TIME);
-  bool significantChange = (abs(pid.Output - lastPIDOutput) >= PID_CHANGE_THRESHOLD);
-  bool needMoreHeat = (pid.Output > lastPIDOutput && elapsed >= onTime && pid.Output > 0.7);
-  bool needLessHeat = (pid.Output < lastPIDOutput && elapsed < onTime && pid.Output < 0.3);
-  unsigned long theoreticalOnTime = (unsigned long)(pid.Output * windowSize);
-  unsigned long minOffTime =  5000;
-  bool relayProtectionActive = (theoreticalOnTime > 0 && (windowSize - theoreticalOnTime) < minOffTime);
-
-  out.print("{");
-  out.printf("\"heater_physical_state\":%s,", heaterState ? "true" : "false");
-  out.printf("\"pid_output_percent\":%.2f,", pid.Output * 100);
-  out.printf("\"setpoint\":%.2f,", pid.Setpoint);
-  out.printf("\"manual_mode\":%s,", programState.manualMode ? "true" : "false");
-  out.printf("\"is_running\":%s,", programState.isRunning ? "true" : "false");
-  out.printf("\"window_size_ms\":%lu,", windowSize);
-  out.printf("\"window_elapsed_ms\":%lu,", elapsed);
-  out.printf("\"window_progress_percent\":%.2f,", windowProgress);
-  out.printf("\"calculated_on_time_ms\":%lu,", onTime);
-  out.printf("\"on_time_percent\":%.2f,", onTimePercent);
-  out.printf("\"should_be_on\":%s,", (elapsed < onTime) ? "true" : "false");
-  out.printf("\"dynamic_restarts\":%u,", dynamicRestart.dynamicRestartCount);
-  out.printf("\"last_restart_reason\":\"%s\",", dynamicRestart.lastDynamicRestartReason.c_str());
-  out.printf("\"last_restart_ago_ms\":%lu,", (dynamicRestart.lastDynamicRestart > 0) ? (nowMs - dynamicRestart.lastDynamicRestart) : 0);
-  out.printf("\"last_pid_output\":%.2f,", lastPIDOutput);
-  out.printf("\"pid_output_change\":%.2f,", abs(pid.Output - lastPIDOutput));
-  out.printf("\"change_threshold\":%.2f,", PID_CHANGE_THRESHOLD);
-  out.printf("\"can_restart_now\":%s,", canRestartNow ? "true" : "false");
-  out.printf("\"significant_change\":%s,", significantChange ? "true" : "false");
-  out.printf("\"restart_condition_more_heat\":%s,", needMoreHeat ? "true" : "false");
-  out.printf("\"restart_condition_less_heat\":%s,", needLessHeat ? "true" : "false");
-  out.printf("\"setpoint_override\":%s,", (pid.Setpoint <= 0) ? "true" : "false");
-  out.printf("\"running_override\":%s,", !programState.isRunning ? "true" : "false");
-  out.printf("\"manual_override\":%s,", programState.manualMode ? "true" : "false");
-  out.printf("\"relay_protection_active\":%s,", relayProtectionActive ? "true" : "false");
-  out.printf("\"theoretical_on_time_ms\":%lu,", theoreticalOnTime);
-  out.printf("\"enforced_min_off_time_ms\":%lu", minOffTime);
-  out.print("}");
-}
-
-// --- Startup delay check for temperature sensor stabilization ---
-// Returns true if the startup delay for temperature sensor stabilization has elapsed.
-bool isStartupDelayComplete() {
-  unsigned long elapsed = millis() - startupTime;
-  return elapsed >= STARTUP_DELAY_MS;
-}
-
-// Stops the breadmaker, turns off all outputs, and saves state.
-void stopBreadmaker() {
-  if (debugSerial) Serial.println("[ACTION] stopBreadmaker() called");
-  programState.isRunning = false;
-  setHeater(false);
-  setMotor(false);
-  setLight(false);
-  setBuzzer(true); // Buzz for 200ms (handled non-blocking in loop)
-  invalidateStatusCache();
-  clearResumeState();
-}
-
-// Loads breadmaker settings (PID, temperature, program selection, etc.) from LittleFS.
-void loadSettings() {
-  Serial.println("[loadSettings] Loading settings...");
-  File f = LittleFS.open(SETTINGS_FILE, "r");
-  if (!f) {
-    Serial.println("[loadSettings] settings.json not found, using defaults.");
-    debugSerial = true;
-    return;
-  }
-  DynamicJsonDocument doc(512);
-  DeserializationError err = deserializeJson(doc, f);
-  if (err) {
-    Serial.print("[loadSettings] Failed to parse settings.json: ");
-    Serial.println(err.c_str());
-    f.close();
-    debugSerial = true;
-    return;
-  }
-  const char* mode = doc["outputMode"] | "digital";
-  outputMode = OUTPUT_DIGITAL;  // Always digital mode (analog removed)
-  debugSerial = doc["debugSerial"] | true;
+  // Set OTA hostname
+  ArduinoOTA.setHostname("breadmaker-controller");
   
-  // Load PID parameters - backward compatibility
-  if (doc.containsKey("pidKp")) {
-    pid.Kp = doc["pidKp"] | 2.0;
-    pid.Ki = doc["pidKi"] | 5.0;
-    pid.Kd = doc["pidKd"] | 1.0;
-    pid.sampleTime = doc["pidSampleTime"] | 1000;
-    windowSize = doc["pidWindowSize"] | 30000;
+  // Set OTA password (optional but recommended)
+  ArduinoOTA.setPassword("breadmaker123");
+  
+  // OTA event handlers
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_SPIFFS/FFat
+      type = "filesystem";
+    }
+    Serial.println("[OTA] Start updating " + type);
     
-    // Apply loaded PID parameters
+    // Stop all critical operations during update for safety
     if (pid.controller) {
-      pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
-      pid.controller->SetSampleTime(pid.sampleTime);
+      pid.controller->SetMode(MANUAL);
     }
-    Serial.printf("[loadSettings] Legacy PID parameters loaded: Kp=%.6f, Ki=%.6f, Kd=%.6f\n", pid.Kp, pid.Ki, pid.Kd);
-    Serial.printf("[loadSettings] Timing parameters loaded: SampleTime=%lums, WindowSize=%lums\n", pid.sampleTime, windowSize);
-  }
-  
-  // Load temperature-dependent PID profiles
-  loadPIDProfiles();
-  
-  // Load PID control settings
-  if (doc.containsKey("activeProfile")) {
-    pid.activeProfile = doc["activeProfile"] | "Baking Heat";
-  }
-  if (doc.containsKey("autoSwitching")) {
-    pid.autoSwitching = doc["autoSwitching"] | true;
-  }
-  
-  // Load temperature averaging parameters
-  if (doc.containsKey("tempSampleCount")) {
-    tempAvg.tempSampleCount = doc["tempSampleCount"] | 10;
-    tempAvg.tempRejectCount = doc["tempRejectCount"] | 2;
-    tempAvg.tempSampleInterval = doc["tempSampleInterval"] | 500;
-    // Validate parameters
-    if (tempAvg.tempSampleCount < 5) tempAvg.tempSampleCount = 5;
-    if (tempAvg.tempSampleCount > MAX_TEMP_SAMPLES) tempAvg.tempSampleCount = MAX_TEMP_SAMPLES;
-    if (tempAvg.tempRejectCount < 0) tempAvg.tempRejectCount = 0;
-    // Ensure we have at least 3 samples after rejection
-    int effectiveSamples = tempAvg.tempSampleCount - (2 * tempAvg.tempRejectCount);
-    if (effectiveSamples < 3) {
-      tempAvg.tempRejectCount = (tempAvg.tempSampleCount - 3) / 2;
-    }
-    // Reset sampling system when parameters change
-    tempAvg.tempSamplesReady = false;
-    tempAvg.tempSampleIndex = 0;
-    Serial.printf("[loadSettings] Temperature averaging loaded: Samples=%d, Reject=%d, Interval=%lums\n", 
-                 tempAvg.tempSampleCount, tempAvg.tempRejectCount, tempAvg.tempSampleInterval);
-  }
-  
-  // Load OTA settings
-  otaStatus.enabled = doc["otaEnabled"] | true;
-  otaStatus.hostname = doc["otaHostname"] | "breadmaker-controller";
-  if (debugSerial) {
-    Serial.printf("[loadSettings] OTA settings loaded: enabled=%s, hostname=%s\n", 
-                 otaStatus.enabled ? "true" : "false", otaStatus.hostname.c_str());
-  }
-  
-  // Restore last selected program by ID if present, fallback to name for backward compatibility
-  if (doc.containsKey("lastProgramId")) {
-    int lastId = doc["lastProgramId"];
-    if (lastId >= 0 && lastId < (int)getProgramCount()) {
-      programState.activeProgramId = lastId;
-      Serial.print("[loadSettings] lastProgramId loaded: ");
-      Serial.println(lastId);
-    }
-  } else if (doc.containsKey("lastProgram")) {
-    // Deprecated: fallback to name for backward compatibility
-    String lastProg = doc["lastProgram"].as<String>();
-    for (size_t i = 0; i < getProgramCount(); ++i) {
-      if (getProgramName(i) == lastProg) {
-        programState.activeProgramId = i;
-        Serial.print("[loadSettings] lastProgram loaded (deprecated): ");
-        Serial.println(lastProg);
-        break;
-      }
-    }
-  }
-  Serial.print("[loadSettings] outputMode loaded: ");
-  Serial.println("digital");  // Always digital mode now
-  Serial.print("[loadSettings] debugSerial: ");
-  Serial.println(debugSerial ? "true" : "false");
-  f.close();
-  Serial.println("[loadSettings] Settings loaded.");
-}
-// Saves breadmaker settings (PID, temperature, program selection, etc.) to LittleFS.
-// Uses direct streaming to minimize memory usage under load.
-void saveSettings() {
-  if (debugSerial) Serial.println("[saveSettings] Saving settings...");
-  
-  File f = LittleFS.open(SETTINGS_FILE, "w");
-  if (!f) {
-    if (debugSerial) Serial.println("[saveSettings] Failed to open settings.json for writing!");
-    return;
-  }
-  
-  // Stream JSON directly to file - much more memory efficient than building large strings
-  f.print("{\n");
-  f.printf("  \"outputMode\":\"%s\",\n", "digital");  // Always digital mode
-  f.printf("  \"debugSerial\":%s,\n", debugSerial ? "true" : "false");
-  
-  if (getProgramCount() > 0) {
-    f.printf("  \"lastProgramId\":%d,\n", (int)programState.activeProgramId);
-    f.print("  \"lastProgram\":\"");
-    f.print(getProgramName(programState.activeProgramId));
-    f.print("\",\n");
-  } else {
-    f.print("  \"lastProgramId\":0,\n");
-    f.print("  \"lastProgram\":\"Unknown\",\n");
-  }
-  
-  // PID parameters for backward compatibility
-  f.printf("  \"pidKp\":%.6f,\n", pid.Kp);
-  f.printf("  \"pidKi\":%.6f,\n", pid.Ki);
-  f.printf("  \"pidKd\":%.6f,\n", pid.Kd);
-  f.printf("  \"pidSampleTime\":%lu,\n", pid.sampleTime);
-  f.printf("  \"pidWindowSize\":%lu,\n", windowSize);
-  
-  // PID profile settings
-  f.print("  \"activeProfile\":\"");
-  f.print(pid.activeProfile);
-  f.print("\",\n");
-  f.printf("  \"autoSwitching\":%s,\n", pid.autoSwitching ? "true" : "false");
-  
-  // Temperature averaging parameters
-  f.printf("  \"tempSampleCount\":%d,\n", tempAvg.tempSampleCount);
-  f.printf("  \"tempRejectCount\":%d,\n", tempAvg.tempRejectCount);
-  f.printf("  \"tempSampleInterval\":%lu,\n", tempAvg.tempSampleInterval);
-  
-  // OTA settings
-  f.printf("  \"otaEnabled\":%s,\n", otaStatus.enabled ? "true" : "false");
-  f.print("  \"otaHostname\":\"");
-  f.print(otaStatus.hostname);
-  f.print("\"\n");
-  
-  f.print("}\n");
-  f.close();
-  
-  if (debugSerial) Serial.println("[saveSettings] Settings saved with direct streaming (low memory usage).");
-}
-
-// Load PID profiles from LittleFS
-void loadPIDProfiles() {
-  Serial.println("[loadPIDProfiles] Loading PID profiles...");
-  
-  // Clear existing profiles
-  pid.profiles.clear();
-  
-  File f = LittleFS.open("/pid-profiles.json", "r");
-  if (!f) {
-    Serial.println("[loadPIDProfiles] pid-profiles.json not found, creating defaults.");
-    createDefaultPIDProfiles();
-    savePIDProfiles();
-    return;
-  }
-  
-  DynamicJsonDocument doc(2048);
-  DeserializationError err = deserializeJson(doc, f);
-  f.close();
-  
-  if (err) {
-    Serial.print("[loadPIDProfiles] Failed to parse pid-profiles.json: ");
-    Serial.println(err.c_str());
-    createDefaultPIDProfiles();
-    return;
-  }
-  
-  JsonArray profileArray = doc["pidProfiles"];
-  if (profileArray.isNull()) {
-    Serial.println("[loadPIDProfiles] No pidProfiles array found, creating defaults.");
-    createDefaultPIDProfiles();
-    return;
-  }
-  
-  for (JsonObject profile : profileArray) {
-    PIDProfile p;
-    p.name = profile["name"] | "Unknown";
-    p.minTemp = profile["minTemp"] | 0.0;
-    p.maxTemp = profile["maxTemp"] | 100.0;
-    p.kp = profile["kp"] | 0.11;
-    p.ki = profile["ki"] | 0.00005;
-    p.kd = profile["kd"] | 10.0;
-    p.windowMs = profile["windowMs"] | 30000;
-    p.description = profile["description"] | "";
-    pid.profiles.push_back(p);
-  }
-  
-  // Load control settings
-  pid.activeProfile = doc["activeProfile"] | "Baking Heat";
-  pid.autoSwitching = doc["autoSwitching"] | true;
-  
-  Serial.printf("[loadPIDProfiles] Loaded %d PID profiles, active: %s, auto-switching: %s\n", 
-                pid.profiles.size(), pid.activeProfile.c_str(), pid.autoSwitching ? "ON" : "OFF");
-}
-
-// Save PID profiles to LittleFS
-void savePIDProfiles() {
-  Serial.println("[savePIDProfiles] Saving PID profiles...");
-  
-  File f = LittleFS.open("/pid-profiles.json", "w");
-  if (!f) {
-    Serial.println("[savePIDProfiles] Failed to open pid-profiles.json for writing!");
-    return;
-  }
-  
-  // Stream JSON directly to file - much more memory efficient than 2048-byte buffer
-  f.print("{\n");
-  f.print("  \"pidProfiles\":[\n");
-  
-  for (size_t i = 0; i < pid.profiles.size(); ++i) {
-    const PIDProfile& profile = pid.profiles[i];
-    if (i > 0) f.print(",\n");
     
-    f.print("    {\n");
-    f.print("      \"name\":\"");
-    f.print(profile.name);
-    f.print("\",\n");
-    f.printf("      \"minTemp\":%.1f,\n", profile.minTemp);
-    f.printf("      \"maxTemp\":%.1f,\n", profile.maxTemp);
-    f.printf("      \"kp\":%.6f,\n", profile.kp);
-    f.printf("      \"ki\":%.6f,\n", profile.ki);
-    f.printf("      \"kd\":%.6f,\n", profile.kd);
-    f.printf("      \"windowMs\":%lu,\n", profile.windowMs);
-    f.print("      \"description\":\"");
-    f.print(profile.description);
-    f.print("\"\n");
-    f.print("    }");
-  }
-  
-  f.print("\n  ],\n");
-  f.print("  \"activeProfile\":\"");
-  f.print(pid.activeProfile);
-  f.print("\",\n");
-  f.printf("  \"autoSwitching\":%s\n", pid.autoSwitching ? "true" : "false");
-  f.print("}\n");
-  
-  f.close();
-  Serial.println("[savePIDProfiles] PID profiles saved with direct streaming (low memory usage).");
-}
-
-// Create default PID profiles
-void createDefaultPIDProfiles() {
-  Serial.println("[createDefaultPIDProfiles] Creating default PID profiles...");
-  
-  pid.profiles.clear();
-  
-  // Room Temperature - Very gentle control
-  pid.profiles.push_back({
-    "Room Temperature", 0, 35, 0.5, 0.00001, 2.0, 60000,
-    "Very gentle control - minimal heat to prevent long thermal mass rises"
-  });
-  
-  // Low Fermentation - Gentle warming
-  pid.profiles.push_back({
-    "Low Fermentation", 35, 50, 0.3, 0.00002, 3.0, 45000,
-    "Gentle warming prevents thermal mass overshoot"
-  });
-  
-  // Medium Fermentation - Balanced control
-  pid.profiles.push_back({
-    "Medium Fermentation", 50, 70, 0.2, 0.00005, 5.0, 30000,
-    "Balanced control for typical fermentation temps"
-  });
-  
-  // High Fermentation - More responsive
-  pid.profiles.push_back({
-    "High Fermentation", 70, 100, 0.15, 0.00008, 6.0, 25000,
-    "More responsive for higher fermentation temps"
-  });
-  
-  // Baking Heat - Your current settings
-  pid.profiles.push_back({
-    "Baking Heat", 100, 150, 0.11, 0.00005, 10.0, 15000,
-    "Your current range - balanced for baking"
-  });
-  
-  // High Baking - Higher derivative
-  pid.profiles.push_back({
-    "High Baking", 150, 200, 0.08, 0.00003, 10.0, 15000,
-    "Higher derivative to prevent overshoot"
-  });
-  
-  // Extreme Heat - Maximum control
-  pid.profiles.push_back({
-    "Extreme Heat", 200, 250, 0.015, 0.00015, 10.0, 10000,
-    "Your exact tuned settings - maximum derivative control"
-  });
-  
-  Serial.printf("[createDefaultPIDProfiles] Created %d default profiles.\n", pid.profiles.size());
-}
-
-// Find the appropriate PID profile for a given temperature
-PIDProfile* findProfileForTemperature(float temperature) {
-  for (PIDProfile& profile : pid.profiles) {
-    if (temperature >= profile.minTemp && temperature < profile.maxTemp) {
-      return &profile;
-    }
-  }
-  // Return the last profile if temperature is higher than all ranges
-  if (!pid.profiles.empty()) {
-    return &pid.profiles.back();
-  }
-  return nullptr;
-}
-
-// Switch to a specific PID profile by name
-void switchToProfile(const String& profileName) {
-  for (const PIDProfile& profile : pid.profiles) {
-    if (profile.name == profileName) {
-      // Update active PID parameters
-      pid.Kp = profile.kp;
-      pid.Ki = profile.ki;
-      pid.Kd = profile.kd;
-      windowSize = profile.windowMs;
-      pid.activeProfile = profileName;
-      
-      // Apply to PID controller
-      if (pid.controller) {
-        pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
-      }
-      
-      Serial.printf("[switchToProfile] Switched to '%s': Kp=%.6f, Ki=%.6f, Kd=%.6f, Window=%lums\n",
-                    profileName.c_str(), pid.Kp, pid.Ki, pid.Kd, windowSize);
-      return;
-    }
-  }
-  Serial.printf("[switchToProfile] Profile '%s' not found!\n", profileName.c_str());
-}
-
-// Check current temperature and switch profile if needed
-void checkAndSwitchPIDProfile() {
-  // Only check every 5 seconds to avoid excessive switching
-  if (millis() - pid.lastProfileCheck < 5000) return;
-  pid.lastProfileCheck = millis();
-  
-  // Skip if auto-switching is disabled
-  if (!pid.autoSwitching) return;
-  
-  // Skip if no valid temperature reading
-  if (tempAvg.averagedTemperature <= 0) return;
-  
-  PIDProfile* targetProfile = findProfileForTemperature(tempAvg.averagedTemperature);
-  if (targetProfile && targetProfile->name != pid.activeProfile) {
-    Serial.printf("[checkAndSwitchPIDProfile] Temperature %.1f°C - switching from '%s' to '%s'\n",
-                  tempAvg.averagedTemperature, pid.activeProfile.c_str(), targetProfile->name.c_str());
-    switchToProfile(targetProfile->name);
+    // Turn off heater during update for safety
+    outputStates.heater = false;
+    setHeater(false);
     
-    // Save the change to persist across reboots
-    saveSettings();
+    displayMessage("OTA Update...");
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\n[OTA] Update complete!");
+    displayMessage("Update Complete");
+    delay(1000);
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    unsigned int percent = (progress / (total / 100));
+    Serial.printf("[OTA] Progress: %u%%\r", percent);
+    
+    // Update display with progress every 10%
+    static unsigned int lastPercent = 0;
+    if (percent != lastPercent && percent % 10 == 0) {
+      String msg = "Updating: " + String(percent) + "%";
+      displayMessage(msg.c_str());
+      lastPercent = percent;
+    }
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("[OTA] Error[%u]: ", error);
+    String errorMsg = "OTA Error: ";
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+      errorMsg += "Auth Failed";
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+      errorMsg += "Begin Failed";
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+      errorMsg += "Connect Failed";
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+      errorMsg += "Receive Failed";
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+      errorMsg += "End Failed";
+    }
+    displayMessage(errorMsg.c_str());
+    delay(3000);
+    
+    // Restore normal operation after error
+    if (pid.controller) {
+      pid.controller->SetMode(AUTOMATIC);
+    }
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("[OTA] OTA updates ready");
+  Serial.print("[OTA] Hostname: ");
+  Serial.println(ArduinoOTA.getHostname());
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[OTA] Web interface: http://%s.local/update\n", ArduinoOTA.getHostname().c_str());
+    Serial.printf("[OTA] Or direct IP: http://%s/update\n", WiFi.localIP().toString().c_str());
+    Serial.println("[OTA] Arduino IDE: Select network port for wireless uploads");
   }
 }

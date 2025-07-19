@@ -9,7 +9,7 @@
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 #endif
 
-extern TFT_eSPI tft;
+LGFX display;
 
 // Display state variables
 static DisplayState currentState = DISPLAY_STATUS;
@@ -26,10 +26,10 @@ static bool button2Pressed = false;
 static unsigned long lastButtonPress = 0;
 
 void displayManagerInit() {
-  // Initialize TFT display
-  tft.init();
-  tft.setRotation(0);  // Portrait orientation (135x240)
-  tft.fillScreen(COLOR_BLACK);
+  // Initialize LovyanGFX display
+  display.init();
+  display.setRotation(1);  // Landscape orientation (240x135)
+  display.fillScreen(COLOR_BLACK);
   
   // Initialize buttons
   pinMode(BUTTON_1, INPUT_PULLUP);
@@ -72,17 +72,17 @@ void updateDisplay() {
 }
 
 void displayStatus() {
-  tft.fillScreen(COLOR_BLACK);
+  display.fillScreen(COLOR_BLACK);
   
   // Title
-  tft.setTextColor(COLOR_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(5, 5);
-  tft.println("Breadmaker");
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(2);
+  display.setCursor(5, 5);
+  display.println("Breadmaker");
   
-  // Temperature
+  // Temperature on the right side
   float temp = readTemperature();
-  drawTemperature(5, 30, temp);
+  drawTemperature(140, 5, temp);
   
   // Current program info
   const Program* activeProgram = getActiveProgram();
@@ -90,149 +90,151 @@ void displayStatus() {
     // Show current stage
     if (programState.customStageIdx < activeProgram->customStages.size()) {
       const CustomStage& stage = activeProgram->customStages[programState.customStageIdx];
-      drawStageInfo(5, 60, stage.label, 0); // TODO: Calculate time left
+      drawStageInfo(5, 35, stage.label, 0); // TODO: Calculate time left
     }
     
-    // Show progress bar
+    // Show progress bar - wider for landscape
     float progress = 0.5; // TODO: Calculate actual progress
-    drawProgressBar(5, 90, 125, 15, progress);
+    drawProgressBar(5, 65, 220, 15, progress);
   } else {
-    tft.setTextColor(COLOR_GRAY);
-    tft.setTextSize(1);
-    tft.setCursor(5, 60);
-    tft.println("No program running");
+    display.setTextColor(COLOR_GRAY);
+    display.setTextSize(1);
+    display.setCursor(5, 35);
+    display.println("No program running");
   }
   
-  // Output states
-  drawOutputStates(5, 120, outputStates.heater, outputStates.motor, 
+  // Output states at bottom
+  drawOutputStates(5, 95, outputStates.heater, outputStates.motor, 
                    outputStates.light, outputStates.buzzer);
 }
 
 void displayMenu() {
-  tft.fillScreen(COLOR_BLACK);
+  display.fillScreen(COLOR_BLACK);
   
-  tft.setTextColor(COLOR_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(5, 5);
-  tft.println("Menu");
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(2);
+  display.setCursor(5, 5);
+  display.println("Menu");
   
-  tft.setTextSize(1);
-  tft.setCursor(5, 30);
-  tft.println("1. Status");
-  tft.setCursor(5, 45);
-  tft.println("2. Programs");
-  tft.setCursor(5, 60);
-  tft.println("3. Settings");
-  tft.setCursor(5, 75);
-  tft.println("4. WiFi Setup");
+  display.setTextSize(1);
+  display.setCursor(5, 30);
+  display.println("1. Status");
+  display.setCursor(5, 45);
+  display.println("2. Programs");
+  display.setCursor(5, 60);
+  display.println("3. Settings");
+  display.setCursor(5, 75);
+  display.println("4. WiFi Setup");
   
-  tft.setTextColor(COLOR_GRAY);
-  tft.setCursor(5, 210);
-  tft.println("BTN1: Select");
-  tft.setCursor(5, 225);
-  tft.println("BTN2: Back");
+  display.setTextColor(COLOR_GRAY);
+  display.setCursor(5, 110);
+  display.println("BTN1: Select  BTN2: Back");
 }
 
 void displayPrograms() {
-  tft.fillScreen(COLOR_BLACK);
+  display.fillScreen(COLOR_BLACK);
   
-  tft.setTextColor(COLOR_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(5, 5);
-  tft.println("Programs");
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(2);
+  display.setCursor(5, 5);
+  display.println("Programs");
   
-  // Show available programs
+  // Show available programs in two columns for landscape
   const auto& metadata = getProgramMetadata();
   int y = 30;
-  for (size_t i = 0; i < metadata.size() && i < 10; i++) {
-    tft.setTextSize(1);
-    tft.setCursor(5, y);
-    tft.printf("%d. %s", metadata[i].id, metadata[i].name.c_str());
-    y += 15;
+  int col1_x = 5;
+  int col2_x = 125;
+  
+  for (size_t i = 0; i < metadata.size() && i < 8; i++) {
+    display.setTextSize(1);
+    if (i < 4) {
+      display.setCursor(col1_x, y + (i * 15));
+    } else {
+      display.setCursor(col2_x, y + ((i-4) * 15));
+    }
+    display.printf("%d. %s", metadata[i].id, metadata[i].name.c_str());
   }
   
-  tft.setTextColor(COLOR_GRAY);
-  tft.setCursor(5, 210);
-  tft.println("BTN1: Select");
-  tft.setCursor(5, 225);
-  tft.println("BTN2: Back");
+  display.setTextColor(COLOR_GRAY);
+  display.setCursor(5, 110);
+  display.println("BTN1: Select  BTN2: Back");
 }
 
 void displaySettings() {
-  tft.fillScreen(COLOR_BLACK);
+  display.fillScreen(COLOR_BLACK);
   
-  tft.setTextColor(COLOR_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(10, 10);
-  tft.println("Settings");
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(2);
+  display.setCursor(10, 10);
+  display.println("Settings");
   
-  tft.setTextSize(1);
-  tft.setCursor(10, 40);
-  tft.printf("Heap: %d bytes", ESP.getFreeHeap());
-  tft.setCursor(10, 55);
-  tft.printf("Build: %s", FIRMWARE_BUILD_DATE);
+  display.setTextSize(1);
+  display.setCursor(10, 40);
+  display.printf("Heap: %d bytes", ESP.getFreeHeap());
+  display.setCursor(10, 55);
+  display.printf("Build: %s", FIRMWARE_BUILD_DATE);
   
-  tft.setTextColor(COLOR_GRAY);
-  tft.setCursor(10, 115);
-  tft.println("BTN1: Select  BTN2: Back");
+  display.setTextColor(COLOR_GRAY);
+  display.setCursor(10, 115);
+  display.println("BTN1: Select  BTN2: Back");
 }
 
 void displayWiFiSetup() {
-  tft.fillScreen(COLOR_BLACK);
+  display.fillScreen(COLOR_BLACK);
   
-  tft.setTextColor(COLOR_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(10, 10);
-  tft.println("WiFi Setup");
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(2);
+  display.setCursor(10, 10);
+  display.println("WiFi Setup");
   
-  tft.setTextSize(1);
-  tft.setCursor(10, 40);
+  display.setTextSize(1);
+  display.setCursor(10, 40);
   if (WiFi.status() == WL_CONNECTED) {
-    tft.setTextColor(COLOR_GREEN);
-    tft.println("Connected");
-    tft.setCursor(10, 55);
-    tft.printf("IP: %s", WiFi.localIP().toString().c_str());
+    display.setTextColor(COLOR_GREEN);
+    display.println("Connected");
+    display.setCursor(10, 55);
+    display.printf("IP: %s", WiFi.localIP().toString().c_str());
   } else {
-    tft.setTextColor(COLOR_RED);
-    tft.println("Disconnected");
-    tft.setCursor(10, 55);
-    tft.println("Starting AP mode...");
+    display.setTextColor(COLOR_RED);
+    display.println("Disconnected");
+    display.setCursor(10, 55);
+    display.println("Starting AP mode...");
   }
   
-  tft.setTextColor(COLOR_GRAY);
-  tft.setCursor(10, 115);
-  tft.println("BTN1: Select  BTN2: Back");
+  display.setTextColor(COLOR_GRAY);
+  display.setCursor(10, 115);
+  display.println("BTN1: Select  BTN2: Back");
 }
 
 void displayError(const String& message) {
-  tft.fillScreen(COLOR_RED);
-  tft.setTextColor(COLOR_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(10, 10);
-  tft.println("ERROR");
+  display.fillScreen(COLOR_RED);
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(2);
+  display.setCursor(10, 10);
+  display.println("ERROR");
   
-  tft.setTextSize(1);
-  tft.setCursor(10, 40);
-  tft.println(message);
+  display.setTextSize(1);
+  display.setCursor(10, 40);
+  display.println(message);
 }
 
 void displayBootScreen() {
-  tft.fillScreen(COLOR_BLACK);
+  display.fillScreen(COLOR_BLACK);
   
-  tft.setTextColor(COLOR_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(10, 20);
-  tft.println("ESP32 Breadmaker");
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(2);
+  display.setCursor(10, 20);
+  display.println("ESP32 Breadmaker");
   
-  tft.setTextSize(1);
-  tft.setCursor(10, 50);
-  tft.println("TTGO T-Display");
-  tft.setCursor(10, 65);
-  tft.println("Starting up...");
+  display.setTextSize(1);
+  display.setCursor(10, 50);
+  display.println("TTGO T-Display");
+  display.setCursor(10, 65);
+  display.println("Starting up...");
   
-  tft.setTextColor(COLOR_GRAY);
-  tft.setCursor(10, 90);
-  tft.printf("Build: %s", FIRMWARE_BUILD_DATE);
+  display.setTextColor(COLOR_GRAY);
+  display.setCursor(10, 90);
+  display.printf("Build: %s", FIRMWARE_BUILD_DATE);
   
   delay(2000); // Show boot screen for 2 seconds
 }
@@ -297,61 +299,61 @@ DisplayState getDisplayState() {
 // Utility functions
 void drawProgressBar(int x, int y, int width, int height, float progress) {
   // Draw border
-  tft.drawRect(x, y, width, height, COLOR_WHITE);
+  display.drawRect(x, y, width, height, COLOR_WHITE);
   
   // Draw filled portion
   int fillWidth = (int)(width * progress);
   if (fillWidth > 0) {
-    tft.fillRect(x + 1, y + 1, fillWidth - 2, height - 2, COLOR_GREEN);
+    display.fillRect(x + 1, y + 1, fillWidth - 2, height - 2, COLOR_GREEN);
   }
   
   // Draw percentage text
-  tft.setTextColor(COLOR_WHITE);
-  tft.setTextSize(1);
-  tft.setCursor(x + width + 5, y + height/2 - 4);
-  tft.printf("%.1f%%", progress * 100);
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(1);
+  display.setCursor(x + width + 5, y + height/2 - 4);
+  display.printf("%.1f%%", progress * 100);
 }
 
 void drawTemperature(int x, int y, float temp) {
-  tft.setTextColor(COLOR_YELLOW);
-  tft.setTextSize(1);
-  tft.setCursor(x, y);
-  tft.printf("Temp: %.1f°C", temp);
+  display.setTextColor(COLOR_YELLOW);
+  display.setTextSize(1);
+  display.setCursor(x, y);
+  display.printf("Temp: %.1f°C", temp);
 }
 
 void drawStageInfo(int x, int y, const String& stage, unsigned long timeLeft) {
-  tft.setTextColor(COLOR_WHITE);
-  tft.setTextSize(1);
-  tft.setCursor(x, y);
-  tft.printf("Stage: %s", stage.c_str());
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(1);
+  display.setCursor(x, y);
+  display.printf("Stage: %s", stage.c_str());
   
   // TODO: Display time left
   if (timeLeft > 0) {
-    tft.setCursor(x, y + 12);
-    tft.printf("Time: %lu min", timeLeft / 60000);
+    display.setCursor(x, y + 12);
+    display.printf("Time: %lu min", timeLeft / 60000);
   }
 }
 
 void drawOutputStates(int x, int y, bool heater, bool motor, bool light, bool buzzer) {
-  tft.setTextSize(1);
+  display.setTextSize(1);
   
   // Heater
-  tft.setTextColor(heater ? COLOR_RED : COLOR_GRAY);
-  tft.setCursor(x, y);
-  tft.print("H");
+  display.setTextColor(heater ? COLOR_RED : COLOR_GRAY);
+  display.setCursor(x, y);
+  display.print("H");
   
   // Motor
-  tft.setTextColor(motor ? COLOR_BLUE : COLOR_GRAY);
-  tft.setCursor(x + 20, y);
-  tft.print("M");
+  display.setTextColor(motor ? COLOR_BLUE : COLOR_GRAY);
+  display.setCursor(x + 20, y);
+  display.print("M");
   
   // Light
-  tft.setTextColor(light ? COLOR_YELLOW : COLOR_GRAY);
-  tft.setCursor(x + 40, y);
-  tft.print("L");
+  display.setTextColor(light ? COLOR_YELLOW : COLOR_GRAY);
+  display.setCursor(x + 40, y);
+  display.print("L");
   
   // Buzzer
-  tft.setTextColor(buzzer ? COLOR_GREEN : COLOR_GRAY);
-  tft.setCursor(x + 60, y);
-  tft.print("B");
+  display.setTextColor(buzzer ? COLOR_GREEN : COLOR_GRAY);
+  display.setCursor(x + 60, y);
+  display.print("B");
 }

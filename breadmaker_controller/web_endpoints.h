@@ -1,9 +1,9 @@
 #pragma once
 #include "globals.h"
-#include <ESPAsyncWebServer.h>
+#include <WebServer.h>
 
 // Register all web API endpoints
-void registerWebEndpoints(AsyncWebServer& server);
+void registerWebEndpoints(WebServer& server);
 
 // Performance metrics tracking (call from main loop)
 void updatePerformanceMetrics();
