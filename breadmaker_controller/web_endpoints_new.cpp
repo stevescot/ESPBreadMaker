@@ -9,6 +9,10 @@
 #include "calibration.h"
 #include <FFat.h>
 #include "ota_manager.h"
+#include <Update.h>  // For web-based firmware updates
+
+// External OTA status for web integration
+extern OTAStatus otaStatus;
 
 // Performance tracking variables
 static unsigned long loopCount = 0;
@@ -786,13 +790,13 @@ void otaEndpoints(WebServer& server) {
     
     // OTA status endpoint - provides current OTA state
     server.on("/api/ota/status", HTTP_GET, [&](){
-        // TODO: Integrate with actual OTA manager state
+        // Use actual OTA manager state
         String json = "{";
-        json += "\"enabled\":true,";
-        json += "\"inProgress\":false,";
-        json += "\"progress\":0,";
-        json += "\"hostname\":\"" + String(WiFi.getHostname()) + "\",";
-        json += "\"error\":null";
+        json += "\"enabled\":" + String(isOTAEnabled() ? "true" : "false") + ",";
+        json += "\"inProgress\":" + String(otaStatus.inProgress ? "true" : "false") + ",";
+        json += "\"progress\":" + String(otaStatus.progress) + ",";
+        json += "\"hostname\":\"" + getOTAHostname() + "\",";
+        json += "\"error\":" + (otaStatus.error.length() > 0 ? "\"" + otaStatus.error + "\"" : "null");
         json += "}";
         server.send(200, "application/json", json);
     });
@@ -807,6 +811,46 @@ void otaEndpoints(WebServer& server) {
         json += "\"totalSpace\":" + String(FFat.totalBytes());
         json += "}";
         server.send(200, "application/json", json);
+    });
+    
+    // Web-based firmware update endpoint
+    server.on("/api/update", HTTP_POST, [&](){
+        server.sendHeader("Connection", "close");
+        if (Update.hasError()) {
+            server.send(500, "text/plain", "Update failed: " + String(Update.getError()));
+        } else {
+            server.send(200, "text/plain", "Update successful! Rebooting...");
+            delay(100);
+            ESP.restart();
+        }
+    }, [&](){
+        // Handle firmware upload
+        HTTPUpload& upload = server.upload();
+        
+        if (upload.status == UPLOAD_FILE_START) {
+            if (debugSerial) Serial.printf("[UPDATE] Starting firmware update: %s\n", upload.filename.c_str());
+            
+            // Begin firmware update
+            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+                if (debugSerial) Serial.printf("[UPDATE] Begin failed: %s\n", Update.errorString());
+                return;
+            }
+            
+        } else if (upload.status == UPLOAD_FILE_WRITE) {
+            // Write firmware data
+            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+                if (debugSerial) Serial.printf("[UPDATE] Write failed: %s\n", Update.errorString());
+                return;
+            }
+            
+        } else if (upload.status == UPLOAD_FILE_END) {
+            // Complete firmware update
+            if (Update.end(true)) {
+                if (debugSerial) Serial.printf("[UPDATE] Firmware update completed: %u bytes\n", upload.totalSize);
+            } else {
+                if (debugSerial) Serial.printf("[UPDATE] End failed: %s\n", Update.errorString());
+            }
+        }
     });
 }
 

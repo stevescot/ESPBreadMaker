@@ -23,10 +23,10 @@ Or in Arduino IDE: Tools → Board → Boards Manager → ESP32 → select "2.0.
 - Multi-stage temperature control with PID
 - Precise mixing patterns with customizable durations
 - Manual mode: direct output toggles and manual temperature setpoint (PID)
-- Persistent storage (LittleFS)
+- Persistent storage (FFat)
 - OTA firmware update via web page
 - Multi-point RTD temperature calibration
-- WiFi setup via built-in captive portal (no WiFiManager)
+- WiFi setup via WiFiManager captive portal
 - Temperature sensor noise suppression with startup delay
 - Accurate timing with actual vs. estimated stage start times
 - Google Calendar integration for stage reminders
@@ -58,18 +58,16 @@ Or in Arduino IDE: Tools → Board → Boards Manager → ESP32 → select "2.0.
      # Arduino IDE: Boards Manager → ESP32 → select version 2.0.17 → Install
      ```
    - Install required libraries:
-     - ~~ESPAsyncWebServer~~ (REMOVED - causes crashes on ESP32)
-     - ~~AsyncTCP~~ (REMOVED - not needed with standard WebServer)
-     - ArduinoJson
-     - PID_v1
-     - LittleFS (built-in ESP32 support) 
-     - LovyanGFX (for display management)
+     - ArduinoJson (JSON parsing and generation)
+     - PID (Brett Beauregard's PID controller library)
+     - LovyanGFX (advanced graphics library for TTGO T-Display)
+     - WiFiManager (WiFi configuration portal)
    - Upload the `data/` folder to FFat using the Arduino ESP32 Data Upload tool or provided scripts
    - Build and upload the firmware using provided scripts (`build_esp32.ps1`) or Arduino IDE
 
 3. **First Boot & WiFi Setup**
-   - Power on the device. If no WiFi is configured, a dark-themed captive portal will appear for setup
-   - Connect to the device's WiFi AP, open the captive portal, and enter your WiFi credentials
+   - Power on the device. If no WiFi is configured, WiFiManager will start a captive portal for setup
+   - Connect to the device's WiFi AP (usually "ESP32-XXXX"), open a web browser, and enter your WiFi credentials
    - After connecting to your network, access the web UI at the device's IP address
 
 4. **Web UI & Program Selection**
@@ -196,7 +194,9 @@ The capacitive buttons complement the web interface by providing:
 
 ## Recent Changes (2025)
 - **ESP32 TTGO T-Display Migration:** Complete migration from ESP8266 to ESP32 TTGO T-Display with built-in 1.14" color display
+- **WebServer Library Migration:** Migrated from AsyncWebServer to standard ESP32 WebServer library for improved stability and compatibility
 - **LovyanGFX Integration:** Advanced graphics library integration for superior display performance and features
+- **WiFiManager Integration:** Replaced custom captive portal with WiFiManager for robust WiFi configuration
 - **Capacitive Touch Interface:** 6-button capacitive touch system for direct hardware control (Start/Pause, Stop, Select, Advance, Back, Light)
 - **Enhanced Display Management:** Full-featured display with status screens, menus, and real-time feedback
 - **Real Function Implementations:** Restored original temperature sampling, PID profile switching, and performance monitoring functions
@@ -207,8 +207,8 @@ The capacitive buttons complement the web interface by providing:
   - Update page: Shows firmware build time, upload progress, and rebooting status after OTA update.
   - All web UIs use a modern dark theme and improved event handling.
 - **Build & Upload Workflow:**
-  - Scripts for building and uploading both firmware and web files (LittleFS image) are provided (`build_and_upload.ps1`, `.bat`, `upload_files.ps1`).
-  - Web UI files are uploaded to ESP8266 LittleFS for serving.
+  - Scripts for building and uploading both firmware and web files (FFat image) are provided (`build_esp32.ps1`, `upload_files_robust.ps1`).
+  - Web UI files are uploaded to ESP32 FFat for serving.
 - **Firmware Improvements:**
   - Modularized code for maintainability and robustness.
   - Pin initialization for all outputs in `outputs_manager.cpp`.
@@ -239,7 +239,7 @@ The capacitive buttons complement the web interface by providing:
   - Manual mode toggle and output controls
   - Program dropdown and robust status polling
   - Firmware build time and upload/rebooting status on update page
-- **Build/Upload:** Scripts for firmware and web files (LittleFS) included; see build_and_upload.ps1 and upload_files.ps1.
+- **Build/Upload:** Scripts for firmware and web files (FFat) included; see build_esp32.ps1 and upload_files_robust.ps1.
 - **Persistent Program Selection:** Last selected program saved and restored on boot.
 - **Custom Stages Only:** All programs use custom stages for maximum flexibility.
 - **Error Handling:** Robust to missing/default program names and invalid states.
@@ -247,20 +247,27 @@ The capacitive buttons complement the web interface by providing:
 See the test/README.md for test plan and details.
 
 ## Getting Started
-1. **Install Arduino IDE** and ESP8266 board support
-2. **Install Libraries:**
-   - ESPAsyncWebServer
-   - ESPAsyncTCP
-   - ESPAsyncHTTPUpdateServer
+1. **Install Arduino IDE** and ESP32 board support
+2. **Setup ESP32 Arduino Core version 2.0.17** using the provided setup script:
+   ```bash
+   cd breadmaker_controller
+   .\setup_esp32_core.ps1
+   ```
+3. **Install Libraries** (or use the build script which will check dependencies):
    - ArduinoJson
-   - PID_v1
-   - LittleFS
-3. **Upload `data/` folder** to LittleFS using the Arduino LittleFS Data Upload tool or provided scripts
-4. **Build and upload** the firmware using provided scripts or Arduino IDE
-5. **Power on the device.** If no WiFi is configured, a dark-themed captive portal will appear for setup
-6. **Access the web UI** at the device's IP address
-7. **Select programs by index**: The web UI now selects programs by their position in the list, not by name. This avoids issues with long or special-character names.
-8. **Manual mode:** Use the toggle on the main UI to directly control outputs or set a manual temperature setpoint (PID controlled).
+   - PID (Brett Beauregard's library)
+   - LovyanGFX
+   - WiFiManager
+4. **Upload `data/` folder** to FFat using the Arduino ESP32 Data Upload tool or provided scripts
+5. **Build and upload** the firmware using provided scripts:
+   ```bash
+   .\build_esp32.ps1 -Port COM3           # Upload via serial
+   .\build_esp32.ps1 -OTA 192.168.1.100   # Upload via WiFi (OTA)
+   ```
+6. **Power on the device.** If no WiFi is configured, WiFiManager will start a captive portal for setup
+7. **Access the web UI** at the device's IP address
+8. **Select programs by index**: The web UI now selects programs by their position in the list, not by name. This avoids issues with long or special-character names.
+9. **Manual mode:** Use the toggle on the main UI to directly control outputs or set a manual temperature setpoint (PID controlled).
 
 ## Program Categories
 ### Bread Programs

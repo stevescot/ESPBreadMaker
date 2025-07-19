@@ -1,6 +1,6 @@
 #pragma once
 #include <Arduino.h>
-#include <ESPAsyncWebServer.h>
+#include <WebServer.h>
 
 // Function declarations for missing implementations
 
@@ -24,7 +24,7 @@ void saveSettings();
 void switchToProfile(const String& profileName);
 
 // Endpoint functions
-void otaEndpoints(AsyncWebServer& server);
+void otaEndpoints(WebServer& server);
 
 // OTA display function
 void displayMessage(const String& message);

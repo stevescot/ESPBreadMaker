@@ -666,7 +666,7 @@ void loop() {
   updateTemperatureSampling();
   updateBuzzerTone();
   updateDisplay(); // Update TFT display
-  ArduinoOTA.handle(); // Handle OTA updates
+  otaManagerLoop(); // Handle OTA updates via OTA manager
   server.handleClient(); // Handle web server requests - CRITICAL for web interface!
   // REMOVED: capacitiveButtonsUpdate(); // Capacitive touch buttons disabled due to GPIO boot conflicts
   checkSerialWifiConfig(); // Check for serial WiFi configuration commands

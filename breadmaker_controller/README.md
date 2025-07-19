@@ -1,52 +1,51 @@
-# Breadmaker Controller (ESP8266)
+# Breadmaker Controller (ESP32 TTGO T-Display)
 
-A versatile kitchen appliance controller using an ESP8266 microcontroller. Features a modern web UI, program editor, temperature calibration, robust manual mode, and Home Assistant integration. Supports bread making, fermentation, sous vide, and various utility functions.
+A versatile kitchen appliance controller using an ESP32 TTGO T-Display microcontroller with built-in 1.14" color display. Features a modern web UI, program editor, OTA firmware update, temperature calibration, robust manual mode, and Home Assistant integration. Supports bread making, fermentation, sous vide, and various utility functions.
 
 ## Features
 - Controls motor, heater, light, and buzzer (digital outputs with 1k series resistors)
+- Built-in 1.14" color display (ST7789 controller) with LovyanGFX graphics
 - Web UI: live status, SVG icons, program editor, stage progress, manual mode
 - Multi-stage temperature control with PID
 - Precise mixing patterns with customizable durations
 - Manual mode: direct output toggles and manual temperature setpoint (PID)
-- Persistent storage (LittleFS)
+- Persistent storage (FFat filesystem)
+- OTA firmware update via web page
 - Multi-point RTD temperature calibration
-- WiFi setup via built-in captive portal (no WiFiManager)
+- WiFi setup via WiFiManager captive portal
 - Temperature sensor noise suppression with startup delay
 - Accurate timing with actual vs. estimated stage start times
 - Google Calendar integration for stage reminders
 - Home Assistant integration via REST sensors and automations
 
-> **Note:** OTA firmware upload has been removed due to firmware size exceeding reliable upload limits on ESP8266. Please use serial or USB upload methods for firmware updates.
-> 
-> Status JSON is now generated as streaming strings to minimize memory usage, as the firmware is approaching the ESP8266's RAM capacity. This allows robust operation even with large program lists and detailed status output.
+> **Note:** This project has been migrated from ESP8266 to ESP32 TTGO T-Display for improved performance, memory capacity, and built-in display functionality. The ESP32 version uses the standard WebServer library instead of AsyncWebServer for better stability.
 
 ## Setup Stages
 1. **Hardware Wiring & Connection**
-   - **ESP8266 Board:** NodeMCU, Wemos D1 Mini, or similar.
+   - **ESP32 TTGO T-Display:** Built-in 1.14" color display with USB-C programming.
    - **Breadmaker Board Connections:**
-     - **Motor:** Connect to a digital output pin (e.g., D1/GPIO5) **with a 1k resistor in series**
-     - **Heater:** Connect to a digital output pin (e.g., D2/GPIO4) **with a 1k resistor in series**
-     - **Light:** Connect to a digital output pin (e.g., D6/GPIO12) **with a 1k resistor in series**
-     - **Buzzer:** Connect to a digital output pin (e.g., D7/GPIO13) **with a 1k resistor in series**
-     - **Temperature Sensor (RTD/Analog):** Connect to A0 (ADC input). **Add a 10k pull-down resistor from the sensor signal to ground** (typical for voltage divider circuits; adjust as needed for your sensor type).
-   - **Power:** Use 5V USB or regulated supply. Ensure breadmaker control lines are opto-isolated or logic-level compatible.
+     - **Motor:** Connect to a digital output pin **with a 1k resistor in series**
+     - **Heater:** Connect to a digital output pin **with a 1k resistor in series**
+     - **Light:** Connect to a digital output pin **with a 1k resistor in series**
+     - **Buzzer:** Connect to a digital output pin **with a 1k resistor in series**
+     - **Temperature Sensor (RTD/Analog):** Connect to GPIO 34 (ADC1_CH6). **Add a 10k pull-down resistor from the sensor signal to ground** (typical for voltage divider circuits; adjust as needed for your sensor type).
+   - **Power:** Use 5V USB-C or regulated supply. Ensure breadmaker control lines are opto-isolated or logic-level compatible.
    - **Pin assignments** can be changed in `outputs_manager.cpp` if needed.
 
 2. **Firmware & Web UI Upload**
-   - Install Arduino IDE and ESP8266 board support
+   - Install Arduino IDE and ESP32 board support
+   - **CRITICAL: Use ESP32 Arduino Core version 2.0.17 ONLY** - newer versions (3.x) have compatibility issues
    - Install required libraries:
-     - ESPAsyncWebServer
-     - ESPAsyncTCP
-     - ESPAsyncHTTPUpdateServer
-     - ArduinoJson
-     - PID_v1
-     - LittleFS
-   - Upload the `data/` folder to LittleFS using the Arduino LittleFS Data Upload tool or provided scripts
-   - Build and upload the firmware using provided scripts (`build_and_upload.ps1`, `.bat`) or Arduino IDE
+     - ArduinoJson (JSON parsing and generation)
+     - PID (Brett Beauregard's PID controller library)
+     - LovyanGFX (advanced graphics library for TTGO T-Display)
+     - WiFiManager (WiFi configuration portal)
+   - Upload the `data/` folder to FFat using the Arduino ESP32 Data Upload tool or provided scripts
+   - Build and upload the firmware using provided scripts (`build_esp32.ps1`) or Arduino IDE
 
 3. **First Boot & WiFi Setup**
-   - Power on the device. If no WiFi is configured, a dark-themed captive portal will appear for setup
-   - Connect to the device's WiFi AP, open the captive portal, and enter your WiFi credentials
+   - Power on the device. If no WiFi is configured, WiFiManager will start a captive portal for setup
+   - Connect to the device's WiFi AP (usually "ESP32-XXXX"), open a web browser, and enter your WiFi credentials
    - After connecting to your network, access the web UI at the device's IP address
 
 4. **Web UI & Program Selection**
@@ -104,9 +103,9 @@ A versatile kitchen appliance controller using an ESP8266 microcontroller. Featu
 - Butter melting and holding
 
 ## Hardware
-- ESP8266 (NodeMCU, Wemos D1 Mini, etc.)
+- ESP32 TTGO T-Display (with built-in 1.14" color display)
 - Breadmaker with accessible control lines for motor, heater, light, buzzer
-- RTD or analog temperature sensor (wired to A0)
+- RTD or analog temperature sensor (wired to analog input pin)
 
 ## Recent Changes (2025)
 - **Manual Mode:** Added direct control of outputs (heater, motor, light, buzzer) and manual temperature setpoint via new API endpoints and web UI. Manual mode disables program controls and allows real-time output toggling.
@@ -116,8 +115,8 @@ A versatile kitchen appliance controller using an ESP8266 microcontroller. Featu
   - Update page: Shows firmware build time, upload progress, and rebooting status after OTA update.
   - All web UIs use a modern dark theme and improved event handling.
 - **Build & Upload Workflow:**
-  - Scripts for building and uploading both firmware and web files (LittleFS image) are provided (`build_and_upload.ps1`, `.bat`, `upload_files.ps1`).
-  - Web UI files are uploaded to ESP8266 LittleFS for serving.
+  - Scripts for building and uploading both firmware and web files (FFat image) are provided (`build_esp32.ps1`, `upload_files_robust.ps1`).
+  - Web UI files are uploaded to ESP32 FFat for serving.
 - **Firmware Improvements:**
   - Modularized code for maintainability and robustness.
   - Pin initialization for all outputs in `outputs_manager.cpp`.
@@ -148,7 +147,7 @@ A versatile kitchen appliance controller using an ESP8266 microcontroller. Featu
   - Manual mode toggle and output controls
   - Program dropdown and robust status polling
   - Firmware build time and upload/rebooting status on update page
-- **Build/Upload:** Scripts for firmware and web files (LittleFS) included; see build_and_upload.ps1 and upload_files.ps1.
+- **Build/Upload:** Scripts for firmware and web files (FFat) included; see build_esp32.ps1 and upload_files_robust.ps1.
 - **Persistent Program Selection:** Last selected program saved and restored on boot.
 - **Custom Stages Only:** All programs use custom stages for maximum flexibility.
 - **Error Handling:** Robust to missing/default program names and invalid states.
@@ -156,20 +155,50 @@ A versatile kitchen appliance controller using an ESP8266 microcontroller. Featu
 See the test/README.md for test plan and details.
 
 ## Getting Started
-1. **Install Arduino IDE** and ESP8266 board support
-2. **Install Libraries:**
-   - ESPAsyncWebServer
-   - ESPAsyncTCP
-   - ESPAsyncHTTPUpdateServer
+1. **Install Arduino IDE** and ESP32 board support
+2. **Setup ESP32 Arduino Core version 2.0.17** using the provided setup script:
+   ```bash
+   .\setup_esp32_core.ps1
+   ```
+3. **Install Libraries** (or use the build script which will check dependencies):
    - ArduinoJson
-   - PID_v1
-   - LittleFS
-3. **Upload `data/` folder** to LittleFS using the Arduino LittleFS Data Upload tool or provided scripts
-4. **Build and upload** the firmware using provided scripts or Arduino IDE
-5. **Power on the device.** If no WiFi is configured, a dark-themed captive portal will appear for setup
-6. **Access the web UI** at the device's IP address
-7. **Select programs by index**: The web UI now selects programs by their position in the list, not by name. This avoids issues with long or special-character names.
-8. **Manual mode:** Use the toggle on the main UI to directly control outputs or set a manual temperature setpoint (PID controlled).
+   - PID (Brett Beauregard's library)
+   - LovyanGFX
+   - WiFiManager
+4. **Upload `data/` folder** to FFat using the Arduino ESP32 Data Upload tool or provided scripts
+5. **Build and upload** the firmware using provided scripts:
+   ```bash
+   .\build_esp32.ps1 -Port COM3           # Upload via serial
+   .\build_esp32.ps1 -OTA 192.168.1.100   # Upload via WiFi (OTA)
+   ```
+6. **Power on the device.** If no WiFi is configured, WiFiManager will start a captive portal for setup
+7. **Access the web UI** at the device's IP address
+8. **Select programs by index**: The web UI now selects programs by their position in the list, not by name. This avoids issues with long or special-character names.
+9. **Manual mode:** Use the toggle on the main UI to directly control outputs or set a manual temperature setpoint (PID controlled).
+
+## Remote Firmware Updates
+
+The ESP32 Breadmaker Controller supports **three methods** for remote firmware updates:
+
+### 1. Web-Based Update (Easiest)
+- **Access**: Navigate to `http://[device-ip]/update` in your web browser
+- **Method**: Upload `.bin` file directly through web interface
+- **Advantages**: No additional tools required, progress indication, works from any device
+- **Requirements**: Device must be connected to WiFi and accessible on network
+
+### 2. Command-Line OTA (Developer Friendly)
+- **Usage**: `.\build_esp32.ps1 -OTA [device-ip]`
+- **Method**: Uses `espota.py` tool from ESP32 Arduino Core
+- **Advantages**: Integrated with build process, automated compilation and upload
+- **Requirements**: Python, ESP32 Arduino Core, device on same network
+
+### 3. Arduino IDE Network Port (IDE Integration)
+- **Access**: Arduino IDE → Tools → Port → Network port
+- **Method**: ArduinoOTA service on port 3232
+- **Advantages**: Works directly in Arduino IDE after initial setup
+- **Requirements**: Device visible on network, OTA password (default: "breadmaker2024")
+
+**Note**: All OTA methods require the device to be running and connected to WiFi. For first-time setup or recovery, use serial upload via USB.
 
 ## Program Categories
 ### Bread Programs
@@ -200,7 +229,8 @@ See the test/README.md for test plan and details.
 ## Web Pages
 - `/` — Main status and manual/program control
 - `/config` — Program editor, calibration, and firmware update (combined)
-- `/update` — OTA firmware update (shows build time, upload progress, and reboot status)
+- `/update` — Web-based firmware update (upload .bin files, progress tracking)
+- `/ota` — OTA configuration and Arduino IDE setup instructions
 - `/calibrate` — RTD calibration (live raw value, multi-point)
 - `/programs` — Program editor (advanced, supports JSON import/export)
 - `/wifi.html` — WiFi captive portal (auto-appears if not configured, dark theme)
@@ -213,7 +243,9 @@ See the test/README.md for test plan and details.
 - `/api/select` — Select program by index or name
 - `/api/start`, `/api/stop` — Start/stop selected program
 - `/api/firmware_info` — Firmware build time and version
-- `/api/update` — OTA firmware upload
+- `/api/update` — Web-based firmware upload (POST with .bin file)
+- `/api/ota/status` — OTA update status and configuration
+- `/api/ota/info` — Device information for OTA updates
 
 ## Security
 - OTA and config pages are open by default. For real-world use, add authentication or restrict access to your local network.

@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Firmware Update - Breadmaker Controller</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background-color: #1a1a1a; 
+            color: #ffffff; 
+        }
+        .container { 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background: #2d2d2d; 
+            padding: 20px; 
+            border-radius: 10px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3); 
+        }
+        h1 { color: #ffffff; text-align: center; }
+        .section { 
+            margin: 20px 0; 
+            padding: 15px; 
+            border: 1px solid #555; 
+            border-radius: 5px; 
+            background: #3a3a3a;
+        }
+        .section h3 { margin-top: 0; color: #ffffff; }
+        .status { 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 5px; 
+            text-align: center; 
+        }
+        .status.success { background-color: #28a745; color: #ffffff; }
+        .status.error { background-color: #dc3545; color: #ffffff; }
+        .status.warning { background-color: #ffc107; color: #000000; }
+        .status.info { background-color: #17a2b8; color: #ffffff; }
+        .form-group { margin: 15px 0; }
+        .form-group label { 
+            display: block; 
+            margin-bottom: 5px; 
+            font-weight: bold; 
+            color: #ffffff;
+        }
+        .form-group input[type="file"] { 
+            width: 100%; 
+            padding: 8px; 
+            border: 1px solid #555; 
+            border-radius: 4px; 
+            background: #4a4a4a;
+            color: #ffffff;
+        }
+        .button { 
+            background-color: #007bff; 
+            color: white; 
+            padding: 12px 24px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            margin: 5px; 
+            font-size: 16px;
+        }
+        .button:hover { background-color: #0056b3; }
+        .button:disabled { 
+            background-color: #6c757d; 
+            cursor: not-allowed; 
+        }
+        .button.danger { background-color: #dc3545; }
+        .button.danger:hover { background-color: #c82333; }
+        .progress-container { 
+            margin: 20px 0; 
+            display: none; 
+        }
+        .progress-bar { 
+            width: 100%; 
+            height: 25px; 
+            background-color: #4a4a4a; 
+            border-radius: 12px; 
+            overflow: hidden; 
+            margin: 10px 0; 
+        }
+        .progress-fill { 
+            height: 100%; 
+            background-color: #28a745; 
+            transition: width 0.3s ease; 
+            text-align: center;
+            line-height: 25px;
+            color: white;
+            font-weight: bold;
+        }
+        .back-link { text-align: center; margin-top: 20px; }
+        .back-link a { color: #007bff; text-decoration: none; }
+        .warning-box {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+        .info-box {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Firmware Update</h1>
+        
+        <div class="section">
+            <h3>Current Firmware</h3>
+            <div id="firmwareInfo">Loading...</div>
+        </div>
+        
+        <div class="warning-box">
+            <strong>⚠️ WARNING:</strong> Uploading firmware will restart the device. Make sure:
+            <ul>
+                <li>No critical operations are running</li>
+                <li>You have a stable power supply</li>
+                <li>You're uploading the correct .bin file</li>
+                <li>File size is reasonable (typically 1-2MB)</li>
+            </ul>
+        </div>
+        
+        <div class="section">
+            <h3>Upload New Firmware</h3>
+            <form id="updateForm" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="firmwareFile">Select Firmware File (.bin):</label>
+                    <input type="file" id="firmwareFile" name="update" accept=".bin" required>
+                </div>
+                <div class="form-group">
+                    <button type="submit" class="button" id="uploadBtn">Upload Firmware</button>
+                    <button type="button" class="button danger" onclick="cancelUpdate()" id="cancelBtn" style="display: none;">Cancel</button>
+                </div>
+            </form>
+            
+            <div id="progressContainer" class="progress-container">
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill" style="width: 0%">0%</div>
+                </div>
+                <div id="statusMessage" class="status info">Preparing upload...</div>
+            </div>
+        </div>
+        
+        <div class="info-box">
+            <strong>Alternative Update Methods:</strong>
+            <ul>
+                <li><strong>Arduino IDE:</strong> Use Tools → Port → Network port (if device is on WiFi)</li>
+                <li><strong>Command Line:</strong> Use build_esp32.ps1 -OTA [device_ip]</li>
+                <li><strong>Serial Upload:</strong> Connect USB cable and use build_esp32.ps1 -Port [COM_port]</li>
+            </ul>
+        </div>
+        
+        <div class="back-link">
+            <a href="/">&larr; Back to Main Page</a>
+        </div>
+    </div>
+
+    <script>
+        let uploadInProgress = false;
+        
+        // Load current firmware info
+        function loadFirmwareInfo() {
+            fetch('/api/firmware_info')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('firmwareInfo').innerHTML = `
+                        <p><strong>Build Date:</strong> ${data.build}</p>
+                        <p><strong>Version:</strong> ${data.version || 'Unknown'}</p>
+                        <p><strong>Free Heap:</strong> ${(data.freeHeap / 1024).toFixed(1)} KB</p>
+                    `;
+                })
+                .catch(error => {
+                    console.error('Error loading firmware info:', error);
+                    document.getElementById('firmwareInfo').innerHTML = '<p>Error loading firmware information</p>';
+                });
+        }
+        
+        // Handle form submission
+        document.getElementById('updateForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            if (uploadInProgress) {
+                return;
+            }
+            
+            const fileInput = document.getElementById('firmwareFile');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select a firmware file');
+                return;
+            }
+            
+            if (!file.name.endsWith('.bin')) {
+                alert('Please select a .bin firmware file');
+                return;
+            }
+            
+            // Confirm upload
+            if (!confirm(`Are you sure you want to upload "${file.name}"?\n\nThis will restart the device and may take several minutes.`)) {
+                return;
+            }
+            
+            uploadFirmware(file);
+        });
+        
+        function uploadFirmware(file) {
+            uploadInProgress = true;
+            
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = document.getElementById('progressFill');
+            const statusMessage = document.getElementById('statusMessage');
+            const uploadBtn = document.getElementById('uploadBtn');
+            const cancelBtn = document.getElementById('cancelBtn');
+            
+            // Show progress UI
+            progressContainer.style.display = 'block';
+            uploadBtn.disabled = true;
+            cancelBtn.style.display = 'inline-block';
+            
+            statusMessage.className = 'status info';
+            statusMessage.textContent = 'Starting upload...';
+            
+            // Create FormData
+            const formData = new FormData();
+            formData.append('update', file);
+            
+            // Create XMLHttpRequest for progress tracking
+            const xhr = new XMLHttpRequest();
+            
+            // Track upload progress
+            xhr.upload.addEventListener('progress', function(e) {
+                if (e.lengthComputable) {
+                    const percentComplete = Math.round((e.loaded / e.total) * 100);
+                    progressFill.style.width = percentComplete + '%';
+                    progressFill.textContent = percentComplete + '%';
+                    statusMessage.textContent = `Uploading firmware... ${percentComplete}%`;
+                }
+            });
+            
+            // Handle completion
+            xhr.addEventListener('load', function() {
+                if (xhr.status === 200) {
+                    progressFill.style.width = '100%';
+                    progressFill.textContent = '100%';
+                    statusMessage.className = 'status success';
+                    statusMessage.textContent = 'Upload successful! Device is rebooting...';
+                    
+                    // Wait and redirect
+                    setTimeout(() => {
+                        statusMessage.textContent = 'Waiting for device to restart...';
+                        // Try to reconnect after 10 seconds
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 10000);
+                    }, 2000);
+                } else {
+                    statusMessage.className = 'status error';
+                    statusMessage.textContent = `Upload failed: ${xhr.statusText}`;
+                    resetUploadUI();
+                }
+            });
+            
+            // Handle errors
+            xhr.addEventListener('error', function() {
+                statusMessage.className = 'status error';
+                statusMessage.textContent = 'Upload failed: Network error';
+                resetUploadUI();
+            });
+            
+            // Start upload
+            xhr.open('POST', '/api/update');
+            xhr.send(formData);
+        }
+        
+        function cancelUpdate() {
+            if (uploadInProgress) {
+                if (confirm('Are you sure you want to cancel the upload?\n\nThis may leave the device in an unstable state.')) {
+                    location.reload();
+                }
+            }
+        }
+        
+        function resetUploadUI() {
+            uploadInProgress = false;
+            document.getElementById('uploadBtn').disabled = false;
+            document.getElementById('cancelBtn').style.display = 'none';
+            
+            setTimeout(() => {
+                document.getElementById('progressContainer').style.display = 'none';
+                document.getElementById('progressFill').style.width = '0%';
+                document.getElementById('progressFill').textContent = '0%';
+            }, 5000);
+        }
+        
+        // Load firmware info on page load
+        loadFirmwareInfo();
+    </script>
+</body>
+</html>

@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
-#include <ESPAsyncWebServer.h>
+#include <WebServer.h>
 
 #ifdef ESP32
 #include <esp_system.h>
@@ -472,35 +472,6 @@ void switchToProfile(const String& profileName) {
     }
   }
   Serial.printf("[switchToProfile] Profile '%s' not found!\n", profileName.c_str());
-}
-
-// OTA endpoint implementation for ESP32
-void otaEndpoints(AsyncWebServer& server) {
-    // OTA status endpoint
-    server.on("/api/ota_status", HTTP_GET, [](AsyncWebServerRequest* req){
-        AsyncResponseStream *response = req->beginResponseStream("application/json");
-        response->print("{");
-        response->print("\"status\":\"ready\",");
-        response->print("\"platform\":\"ESP32\",");
-        response->printf("\"free_heap\":%u,", ESP.getFreeHeap());
-        response->printf("\"chip_revision\":%d,", ESP.getChipRevision());
-        response->printf("\"cpu_freq\":%d,", ESP.getCpuFreqMHz());
-        response->printf("\"flash_size\":%u", ESP.getFlashChipSize());
-        response->print("}");
-        req->send(response);
-    });
-    
-    // Basic OTA info endpoint
-    server.on("/api/system_info", HTTP_GET, [](AsyncWebServerRequest* req){
-        AsyncResponseStream *response = req->beginResponseStream("application/json");
-        response->print("{");
-        response->printf("\"platform\":\"ESP32\",");
-        response->printf("\"free_heap\":%u,", ESP.getFreeHeap());
-        response->printf("\"uptime\":%lu,", millis());
-        response->printf("\"reset_reason\":\"%s\"", esp_reset_reason() == ESP_RST_POWERON ? "power_on" : "other");
-        response->print("}");
-        req->send(response);
-    });
 }
 
 // Display message function used by OTA manager
