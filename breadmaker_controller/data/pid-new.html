@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PID Controller Tuning - Breadmaker</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="controllertuning.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <nav>
+    <a href="/">🏠 Home</a>
+    <a href="/config.html">⚙️ Config</a>
+    <a href="/programs.html">📝 Programs</a>
+    <a href="/calibration.html">🌡️ Calibration</a>
+    <a href="/pid-tune.html" class="active">🎛️ PID Tuning</a>
+    <a href="/update.html">⬆️ Update</a>
+  </nav>
+
+  <div class="tuning-container">
+    <h1>🎛️ High-Precision PID Controller Tuning</h1>
+    
+    <div class="tuning-instructions">
+      <h3>📚 PID Tuning Quick Reference</h3>
+      <div class="instructions-grid">
+        <div class="instruction-item">
+          <div class="instruction-title">🎯 Proportional (Kp)</div>
+          <div class="instruction-text">Controls immediate response. Higher = faster response but may overshoot. Start: 1.0</div>
+        </div>
+        <div class="instruction-item">
+          <div class="instruction-title">📈 Integral (Ki)</div>
+          <div class="instruction-text">Eliminates steady-state error. Higher = faster correction but may overshoot. Start: 0.1</div>
+        </div>
+        <div class="instruction-item">
+          <div class="instruction-title">🛡️ Derivative (Kd)</div>
+          <div class="instruction-text">Reduces overshoot by predicting. Higher = less overshoot but sensitive to noise. Start: 0.01</div>
+        </div>
+        <div class="instruction-item">
+          <div class="instruction-title">🤖 Auto-Tune</div>
+          <div class="instruction-text">Automatically calculates optimal parameters using step response analysis</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tuning-grid">
+      <!-- Control Panel -->
+      <div class="control-panel">
+        <h2>🎛️ PID Parameters (High Precision)</h2>
+        
+        <div class="param-group">
+          <h3>📊 PID Coefficients</h3>
+          <div class="param-row">
+            <label class="param-label">Kp:</label>
+            <input type="number" id="kpInput" class="param-input" step="0.000001" min="0" max="100" value="1.000000">
+            <span class="param-unit">gain</span>
+          </div>
+          <div class="param-desc">
+            <strong>Proportional Gain:</strong> Determines how aggressively the controller responds to current error. 
+            Higher values = faster response but potential overshoot and oscillation.
+          </div>
+          
+          <div class="param-row">
+            <label class="param-label">Ki:</label>
+            <input type="number" id="kiInput" class="param-input" step="0.000001" min="0" max="50" value="0.100000">
+            <span class="param-unit">1/s</span>
+          </div>
+          <div class="param-desc">
+            <strong>Integral Gain:</strong> Eliminates steady-state error by accumulating past errors. 
+            For thermal systems, keep low (0.01-1.0) to prevent windup.
+          </div>
+          
+          <div class="param-row">
+            <label class="param-label">Kd:</label>
+            <input type="number" id="kdInput" class="param-input" step="0.000001" min="0" max="10" value="0.010000">
+            <span class="param-unit">s</span>
+          </div>
+          <div class="param-desc">
+            <strong>Derivative Gain:</strong> Predicts future error based on rate of change. 
+            Reduces overshoot but amplifies noise. Keep very low for thermal systems.
+          </div>
+        </div>
+
+        <div class="param-group">
+          <h3>⏱️ Timing Parameters</h3>
+          <div class="param-row">
+            <label class="param-label">Sample Time:</label>
+            <input type="number" id="sampleTimeInput" class="param-input" step="50" min="100" max="5000" value="1000">
+            <span class="param-unit">ms</span>
+          </div>
+          <div class="param-desc">
+            <strong>PID Update Rate:</strong> How often the controller calculates new output. 
+            Lower = faster response, Higher = more stable but slower.
+          </div>
+          
+          <div class="param-row">
+            <label class="param-label">Window Size:</label>
+            <input type="number" id="windowSizeInput" class="param-input" step="1000" min="5000" max="120000" value="30000">
+            <span class="param-unit">ms</span>
+          </div>
+          <div class="param-desc">
+            <strong>Relay Control Window:</strong> Time window for proportional relay control. 
+            Longer = gentler on relays, Shorter = faster response.
+          </div>
+        </div>
+
+        <div class="param-group">
+          <h3>🌡️ Temperature Averaging</h3>
+          <div class="param-row">
+            <label class="param-label">Sample Count:</label>
+            <input type="number" id="tempSampleCount" class="param-input" step="1" min="5" max="50" value="10">
+            <span class="param-unit">samples</span>
+          </div>
+          <div class="param-desc">
+            <strong>Temperature Buffer Size:</strong> Number of temperature readings to collect for averaging. 
+            More samples = smoother but slower response to changes.
+          </div>
+          
+          <div class="param-row">
+            <label class="param-label">Reject Count:</label>
+            <input type="number" id="tempRejectCount" class="param-input" step="1" min="0" max="10" value="2">
+            <span class="param-unit">each end</span>
+          </div>
+          <div class="param-desc">
+            <strong>Outlier Rejection:</strong> Number of highest and lowest readings to discard before averaging. 
+            Helps filter noise and sensor spikes. Must leave at least 3 samples for averaging.
+          </div>
+          
+          <div class="param-row">
+            <label class="param-label">Sample Interval:</label>
+            <input type="number" id="tempSampleInterval" class="param-input" step="100" min="100" max="2000" value="500">
+            <span class="param-unit">ms</span>
+          </div>
+          <div class="param-desc">
+            <strong>Sampling Rate:</strong> Time between temperature measurements. 
+            Lower = more responsive, Higher = more stable but uses less CPU.
+          </div>
+        </div>
+
+        <div class="button-group">
+          <button class="btn btn-primary" onclick="updatePIDParams()">Apply All Parameters</button>
+          <button class="btn btn-primary" onclick="updateTempAveraging()">Apply Temp Averaging</button>
+          <button class="btn btn-warning" onclick="resetToDefaults()">Reset Defaults</button>
+          <button class="btn btn-primary" onclick="loadCurrentParams()">Load Current</button>
+        </div>
+
+        <div class="test-controls">
+          <h3>🧪 Manual Testing</h3>
+          <div class="param-row">
+            <label class="param-label">Target Temp:</label>
+            <input type="number" id="targetTempInput" class="param-input" step="0.5" min="20" max="250" value="60.0">
+            <span class="param-unit">°C</span>
+          </div>
+          <div class="button-group">
+            <button class="btn btn-success" onclick="startManualTest()">Start Test</button>
+            <button class="btn btn-danger" onclick="stopTest()">Stop Test</button>
+            <button class="btn btn-warning" onclick="clearGraph()">Clear Graph</button>
+          </div>
+        </div>
+
+        <div class="auto-tune-controls">
+          <h3>🤖 Automatic PID Tuning</h3>
+          
+          <div class="param-row">
+            <label class="param-label">Method:</label>
+            <select id="autoTuneMethod" class="param-input">
+              <option value="step">Step Response (ZN)</option>
+              <option value="ultimate">Ultimate Gain (ZN)</option>
+            </select>
+            <span class="param-unit">type</span>
+          </div>
+          <div class="param-desc">
+            <strong>Tuning Method:</strong>
+            <br>• <strong>Step Response:</strong> Temperature step change analysis (safer, recommended for most systems)
+            <br>• <strong>Ultimate Gain:</strong> Thermal response analysis with controlled heating bursts (optimized for heating-only systems)
+          </div>
+          
+          <div class="param-row">
+            <label class="param-label">Base Temp:</label>
+            <input type="number" id="autoTuneBaseTemp" class="param-input" step="1" min="20" max="200" value="30">
+            <span class="param-unit">°C</span>
+          </div>
+          <div class="param-desc">
+            <strong>Base Temperature:</strong> Starting temperature for auto-tune test. Choose a stable temperature that's:
+            <br>• <strong>Above room temperature</strong> (typically 30-40°C) for reliable heating control
+            <br>• <strong>Safe for your system</strong> - not too high to avoid damage
+            <br>• <strong>Realistic for your application</strong> - within normal operating range
+            <br>• <strong>Easily achievable</strong> - the system should reach this temperature quickly and hold it steady
+          </div>
+          
+          <div class="param-row" id="stepSizeRow">
+            <label class="param-label">Step Size:</label>
+            <input type="number" id="autoTuneStepSize" class="param-input" step="1" min="5" max="50" value="20">
+            <span class="param-unit">°C</span>
+          </div>
+          <div class="param-desc" id="stepSizeDesc">
+            <strong>Step Size:</strong> Temperature jump for response analysis (Base Temp + Step Size = Target).
+            <br>• <strong>Large enough</strong> (15-30°C) to get clear system response
+            <br>• <strong>Not too large</strong> to avoid system stress or overshoot
+            <br>• <strong>Example:</strong> Base 30°C + Step 20°C = 50°C target for analysis
+          </div>
+          
+          <div class="param-desc" style="background: #e8f5e8; border: 1px solid #c3e6c3; margin-top: 10px;">
+            <strong id="autoTuneProcessDesc">🔬 Auto-Tune Process:</strong> <span id="autoTuneProcessText">The system will first stabilize at the base temperature, then make a step change to base + step size temperature while recording the response. This data is analyzed using the Ziegler-Nichols method to calculate optimal PID parameters for your thermal system.</span>
+          </div>
+          <div class="button-group">
+            <button class="btn btn-auto-tune" onclick="startAutoTune()" id="autoTuneBtn">🚀 Start Auto-Tune</button>
+            <button class="btn btn-danger" onclick="stopAutoTune()" id="stopAutoTuneBtn" disabled>⏹️ Stop Auto-Tune</button>
+          </div>
+          
+          <div id="autoTuneStatus" class="auto-tune-status">
+            <div id="autoTuneMessage">Ready to start auto-tuning...</div>
+            <div class="auto-tune-progress">
+              <div id="autoTuneProgressBar" class="auto-tune-progress-bar"></div>
+            </div>
+            <div id="autoTunePhase">Phase: Idle</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status Display -->
+      <div class="control-panel">
+        <h2>📊 Real-Time Status</h2>
+        
+        <div class="status-display">
+          <h3 style="margin: 0 0 15px 0; color: #333;">Current System State</h3>
+          <div class="status-grid">
+            <div class="status-row">
+              <span class="status-label">Current Temp:</span>
+              <span class="status-value" id="currentTemp">--.-°C</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Target Temp:</span>
+              <span class="status-value" id="targetTemp">--.-°C</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Temperature Error:</span>
+              <span class="status-value" id="tempError">--.-°C</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">PID Output:</span>
+              <span class="status-value" id="pidOutput">--.-------%</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Heater State:</span>
+              <span class="status-value" id="heaterState">--</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Manual Mode:</span>
+              <span class="status-value" id="manualMode">--</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <h3>📈 Performance Metrics</h3>
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-value" id="riseTime">--</div>
+              <div class="metric-label">Rise Time (sec)</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-value" id="overshoot">--</div>
+              <div class="metric-label">Overshoot (°C)</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-value" id="settlingTime">--</div>
+              <div class="metric-label">Settling Time (sec)</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-value" id="steadyStateError">--</div>
+              <div class="metric-label">SS Error (°C)</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <h3>🔧 Current PID Settings</h3>
+          <div class="status-grid">
+            <div class="status-row">
+              <span class="status-label">Active Kp:</span>
+              <span class="status-value" id="currentKp">--.------</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Active Ki:</span>
+              <span class="status-value" id="currentKi">--.------</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Active Kd:</span>
+              <span class="status-value" id="currentKd">--.------</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Sample Time:</span>
+              <span class="status-value" id="currentSampleTime">-- ms</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <h3>📊 Temperature Averaging Status</h3>
+          <div class="status-grid">
+            <div class="status-row">
+              <span class="status-label">Sample Buffer:</span>
+              <span class="status-value" id="currentTempSamples">-- samples</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Rejection:</span>
+              <span class="status-value" id="currentTempReject">-- each end</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Sample Rate:</span>
+              <span class="status-value" id="currentTempInterval">-- ms</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Effective Count:</span>
+              <span class="status-value" id="currentTempEffective">-- used</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Temperature Chart -->
+    <div class="chart-container">
+      <canvas id="temperatureChart"></canvas>
+    </div>
+  </div>
+
+  <!-- JavaScript Files -->
+  <script src="controllertuning-core.js"></script>
+  <script src="controllertuning-status.js"></script>
+  <script src="controllertuning-autotune.js"></script>
+</body>
+</html>

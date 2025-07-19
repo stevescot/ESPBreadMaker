@@ -18,3 +18,15 @@ DynamicRestartState dynamicRestart = {
   "",   // lastDynamicRestartReason
   0     // dynamicRestartCount
 };
+
+// --- Output states instance ---
+OutputStates outputStates;
+
+// --- Temperature averaging state instance ---
+TemperatureAveragingState tempAvg;
+
+// --- Program state instance ---
+ProgramState programState;
+
+// --- PID control instance ---
+PIDControl pid;

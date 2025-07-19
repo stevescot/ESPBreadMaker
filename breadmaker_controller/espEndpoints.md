@@ -18,8 +18,16 @@
 - **Response:** 200 OK, status updated.
 
 ### `/start` (GET)
-- **Description:** Starts the currently selected program.
-- **Response:** 200 OK, status updated.
+- **Description:** Unified start endpoint that handles immediate start, stage selection, and scheduling.
+- **Parameters:**
+  - `stage` (int, optional): Stage index to start at (0-based). If omitted, starts from beginning.
+  - `time` (string, optional): Schedule start time in HH:MM format (24-hour). If omitted, starts immediately.
+- **Usage Examples:**
+  - `/start` - Start immediately from beginning
+  - `/start?stage=2` - Start immediately at stage 2
+  - `/start?time=14:30` - Schedule start at 2:30 PM from beginning
+  - `/start?time=14:30&stage=2` - Schedule start at 2:30 PM at stage 2
+- **Response:** 200 OK with JSON status, or scheduling confirmation message.
 
 ### `/stop` (GET)
 - **Description:** Stops the current program.
@@ -38,7 +46,7 @@
 - **Response:** 200 OK, status updated.
 
 ### `/start_at_stage?stage={index}` (GET)
-- **Description:** Starts the current program at the specified stage index.
+- **Description:** ⚠️ DEPRECATED - Use `/start?stage={index}` instead.
 - **Parameters:**
   - `stage` (int): Index of the stage to start at (0-based).
 - **Response:** 200 OK, status updated.

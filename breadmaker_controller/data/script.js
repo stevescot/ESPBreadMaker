@@ -84,7 +84,8 @@ function populateStageDropdown(programIdx) {
   stageSelect.innerHTML = '<option value="">Start from beginning</option>';
   
   // Get the selected program
-  const program = window.cachedPrograms[programIdx];
+  const programs = Array.isArray(window.cachedPrograms) ? window.cachedPrograms : [];
+  const program = programs[programIdx];
   if (!program || !program.customStages || !Array.isArray(program.customStages)) {
     // Hide the start at stage row if no custom stages
     if (startAtStageRow) startAtStageRow.style.display = 'none';
@@ -205,7 +206,8 @@ function updateStageProgress(currentStage, statusData) {
   // Get current program and its stages
   let program = null;
   if (statusData && statusData.program && window.cachedPrograms) {
-    program = window.cachedPrograms.find(p => p.name === statusData.program);
+    const programs = Array.isArray(window.cachedPrograms) ? window.cachedPrograms : [];
+    program = programs.find(p => p.name === statusData.program);
   }
   
   // If no custom stages available, use the legacy hardcoded stages
@@ -292,6 +294,28 @@ function updateStageProgress(currentStage, statusData) {
           span.textContent = ' (' + formatDuration(elapsed) + ')';
           div.appendChild(span);
         }
+      }
+    } else if (!isIdle && i > activeIdx) {
+      // Show planned duration for future stages (fermentation-adjusted if available)
+      const stage = customStages[i];
+      let plannedDuration = stage.min * 60; // Default to raw duration
+      
+      // Try to calculate adjusted duration from predictedStageEndTimes
+      if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.predictedStageEndTimes[i-1]) {
+        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.predictedStageEndTimes[i-1];
+      } else if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.programStart && i === 0) {
+        // For first stage, use programStart as reference
+        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.programStart;
+      } else if (stage.isFermentation && typeof statusData.fermentationFactor === 'number' && statusData.fermentationFactor > 0) {
+        // Apply fermentation factor for fermentation stages
+        plannedDuration = (stage.min * 60) * statusData.fermentationFactor;
+      }
+      
+      if (plannedDuration > 0) {
+        const span = document.createElement('span');
+        span.className = 'stage-planned';
+        span.textContent = ' (' + formatDuration(plannedDuration) + ')';
+        div.appendChild(span);
       }
     }
     cont.appendChild(div);
@@ -408,7 +432,8 @@ function updateStatusInternal(s) {
   populateProgramDropdown(s);
   // Update stage dropdown based on current program
   if (s && s.program && window.cachedPrograms) {
-    const programIdx = window.cachedPrograms.findIndex(p => p.name === s.program);
+    const programs = Array.isArray(window.cachedPrograms) ? window.cachedPrograms : [];
+    const programIdx = programs.findIndex(p => p.name === s.program);
     if (programIdx >= 0) {
       populateStageDropdown(programIdx);
     }
@@ -564,34 +589,15 @@ function updateFermentationInfo(s) {
 function updateProgramReadyAt(s) {
   const el = document.getElementById('programReadyAt');
   if (!el) return;
-  
-  // Clear display if program is idle or finished
-  if (!s || !s.running || s.stage === "Idle") {
-    el.textContent = '';
-    return;
-  }
-  
-  // Use firmware's calculated programReadyAt if available
-  if (s && typeof s.programReadyAt === 'number' && s.programReadyAt > 0) {
-    const finishTs = s.programReadyAt * 1000; // Convert firmware's seconds to milliseconds
-    const now = Date.now();
-    
-    // If the program ready time is in the past, clear the display
-    if (finishTs <= now) {
-      el.textContent = '';
-      return;
-    }
-    
-    el.textContent = 'Program ready at: ' + formatDateTime(finishTs);
-    return;
-  }
-  
-  // Fallback calculation if firmware doesn't provide programReadyAt
+  // Always show a completion time if a program is selected, even if idle (showing 'if started now')
+  let showIfStartedNow = false;
+  let finishTs = 0;
+  let label = 'Program ready at:';
+  // If no status or no program, clear
   if (!s || typeof s.program !== 'string' || !s.program.length) {
     el.textContent = '';
     return;
   }
-  
   // Use cached programs if available for fallback
   const data = window.cachedPrograms;
   const progArr = Array.isArray(data) ? data : (data && data.programs ? data.programs : []);
@@ -606,26 +612,53 @@ function updateProgramReadyAt(s) {
     return;
   }
   let totalMin = prog.customStages.reduce((sum, st) => sum + (st.min || 0), 0);
-  let finishTs = 0;
-  if (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000)) {
-    finishTs = (s.scheduledStart * 1000) + (totalMin * 60000);
-  } else if (s.stage && s.stage !== "Idle" && typeof s.stageIdx === "number" && typeof s.timeLeft === "number" && s.timeLeft > 0) {
-    let remainMin = 0;
-    for (let i = s.stageIdx + 1; i < prog.customStages.length; ++i) {
-      remainMin += prog.customStages[i].min || 0;
-    }
-    finishTs = Date.now() + (s.timeLeft * 1000) + (remainMin * 60000);
-  } else {
-    finishTs = Date.now() + (totalMin * 60000);
-  }
   
+  // If running or scheduled, show actual finish time
+  if (s.running || (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000))) {
+    // Use firmware's calculated programReadyAt if available
+    if (typeof s.programReadyAt === 'number' && s.programReadyAt > 0) {
+      finishTs = s.programReadyAt * 1000;
+    } else if (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000)) {
+      // For scheduled start, use predictedProgramEnd if available (accounts for fermentation)
+      if (typeof s.predictedProgramEnd === 'number' && s.predictedProgramEnd > 0) {
+        finishTs = s.predictedProgramEnd * 1000;
+      } else {
+        finishTs = (s.scheduledStart * 1000) + (totalMin * 60000);
+      }
+    } else if (s.stage && s.stage !== "Idle" && typeof s.stageIdx === "number" && typeof s.timeLeft === "number" && s.timeLeft > 0) {
+      // Calculate remaining time using fermentation-adjusted predictions if available
+      if (typeof s.programReadyAt === 'number' && s.programReadyAt > 0) {
+        finishTs = s.programReadyAt * 1000;
+      } else {
+        // Fallback to raw calculation
+        let remainMin = 0;
+        for (let i = s.stageIdx + 1; i < prog.customStages.length; ++i) {
+          remainMin += prog.customStages[i].min || 0;
+        }
+        finishTs = Date.now() + (s.timeLeft * 1000) + (remainMin * 60000);
+      }
+    } else {
+      finishTs = Date.now() + (totalMin * 60000);
+    }
+    label = 'Program ready at:';
+  } else {
+    // Not running, show 'if started now' - use predictedProgramEnd if available
+    if (typeof s.predictedProgramEnd === 'number' && s.predictedProgramEnd > 0) {
+      // Use firmware's fermentation-adjusted prediction
+      finishTs = s.predictedProgramEnd * 1000;
+    } else {
+      // Fallback to raw calculation
+      finishTs = Date.now() + (totalMin * 60000);
+    }
+    showIfStartedNow = true;
+    label = 'If started now, ready at:';
+  }
   // If the program ready time is in the past, clear the display
   if (finishTs <= Date.now()) {
     el.textContent = '';
     return;
   }
-  
-  el.textContent = 'Program ready at: ' + formatDateTime(finishTs);
+  el.textContent = label + ' ' + formatDateTime(finishTs);
 }
 
 function updateCountdownDisplay() {
@@ -671,8 +704,8 @@ function updateCountdownDisplay() {
   if (s.stage === "Idle" || !s.running || timeLeft <= 0) {
     document.getElementById('timeLeft').textContent = "--";
     document.getElementById('stageReadyAt').textContent = "";
-    let el = document.getElementById('programReadyAt');
-    if (el) el.textContent = '';
+    // Don't clear programReadyAt here - let updateProgramReadyAt() handle it
+    // This was causing the "If started now" text to flash every second
   } else {
     document.getElementById('timeLeft').textContent = formatDuration(timeLeft);
     document.getElementById('stageReadyAt').textContent = showStageReadyAt ? stageReadyAtText : "--";
@@ -895,8 +928,29 @@ function showPlanSummary(s) {
         // Always show predicted duration if available
         durationCell = `<span title="Predicted by firmware">${formatDuration(predictedDurationMin * 60)}<br><small>(${predictedDurationMin.toFixed(1)} min)</small></span>`;
       } else {
-        // Fallback: show planned duration only (no local fermentation adjustment)
-        durationCell = `${formatDuration(st.min * 60)}`;
+        // Calculate fermentation-adjusted duration if fermentation data is available
+        let adjustedDuration = st.min * 60; // Default to raw duration
+        
+        // Try to calculate adjusted duration from predictedStageEndTimes
+        if (Array.isArray(s.predictedStageEndTimes) && s.predictedStageEndTimes[i] && s.predictedStageEndTimes[i-1]) {
+          adjustedDuration = s.predictedStageEndTimes[i] - s.predictedStageEndTimes[i-1];
+        } else if (Array.isArray(s.predictedStageEndTimes) && s.predictedStageEndTimes[i] && s.programStart) {
+          // For first stage, use programStart as reference
+          if (i === 0) {
+            adjustedDuration = s.predictedStageEndTimes[i] - s.programStart;
+          }
+        } else if (st.isFermentation && typeof s.fermentationFactor === 'number' && s.fermentationFactor > 0) {
+          // Apply fermentation factor for fermentation stages
+          adjustedDuration = (st.min * 60) * s.fermentationFactor;
+        }
+        
+        // Always show adjusted duration if it's different from planned, or if it's a fermentation stage
+        if (st.isFermentation || Math.abs(adjustedDuration - (st.min * 60)) > 30) { // More than 30 seconds difference
+          let adjustedMin = adjustedDuration / 60;
+          durationCell = `<span title="Fermentation-adjusted duration">${formatDuration(adjustedDuration)}<br><small>(${adjustedMin.toFixed(1)} min)</small></span>`;
+        } else {
+          durationCell = `${formatDuration(st.min * 60)}`;
+        }
       }
       // For completed (done) stages, override background to a grey shade
       let rowStyle = `color:#232323;`;
@@ -943,18 +997,27 @@ function fetchProgramsOnce(callback) {
     window._programsFetchQueue.push(callback);
     if (window._programsFetchInProgress) return;
     window._programsFetchInProgress = true;
-    fetch('/api/programs')
-      .then(r => r.json())
+    fetch('/programs.json')
+      .then(r => r.text())
       .then(data => {
-        window.cachedPrograms = data;
-        window._programsFetchInProgress = false;
-        // Call all queued callbacks
-        (window._programsFetchQueue || []).forEach(cb => cb(data));
-        window._programsFetchQueue = [];
-        
-        // Update stage progress if we have a current status
-        if (window.lastStatusData) {
-          updateStageProgress(window.lastStatusData.stage, window.lastStatusData);
+        try {
+          const parsedData = JSON.parse(data);
+          window.cachedPrograms = parsedData;
+          window._programsFetchInProgress = false;
+          // Call all queued callbacks
+          (window._programsFetchQueue || []).forEach(cb => cb(parsedData));
+          window._programsFetchQueue = [];
+          
+          // Update stage progress if we have a current status
+          if (window.lastStatusData) {
+            updateStageProgress(window.lastStatusData.stage, window.lastStatusData);
+          }
+        } catch (e) {
+          console.error('Failed to parse programs.json:', e);
+          window._programsFetchInProgress = false;
+          // Call callbacks with empty array as fallback
+          (window._programsFetchQueue || []).forEach(cb => cb([]));
+          window._programsFetchQueue = [];
         }
       })
       .catch(err => {

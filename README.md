@@ -1,6 +1,21 @@
-# Breadmaker Controller (ESP8266)
+# Breadmaker Controller (ESP32 TTGO T-Display)
 
-A versatile kitchen appliance controller using an ESP8266 microcontroller. Features a modern web UI, program editor, OTA firmware update, temperature calibration, robust manual mode, and Home Assistant integration. Supports bread making, fermentation, sous vide, and various utility functions.
+A versatile kitchen appliance controller using an ESP32 TTGO T-Display microcontroller with built-in 1.14" color display. Features a modern web UI, program editor, OTA firmware update, temperature calibration, robust manual mode, capacitive touch controls, and Home Assistant integration. Supports bread making, fermentation, sous vide, and various utility functions.
+
+## ⚠️ IMPORTANT VERSION REQUIREMENTS
+
+**ESP32 Arduino Core 2.0.17 REQUIRED** - This project uses the standard ESP32 WebServer library instead of AsyncWebServer due to stability issues. Newer ESP32 cores (3.x) have breaking changes and compatibility problems.
+
+**DO NOT UPDATE** the ESP32 core beyond 2.0.17 or the firmware will not compile or run properly.
+
+### Quick Setup for ESP32 Core 2.0.17:
+```bash
+# Using Arduino CLI (recommended):
+arduino-cli core install esp32:esp32@2.0.17
+arduino-cli core list  # Verify version
+```
+
+Or in Arduino IDE: Tools → Board → Boards Manager → ESP32 → select "2.0.17" → Install
 
 ## Features
 - Controls motor, heater, light, and buzzer (PWM, ~1V logic)
@@ -19,27 +34,38 @@ A versatile kitchen appliance controller using an ESP8266 microcontroller. Featu
 
 ## Setup Stages
 1. **Hardware Wiring & Connection**
-   - **ESP8266 Board:** NodeMCU, Wemos D1 Mini, or similar.
+   - **ESP32 TTGO T-Display:** Built-in 1.14" color display with USB-C programming.
    - **Breadmaker Board Connections:**
-     - **Motor:** Connect to a digital output pin (e.g., D1/GPIO5) **with a 1k resistor in series**
-     - **Heater:** Connect to a digital output pin (e.g., D2/GPIO4) **with a 1k resistor in series**
-     - **Light:** Connect to a digital output pin (e.g., D6/GPIO12) **with a 1k resistor in series**
-     - **Buzzer:** Connect to a digital output pin (e.g., D7/GPIO13) **with a 1k resistor in series**
-     - **Temperature Sensor (RTD/Analog):** Connect to A0 (ADC input). **Add a 10k pull-down resistor from the sensor signal to ground** (typical for voltage divider circuits; adjust as needed for your sensor type).
-   - **Power:** Use 5V USB or regulated supply. Ensure breadmaker control lines are opto-isolated or logic-level compatible.
+     - **Motor:** Connect to a digital output pin **with a 1k resistor in series**
+     - **Heater:** Connect to a digital output pin **with a 1k resistor in series**
+     - **Light:** Connect to a digital output pin **with a 1k resistor in series**
+     - **Buzzer:** Connect to a digital output pin **with a 1k resistor in series**
+     - **Temperature Sensor (RTD/Analog):** Connect to GPIO 34 (ADC1_CH6). **Add a 10k pull-down resistor from the sensor signal to ground** (typical for voltage divider circuits; adjust as needed for your sensor type).
+   - **Capacitive Touch Pads (Optional):** Connect touch pads to GPIO 4, 2, 15, 13, 12, 14 for 6-button interface
+   - **Power:** Use 5V USB-C or regulated supply. Ensure breadmaker control lines are opto-isolated or logic-level compatible.
    - **Pin assignments** can be changed in `outputs_manager.cpp` if needed.
 
 2. **Firmware & Web UI Upload**
-   - Install Arduino IDE and ESP8266 board support
+   - Install Arduino IDE and ESP32 board support
+   - **CRITICAL: Use ESP32 Arduino Core version 2.0.17 ONLY** - newer versions (3.x) have compatibility issues
+   - **Prevent auto-updates**: In Arduino IDE → File → Preferences → check "Show verbose output" and uncheck automatic updates
+   - **Lock ESP32 core version**: 
+     ```bash
+     # Arduino CLI method (recommended):
+     arduino-cli core install esp32:esp32@2.0.17
+     arduino-cli core uninstall esp32:esp32  # Remove other versions
+     
+     # Arduino IDE: Boards Manager → ESP32 → select version 2.0.17 → Install
+     ```
    - Install required libraries:
-     - ESPAsyncWebServer
-     - ESPAsyncTCP
-     - ESPAsyncHTTPUpdateServer
+     - ~~ESPAsyncWebServer~~ (REMOVED - causes crashes on ESP32)
+     - ~~AsyncTCP~~ (REMOVED - not needed with standard WebServer)
      - ArduinoJson
      - PID_v1
-     - LittleFS
-   - Upload the `data/` folder to LittleFS using the Arduino LittleFS Data Upload tool or provided scripts
-   - Build and upload the firmware using provided scripts (`build_and_upload.ps1`, `.bat`) or Arduino IDE
+     - LittleFS (built-in ESP32 support) 
+     - LovyanGFX (for display management)
+   - Upload the `data/` folder to FFat using the Arduino ESP32 Data Upload tool or provided scripts
+   - Build and upload the firmware using provided scripts (`build_esp32.ps1`) or Arduino IDE
 
 3. **First Boot & WiFi Setup**
    - Power on the device. If no WiFi is configured, a dark-themed captive portal will appear for setup
@@ -101,11 +127,79 @@ A versatile kitchen appliance controller using an ESP8266 microcontroller. Featu
 - Butter melting and holding
 
 ## Hardware
-- ESP8266 (NodeMCU, Wemos D1 Mini, etc.)
+- **ESP32 TTGO T-Display** with built-in 1.14" SPI color display (ST7789 controller)
+- **LovyanGFX Library**: Advanced graphics library for display management (migrated from TFT_eSPI)
 - Breadmaker with accessible control lines for motor, heater, light, buzzer
-- RTD or analog temperature sensor (wired to A0)
+- RTD or analog temperature sensor (wired to GPIO 34/ADC1_CH6)
+
+## Capacitive Touch Interface (Optional)
+The breadmaker controller supports a **6-button capacitive touch interface** for direct hardware control when the device is installed inside an appliance. This provides immediate access to essential functions without requiring web interface access.
+
+### Hardware Setup
+**GPIO Pin Assignments:**
+- **GPIO 4 (T0)** - Start/Pause button
+- **GPIO 2 (T2)** - Stop button  
+- **GPIO 15 (T3)** - Select/Enter button
+- **GPIO 13 (T4)** - Advance/Next button
+- **GPIO 12 (T5)** - Back/Previous button
+- **GPIO 14 (T6)** - Light toggle button
+
+**Capacitive Touch Pads:**
+- Use copper pads, foil, or conductive material connected to each GPIO pin
+- No external resistors needed - ESP32 has built-in touch sensing
+- Touch sensitivity configurable via `TOUCH_THRESHOLD` (default: 40)
+- Touch pads can be mounted behind plastic/glass panels for sealed operation
+
+### Button Functions
+- **Start/Pause**: Starts breadmaker if stopped, pauses if running (same as `/api/start` endpoint)
+- **Stop**: Immediately stops breadmaker and resets stage (calls `stopBreadmaker()`)
+- **Select/Enter**: Navigation and menu confirmation (ready for menu system integration)
+- **Advance/Next**: Navigate forward or advance to next stage (ready for menu integration)
+- **Back/Previous**: Navigate backward or return to previous option
+- **Light**: Directly toggles breadmaker light on/off (same as `/api/light` endpoint)
+
+### Features
+- **Debouncing**: 250ms debounce delay prevents false triggers
+- **Touch Detection**: Uses ESP32's built-in `touchRead()` function
+- **Real-time Response**: Integrated into main loop for immediate feedback
+- **Serial Logging**: Button presses logged to Serial output for debugging
+- **Display Feedback**: Visual feedback via display manager integration
+
+### Configuration
+**Touch Sensitivity:** Adjust `TOUCH_THRESHOLD` in `capacitive_buttons.h`:
+- Lower values = more sensitive (easier to trigger)
+- Higher values = less sensitive (harder to trigger)
+- Default: 40 (good for most applications)
+
+**Debounce Timing:** Modify `DEBOUNCE_MS` for different response characteristics:
+- Shorter = more responsive but may cause false triggers
+- Longer = more stable but less responsive
+- Default: 250ms
+
+### Installation Example
+```cpp
+// The capacitive buttons are automatically initialized and integrated
+// No additional setup required beyond connecting touch pads to GPIO pins
+
+// Optional: Monitor button activity via Serial output
+Serial.begin(115200);  // View button press debugging info
+```
+
+### Integration with Web Interface
+The capacitive buttons complement the web interface by providing:
+- **Physical Control**: Direct access when web interface isn't available
+- **Emergency Stop**: Immediate stop capability for safety
+- **Light Control**: Quick light toggle without opening web page
+- **Program Control**: Start/pause functionality for basic operation
+
+**Dual Control**: Both capacitive buttons and web interface can be used simultaneously - they share the same underlying control functions and state management.
 
 ## Recent Changes (2025)
+- **ESP32 TTGO T-Display Migration:** Complete migration from ESP8266 to ESP32 TTGO T-Display with built-in 1.14" color display
+- **LovyanGFX Integration:** Advanced graphics library integration for superior display performance and features
+- **Capacitive Touch Interface:** 6-button capacitive touch system for direct hardware control (Start/Pause, Stop, Select, Advance, Back, Light)
+- **Enhanced Display Management:** Full-featured display with status screens, menus, and real-time feedback
+- **Real Function Implementations:** Restored original temperature sampling, PID profile switching, and performance monitoring functions
 - **Manual Mode:** Added direct control of outputs (heater, motor, light, buzzer) and manual temperature setpoint via new API endpoints and web UI. Manual mode disables program controls and allows real-time output toggling.
 - **API Refactor:** All control and status endpoints now use `/api/` prefix. Status JSONs only include a program list (not full definitions) for efficiency.
 - **UI/UX Overhaul:**

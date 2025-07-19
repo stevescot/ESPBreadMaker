@@ -19,7 +19,7 @@
     <a href="/config.html">&#9881; Config</a>
     <a href="/programs.html">&#9998; Programs</a>
     <a href="/calibration.html" class="active">&#127777; Calibration</a>
-    <a href="/controllertuning.html">&#128293; PID Tuning</a>
+    <a href="/pid-tune.html">&#128293; PID Tuning</a>
     <a href="/update.html">&#8593; Update</a>
   </nav>
   <div class="container">
@@ -27,6 +27,9 @@
     <div>
       <b>Current RTD Reading:</b>
       <span id="rawReading">?</span>
+      <span style="margin-left: 1em; color: #82d982;">
+        → <span id="currentTemp">?</span>°C
+      </span>
       <span style="margin-left: 1em; color: #ffd600;">
         (<span id="calibPoints">0</span> points)
       </span>
@@ -91,10 +94,16 @@
       fetch('/api/calibration')
         .then(r => r.json())
         .then(d => {
-          document.getElementById('rawReading').textContent = d.raw;
+          document.getElementById('rawReading').textContent = d.raw || '?';
+          document.getElementById('currentTemp').textContent = d.temp ? d.temp.toFixed(1) : '?';
           document.getElementById('calibPoints').textContent = d.table ? d.table.length : 0;
           calibPoints = d.table || [];
           renderTable();
+        })
+        .catch(err => {
+          console.error('Failed to load calibration:', err);
+          document.getElementById('rawReading').textContent = 'Error';
+          document.getElementById('currentTemp').textContent = 'Error';
         });
     }
 
@@ -334,7 +343,7 @@
       });
     };
 
-    setInterval(loadCalib, 60000); // Refresh every minute instead of every 2 seconds
+    setInterval(loadCalib, 2000); // Refresh every 2 seconds for live calibration
     loadCalib();
   </script>
 </body>

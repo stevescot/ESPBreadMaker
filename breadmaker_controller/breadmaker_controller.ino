@@ -1,56 +1,61 @@
-#include <functional>
-
-
-// Maximum number of program stages supported (now in globals.cpp)
-#include "globals.h"
-
-// --- Temperature safety flags ---
-bool thermalRunawayDetected = false;
-bool sensorFaultDetected = false;
-// --- Active program index (ID) now in programState ---
 /*
+ESP32 TTGO T-Display Breadmaker Controller
+==========================================
+
 FEATURES:
  - Replaces breadmaker logic board: controls motor, heater, light
  - Manual icon toggles (motor, heater, light, buzzer)
- - LittleFS for persistent storage (programs, UI)
- - Status shows stage, time left (d:h:m:s), state of outputs, temperature (RTD analog input on A0)
+ - FFat for persistent storage (programs, UI)
+ - Status shows stage, time left (d:h:m:s), state of outputs, temperature (RTD analog input)
+ - Built-in TFT display for local status and control
+ - Enhanced memory capacity for larger program collections
 
 */
 
 #include <Arduino.h>
-#include <ESP8266WiFi.h>
-#include <ESP8266mDNS.h>
-#include <LittleFS.h>
-#include <ESPAsyncWebServer.h>
+#include <functional>       // For std::function
+#include <WiFi.h>          // ESP32 WiFi library
+#include <ESPmDNS.h>       // ESP32 mDNS library
+#include <ArduinoOTA.h>    // ESP32 OTA updates
+#include <FFat.h>      // ESP32 FATFS support for 16MB
+#include <WebServer.h>     // Standard ESP32 WebServer (stable alternative to AsyncWebServer)
 #include <ArduinoJson.h>
 #include <PID_v1.h>
 #include <map>
 #include <vector>
 #include <time.h>
-#include <DNSServer.h>
 #include <EEPROM.h>
+
+#include "globals.h"       // Must be included for global definitions
+#include "display_manager.h"  // LovyanGFX display management
+#include "missing_stubs.h"    // Missing function implementations
+// #include "capacitive_buttons.h" // REMOVED: Capacitive touch buttons (GPIO conflicts)
 #include "calibration.h"
 #include "programs_manager.h"
 #include "wifi_manager.h"
 #include "outputs_manager.h"
 #include "web_endpoints.h"
+#include "ota_manager.h"   // OTA update support
 
 // --- Firmware build date ---
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 
 // --- Web server---
-AsyncWebServer server(80); // Main web server
+WebServer server(80); // Standard ESP32 WebServer (stable, no crashes)
+
+// --- Temperature safety flags ---
+bool thermalRunawayDetected = false;
+bool sensorFaultDetected = false;
 
 // --- Pin assignments ---
-// PIN_RTD now defined in globals.cpp
-// (Output pins are defined in outputs_manager.cpp)
+// PIN_RTD now defined in globals.h (GPIO34 for ESP32)
+// Output pins are defined in outputs_manager.cpp
+// Display pins are handled by LovyanGFX library
 
-
-// --- PID control struct instance ---
-PIDControl pid;
-
-// --- Program state struct instance (needed for web_endpoints.cpp extern reference) ---
-ProgramState programState;
+#define DEFAULT_KP 0.11
+#define DEFAULT_KI 0.00005
+#define DEFAULT_KD 10.0
+#define DEFAULT_WINDOW_MS 30000
 
 // In setup(), initialize the PID controller:
 // pid.controller = new PID(&pid.Input, &pid.Output, &pid.Setpoint, pid.Kp, pid.Ki, pid.Kd, DIRECT);
@@ -66,10 +71,6 @@ const unsigned long MIN_WINDOW_TIME = 5000; // Minimum time before allowing dyna
 time_t scheduledStart = 0; // Scheduled start time (epoch)
 int scheduledStartStage = -1; // Stage to start at when scheduled (-1 = start from beginning)
 
-// --- State variables ---
-bool isRunning = false;           // Is the breadmaker running?
-// Removed activeProgramName and programNamesOrdered; use activeProgramId and programs[activeProgramId].name instead
-
 // --- Custom stage state variables now in programState ---
 // Use programState.customStageIdx, programState.customMixIdx, programState.customStageStart, programState.customMixStepStart, programState.programStartTime, programState.actualStageStartTimes, etc.
 // --- Active program variables now in programState ---
@@ -80,8 +81,11 @@ unsigned long lightOnTime = 0;    // When was the light turned on?
 unsigned long buzzStart = 0;      // When was the buzzer turned on?
 bool buzzActive = false;          // Is the buzzer currently active?
 
-/// --- Captive portal DNS and AP ---
-DNSServer dnsServer;
+// --- Fermentation rate limiting ---
+unsigned long lastFermentUpdate = 0;  // Rate limiting for fermentation updates
+
+/// --- WiFi Configuration ---
+// WiFi credentials and connectivity management
 const char* apSSID = "BreadmakerSetup";
 
 // --- Output mode setting ---
@@ -90,23 +94,29 @@ const char* SETTINGS_FILE = "/settings.json";
 // --- Debug serial setting ---
 bool debugSerial = true; // Debug serial output (default: true)
 
-// --- Manual mode global variable ---
-bool manualMode = false; // Manual mode: true = direct manual control, false = automatic
-
 // --- Startup delay to let temperature sensor stabilize ---
 unsigned long startupTime = 0;           // Time when system started (millis())
 // STARTUP_DELAY_MS now defined in globals.cpp
 
-// --- Temperature averaging system (encapsulated) ---
-TemperatureAveragingState tempAvg;
-
-
 // --- Function prototypes ---
 void loadSettings();
 void saveSettings();
+void loadPIDProfiles();
+void savePIDProfiles();
+PIDProfile* findProfileForTemperature(float temperature);
+void switchToProfile(const String& profileName);
+void checkAndSwitchPIDProfile();
 void updateTemperatureSampling();
 float getAveragedTemperature();
 void streamStatusJson(Print& out);
+void updateActiveProgramVars();
+void updateTimeProportionalHeater();
+void createDefaultPIDProfiles();
+bool ensureProgramLoaded(int programId);
+void setupOTA(); // OTA update support
+
+// --- Forward declaration for cache invalidation ---
+extern void invalidateStatusCache();
 
 // --- Forward declaration for stopBreadmaker (must be before any use) ---
 void stopBreadmaker();
@@ -115,45 +125,50 @@ void stopBreadmaker();
 bool isStartupDelayComplete();
 
 // --- Delete Folder API endpoint ---
-// Recursively deletes a folder and all its contents from the LittleFS filesystem.
+// Recursively deletes a folder and all its contents from the FFat filesystem.
 void deleteFolderRecursive(const String& path) {
-  if (!LittleFS.exists(path)) {
+  if (!FFat.exists(path)) {
     if (debugSerial) Serial.printf("[deleteFolderRecursive] WARNING: Path '%s' does not exist.\n", path.c_str());
     return;
   }
-  Dir dir = LittleFS.openDir(path);
-  while (dir.next()) {
-    String filePath = path + "/" + dir.fileName();
-    if (dir.isDirectory()) {
-      deleteFolderRecursive(filePath);
-    } else {
-      if (!LittleFS.remove(filePath) && debugSerial) {
-        Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove file '%s'\n", filePath.c_str());
+  File root = FFat.open(path);
+  if (root && root.isDirectory()) {
+    File file = root.openNextFile();
+    while (file) {
+      String filePath = path + "/" + file.name();
+      if (file.isDirectory()) {
+        deleteFolderRecursive(filePath);
+      } else {
+        if (!FFat.remove(filePath) && debugSerial) {
+          Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove file '%s'\n", filePath.c_str());
+        }
       }
+      file = root.openNextFile();
     }
   }
-  if (!LittleFS.rmdir(path) && debugSerial) {
+  if (!FFat.rmdir(path) && debugSerial) {
     Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove directory '%s'\n", path.c_str());
   }
 }
 
-// Helper function to send a JSON error response
+// Helper function to send a JSON error response (WebServer compatible)
 // Sends a JSON-formatted error message to the client with a specified HTTP status code.
-void sendJsonError(AsyncWebServerRequest* req, const String& error, const String& message, int code = 400) {
-  AsyncResponseStream *response = req->beginResponseStream("application/json");
-  response->print("{");
-  response->print("\"error\":\"");
-  response->print(error);
-  response->print("\",");
-  response->print("\"message\":\"");
-  response->print(message);
-  response->print("\"}");
-  req->send(response);
+void sendJsonError(WebServer& server, const String& error, const String& message, int code = 400) {
+  String response = "{";
+  response += "\"error\":\"" + error + "\",";
+  response += "\"message\":\"" + message + "\"";
+  response += "}";
+  server.send(code, "application/json", response);
 }
 
 // Initializes all hardware, outputs, file systems, and loads configuration and calibration data.
 // Also sets up WiFi, mDNS, and captive portal as needed.
 void initialState(){
+  startupTime = millis(); // Record startup time for sensor stabilization delay
+  Serial.begin(115200);
+  delay(100);
+  Serial.println(F("[setup] Booting..."));
+  
   // --- Ensure all outputs are OFF immediately on boot/reset ---
   setHeater(false);
   setMotor(false);
@@ -161,7 +176,7 @@ void initialState(){
   setBuzzer(false);
   outputsManagerInit(); // Initialize output pins and set all outputs OFF
 
-    // Start mDNS responder for breadmaker.local
+  // Start mDNS responder for breadmaker.local
   if (WiFi.status() == WL_CONNECTED) {
     if (MDNS.begin("breadmaker")) {
       Serial.println(F("[mDNS] mDNS responder started: http://breadmaker.local/"));
@@ -169,7 +184,10 @@ void initialState(){
       Serial.println(F("[mDNS] Error setting up MDNS responder!"));
     }
   }
+  
   // --- Serve files from /templates/ for Home Assistant YAML downloads ---
+  // COMMENTED OUT: Needs to be ported from AsyncWebServer to standard WebServer
+  /*
   server.on("/templates/", HTTP_GET, [](AsyncWebServerRequest* req) {
     if (!req->hasParam("file")) {
       req->send(400, "text/plain", "Missing file parameter");
@@ -189,21 +207,28 @@ void initialState(){
     if (filename.endsWith(".yaml")) contentType = "text/yaml";
     else if (filename.endsWith(".json")) contentType = "application/json";
     else if (filename.endsWith(".html")) contentType = "text/html";
-    req->send(LittleFS, path, contentType);
+    req->send(FFat, path, contentType);
   });
-  startupTime = millis(); // Record startup time for sensor stabilization delay
-  Serial.begin(115200);
-  delay(100);
-  Serial.println(F("[setup] Booting..."));
-  if (!LittleFS.begin()) {
-    Serial.println(F("[setup] LittleFS mount failed! Halting."));
-    while (1) delay(1000);
+  */
+  
+  // Initialize FFat with better error handling
+  Serial.println(F("[setup] Initializing FFat filesystem..."));
+  if (!FFat.begin(false)) {
+    Serial.println(F("[setup] FFat mount failed, attempting format..."));
+    if (!FFat.begin(true)) {
+      Serial.println(F("[setup] FFat format failed! Continuing without filesystem."));
+      // Don't halt - continue without FFat for debugging
+    } else {
+      Serial.println(F("[setup] FFat formatted and mounted successfully."));
+    }
+  } else {
+    Serial.println(F("[setup] FFat mounted successfully."));
   }
-  Serial.println(F("[setup] LittleFS mounted."));
+  Serial.println(F("[setup] FFat mounted."));
   Serial.println(F("[setup] Loading programs..."));
-  loadPrograms();
+  loadProgramMetadata();
   Serial.print(F("[setup] Programs loaded. Count: "));
-  Serial.println(programs.size());
+  Serial.println(getProgramCount());
   updateActiveProgramVars(); // Initialize program variables after loading
   loadCalibration();
   Serial.println(F("[setup] Calibration loaded."));
@@ -211,78 +236,142 @@ void initialState(){
   Serial.println(F("[setup] Settings loaded."));
   loadResumeState();
   Serial.println(F("[setup] Resume state loaded."));
+}
 
-  // --- WiFi connection debug output ---
-  Serial.println(F("[wifi] Reading WiFi config..."));
-  // --- Load disableHotspot setting ---
-  bool disableHotspot = false;
-  {
-    File sf = LittleFS.open("/settings.json", "r");
-    if (sf) {
-      DynamicJsonDocument sdoc(512);
-      if (!deserializeJson(sdoc, sf)) {
-        disableHotspot = sdoc["disableHotspot"] | false;
-      }
-      sf.close();
-    }
-  }
-  File wf = LittleFS.open("/wifi.json", "r");
-  if (!wf) {
-    Serial.println(F("[wifi] wifi.json not found! Starting AP mode."));
-    if (!disableHotspot) {
-      WiFi.mode(WIFI_AP);
-      startCaptivePortal();
-    }
-  } else {
-    DynamicJsonDocument wdoc(256);
-    DeserializationError werr = deserializeJson(wdoc, wf);
-    if (werr) {
-      Serial.print(F("[wifi] Failed to parse wifi.json: "));
-      Serial.println(werr.c_str());
-      if (!disableHotspot) {
-        WiFi.mode(WIFI_AP);
-        startCaptivePortal();
-      }
+// Initialize WiFi connection after core systems are ready
+void initializeWiFi() {
+  Serial.println(F("[wifi] Starting WiFi initialization..."));
+  
+  // Add significant delay for ESP32 WiFi subsystem stability
+  delay(2000);
+  
+  // Check for any issues before WiFi init
+  Serial.println(F("[wifi] Pre-WiFi system check..."));
+  Serial.printf("[wifi] Free heap: %d bytes\n", ESP.getFreeHeap());
+  
+  // Very simple WiFi initialization to avoid TCP stack issues
+  try {
+    Serial.println(F("[wifi] Setting WiFi mode to OFF..."));
+    WiFi.mode(WIFI_OFF);
+    delay(1000);
+    
+    // Check if wifi.json exists
+    Serial.println(F("[wifi] Checking for WiFi configuration..."));
+    File wf = FFat.open("/wifi.json", "r");
+    if (!wf) {
+      Serial.println(F("[wifi] No WiFi config found. Starting WiFiManager captive portal."));
+      Serial.println(F("[wifi] Note: Web server temporarily disabled to save memory during WiFi setup"));
+      
+      // Start reliable WiFiManager captive portal (uses tzapu library)
+      startWiFiManagerPortal();
+      Serial.println(F("[wifi] WiFiManager completed - device should now be connected"));
+      
+      // After WiFi setup, we could restart to enable full web server
+      Serial.println(F("[wifi] Restarting to enable full web interface..."));
+      delay(2000);
+      ESP.restart();
+      return;
     } else {
-      const char* ssid = wdoc["ssid"] | "";
-      const char* pass = wdoc["pass"] | "";
-      Serial.print(F("[wifi] Connecting to SSID: "));
-      Serial.println(ssid);
-      WiFi.mode(disableHotspot ? WIFI_STA : WIFI_AP_STA); // Only AP+STA if not disabled
-      WiFi.begin(ssid, pass);
-      int tries = 0;
-      while (WiFi.status() != WL_CONNECTED && tries < 40) {
-        delay(250);
-        Serial.print(F("."));
-        tries++;
-      }
-      Serial.println();
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.print(F("[wifi] Connected! IP address: "));
-        Serial.println(WiFi.localIP());
-      } else {
-        Serial.println(F("[wifi] Failed to connect. Starting AP mode."));
-        if (!disableHotspot) {
-          WiFi.mode(WIFI_AP);
-          startCaptivePortal();
+      // Try to connect to saved network
+      DynamicJsonDocument wdoc(256);
+      DeserializationError err = deserializeJson(wdoc, wf);
+      wf.close();
+      
+      if (!err) {
+        const char* ssid = wdoc["ssid"] | "";
+        const char* pass = wdoc["pass"] | "";
+        
+        if (strlen(ssid) > 0) {
+          Serial.printf("[wifi] Connecting to: %s\n", ssid);
+          
+          WiFi.mode(WIFI_STA);
+          delay(300);
+          WiFi.begin(ssid, pass);
+          
+          // Simple connection attempt with timeout
+          int attempts = 0;
+          while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+            delay(500);
+            Serial.print(".");
+            attempts++;
+          }
+          Serial.println();
+          
+          if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("[wifi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+            
+            // Initialize OTA only after successful connection
+            delay(500);
+            otaManagerInit();
+            
+            Serial.println(F("[wifi] WiFi connected successfully - WebServer already started"));
+          } else {
+            Serial.println(F("[wifi] Connection failed, starting AP mode"));
+            WiFi.mode(WIFI_AP);
+            delay(300);
+            WiFi.softAP("BreadmakerSetup", "breadmaker123");
+            Serial.printf("[wifi] AP mode IP: %s\n", WiFi.softAPIP().toString().c_str());
+          }
         }
       }
     }
-    wf.close();
+    
+    // Start mDNS after WiFi is stable
+    delay(500);
+    if (MDNS.begin("breadmaker")) {
+      Serial.println(F("[mDNS] mDNS started: http://breadmaker.local/"));
+    }
+    
+  } catch (...) {
+    Serial.println(F("[wifi] WiFi initialization failed, continuing without network"));
   }
+  
+  Serial.println(F("[wifi] WiFi initialization complete"));
 }
 
 
 // Arduino setup function. Initializes system state, registers web endpoints, starts the web server,
 // configures PID and temperature averaging, and waits for NTP time sync.
 void setup() {
-  initialState();
-  registerWebEndpoints(server);
-
+  Serial.begin(115200);
+  delay(500);
+  Serial.println(F("=== ESP32 TTGO T-Display Breadmaker Controller ==="));
+  Serial.println(F("[setup] Starting setup() function..."));
+  Serial.printf("[setup] Free heap at start: %d bytes\n", ESP.getFreeHeap());
   
-  server.serveStatic("/", LittleFS, "/");
-  server.begin();
-  Serial.println(F("HTTP server started"));
+  initialState();
+  
+  // Initialize TFT display
+  Serial.println(F("[setup] Initializing display..."));
+  try {
+    displayManagerInit();
+    Serial.println(F("[setup] Display initialized successfully"));
+  } catch (...) {
+    Serial.println(F("[setup] Display initialization failed, continuing..."));
+  }
+  
+  // Initialize capacitive touch buttons
+  // REMOVED: capacitiveButtonsInit(); // Capacitive touch buttons disabled due to GPIO boot conflicts
+  
+  // Give the system time to stabilize after hardware init
+  delay(1000);
+  Serial.println(F("[setup] Hardware initialization complete, starting services..."));
+  
+  Serial.println(F("[setup] Starting WiFi initialization first..."));
+  initializeWiFi();
+  
+  // Initialize WebServer AFTER WiFi is stable to prevent LWIP crashes
+  Serial.println(F("[setup] WiFi initialization complete, now starting WebServer..."));
+  registerWebEndpoints(server);  // Now compatible with standard WebServer
+  // server.serveStatic("/", FFat, "/");  // Static files handled by onNotFound in registerWebEndpoints
+  // Note: server.begin() is now called inside registerWebEndpoints()
+  Serial.println(F("[setup] Standard WebServer started successfully!"));
+  
+  delay(1000);  // Give WiFi time to stabilize
+  
+  Serial.println(F("[setup] Starting OTA services..."));
+  setupOTA();
+
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   
   // --- Initialize PID controller ---
@@ -324,9 +413,17 @@ void setup() {
 const char* RESUME_FILE = "/resume.json";
 unsigned long lastResumeSave = 0;
 
-// Saves the current breadmaker state (program, stage, timing, etc.) to LittleFS for resume after reboot.
+// Saves the current breadmaker state (program, stage, timing, etc.) to FFat for resume after reboot.
+// Includes throttling to prevent excessive writes under load conditions.
 void saveResumeState() {
-  File f = LittleFS.open(RESUME_FILE, "w");
+  // Throttle saves: minimum 2 seconds between saves to reduce wear and memory pressure
+  unsigned long now = millis();
+  if (lastResumeSave > 0 && (now - lastResumeSave) < 2000) {
+    return; // Skip this save to reduce load
+  }
+  lastResumeSave = now;
+  
+  File f = FFat.open(RESUME_FILE, "w");
   if (!f) {
     if (debugSerial) Serial.println("[saveResumeState] ERROR: Failed to open resume file for writing!");
     return;
@@ -335,19 +432,25 @@ void saveResumeState() {
   f.close();
 }
 
-// Helper to serialize resume state as JSON
+// Helper to serialize resume state as JSON using memory-efficient streaming
 void serializeResumeStateJson(Print& f) {
+  // Calculate elapsed times once to avoid multiple calculations
+  unsigned long stageSec = (programState.customStageStart > 0) ? (millis() - programState.customStageStart) / 1000UL : 0UL;
+  unsigned long mixSec = (programState.customMixStepStart > 0) ? (millis() - programState.customMixStepStart) / 1000UL : 0UL;
+  
+  // Stream JSON directly to file - no large buffers needed
   f.print("{\n");
   f.printf("  \"programIdx\":%u,\n", (unsigned)programState.activeProgramId);
   f.printf("  \"customStageIdx\":%u,\n", (unsigned)programState.customStageIdx);
   f.printf("  \"customMixIdx\":%u,\n", (unsigned)programState.customMixIdx);
-  f.printf("  \"elapsedStageSec\":%lu,\n", (programState.customStageStart > 0) ? (millis() - programState.customStageStart) / 1000UL : 0UL);
-  f.printf("  \"elapsedMixSec\":%lu,\n", (programState.customMixStepStart > 0) ? (millis() - programState.customMixStepStart) / 1000UL : 0UL);
+  f.printf("  \"elapsedStageSec\":%lu,\n", stageSec);
+  f.printf("  \"elapsedMixSec\":%lu,\n", mixSec);
   f.printf("  \"programStartTime\":%lu,\n", (unsigned long)programState.programStartTime);
   f.printf("  \"isRunning\":%s,\n", programState.isRunning ? "true" : "false");
   f.print("  \"actualStageStartTimes\":[");
   for (int i = 0; i < 20; i++) {
-    f.printf("%s%lu", (i > 0) ? "," : "", (unsigned long)programState.actualStageStartTimes[i]);
+    if (i > 0) f.print(",");
+    f.printf("%lu", (unsigned long)programState.actualStageStartTimes[i]);
   }
   f.print("]\n");
   f.print("}\n");
@@ -355,32 +458,53 @@ void serializeResumeStateJson(Print& f) {
 
 // Removes the saved resume state file from LittleFS.
 void clearResumeState() {
-  LittleFS.remove(RESUME_FILE);
+  FFat.remove(RESUME_FILE);
 }
 
-// Loads the breadmaker's previous state from LittleFS and restores program, stage, and timing.
+// Loads the breadmaker's previous state from FFat and restores program, stage, and timing.
+// Optimized for memory efficiency and better error handling.
 void loadResumeState() {
-  File f = LittleFS.open(RESUME_FILE, "r");
+  File f = FFat.open(RESUME_FILE, "r");
   if (!f) return;
-  DynamicJsonDocument doc(1024); // Increased size for stage start times array
+  
+  // Use a smaller buffer since resume files are typically <400 bytes
+  DynamicJsonDocument doc(768); // Reduced from 1024 to 768 bytes
   DeserializationError err = deserializeJson(doc, f);
   f.close();
-  if (err) return;
-  // Restore program by id (id is now the index in the programs vector, but may be a dummy slot)
+  
+  if (err) {
+    if (debugSerial) {
+      Serial.print("[loadResumeState] JSON parse error: ");
+      Serial.println(err.c_str());
+    }
+    return;
+  }
+  
+  // Restore program by id with better validation
   int progIdx = doc["programIdx"] | -1;
-  if (progIdx >= 0 && progIdx < (int)programs.size() && programs[progIdx].id == progIdx && programs[progIdx].id != -1) {
+  if (progIdx >= 0 && progIdx < (int)getProgramCount() && 
+      isProgramValid(progIdx)) {
     programState.activeProgramId = progIdx;
-    updateActiveProgramVars(); // Update program variables after loading
+    // Ensure the program is loaded into memory
+    ensureProgramLoaded(progIdx);
+    updateActiveProgramVars();
   } else {
     // Fallback: select first valid program (id!=-1) or 0 if none
     programState.activeProgramId = 0;
-    for (size_t i = 0; i < programs.size(); ++i) {
-      if (programs[i].id != -1) { programState.activeProgramId = i; break; }
+    for (size_t i = 0; i < getProgramCount(); ++i) {
+      if (isProgramValid(i)) { 
+        programState.activeProgramId = i; 
+        break; 
+      }
     }
+    // Ensure the fallback program is loaded into memory
+    ensureProgramLoaded(programState.activeProgramId);
     updateActiveProgramVars();
   }
-  programState.customStageIdx = doc["customStageIdx"] | 0;
-  programState.customMixIdx = doc["customMixIdx"] | 0;
+  
+  // Load basic state with bounds checking
+  programState.customStageIdx = constrain(doc["customStageIdx"] | 0, 0, 19);
+  programState.customMixIdx = constrain(doc["customMixIdx"] | 0, 0, 9);
   unsigned long elapsedStageSec = doc["elapsedStageSec"] | 0;
   unsigned long elapsedMixSec = doc["elapsedMixSec"] | 0;
   programState.programStartTime = doc["programStartTime"] | 0;
@@ -408,14 +532,18 @@ void loadResumeState() {
   }
 
   // Ensure indices are always valid after resume
-  if (programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
-    Program &p = programs[programState.activeProgramId];
-    if (programState.customStageIdx >= p.customStages.size()) programState.customStageIdx = 0;
-    if (!p.customStages.empty()) {
-      CustomStage &st = p.customStages[programState.customStageIdx];
-      if (!st.mixPattern.empty() && programState.customMixIdx >= st.mixPattern.size()) programState.customMixIdx = 0;
-    } else {
-      programState.customMixIdx = 0;
+  if (programState.activeProgramId >= 0 && isProgramValid(programState.activeProgramId)) {
+    if (ensureProgramLoaded(programState.activeProgramId)) {
+      Program* p = getActiveProgramMutable();
+      if (p != nullptr) {
+        if (programState.customStageIdx >= p->customStages.size()) programState.customStageIdx = 0;
+        if (!p->customStages.empty()) {
+          CustomStage &st = p->customStages[programState.customStageIdx];
+          if (!st.mixPattern.empty() && programState.customMixIdx >= st.mixPattern.size()) programState.customMixIdx = 0;
+        } else {
+          programState.customMixIdx = 0;
+        }
+      }
     }
   } else {
     programState.customStageIdx = 0;
@@ -423,48 +551,53 @@ void loadResumeState() {
   }
 
   // Fast-forward logic: if elapsed time > stage/mix durations, advance indices
-  if (programState.isRunning && programState.activeProgramId < programs.size() && programs[programState.activeProgramId].id != -1) {
-    Program &p = programs[programState.activeProgramId];
-    // Fast-forward stages
-    size_t stageIdx = programState.customStageIdx;
-    unsigned long remainStageSec = elapsedStageSec;
-    while (stageIdx < p.customStages.size()) {
-      unsigned long stageDurSec = p.customStages[stageIdx].min * 60UL;
-      if (remainStageSec < stageDurSec) break;
-      remainStageSec -= stageDurSec;
-      stageIdx++;
-    }
-    if (stageIdx >= p.customStages.size()) {
-      // Program finished
-      programState.customStageIdx = 0;
-      programState.customMixIdx = 0;
-      programState.customStageStart = 0;
-      programState.customMixStepStart = 0;
-      programState.isRunning = false;
-      clearResumeState();
-      return;
-    }
-    programState.customStageIdx = stageIdx;
-    programState.customStageStart = millis() - remainStageSec * 1000UL;
-    if (programState.customStageStart == 0) programState.customStageStart = millis(); // Ensure nonzero for UI
-    // Fast-forward mix steps if mixPattern exists
-    CustomStage &st = p.customStages[programState.customStageIdx];
-    if (!st.mixPattern.empty()) {
-      size_t mixIdx = programState.customMixIdx;
-      unsigned long remainMixSec = elapsedMixSec;
-      while (mixIdx < st.mixPattern.size()) {
-        unsigned long mixDurSec = st.mixPattern[mixIdx].mixSec + st.mixPattern[mixIdx].waitSec;
-        if (remainMixSec < mixDurSec) break;
-        remainMixSec -= mixDurSec;
-        mixIdx++;
+  if (programState.isRunning && programState.activeProgramId >= 0 && isProgramValid(programState.activeProgramId)) {
+    if (ensureProgramLoaded(programState.activeProgramId)) {
+      Program* p = getActiveProgramMutable();
+      if (p != nullptr) {
+        // Fast-forward stages
+        size_t stageIdx = programState.customStageIdx;
+        unsigned long remainStageSec = elapsedStageSec;
+        while (stageIdx < p->customStages.size()) {
+          unsigned long stageDurSec = p->customStages[stageIdx].min * 60UL;
+          if (remainStageSec < stageDurSec) break;
+          remainStageSec -= stageDurSec;
+          stageIdx++;
+        }
+        if (stageIdx >= p->customStages.size()) {
+          // Program finished
+          programState.customStageIdx = 0;
+          programState.customMixIdx = 0;
+          programState.customStageStart = 0;
+          programState.customMixStepStart = 0;
+          programState.isRunning = false;
+          invalidateStatusCache();
+          clearResumeState();
+          return;
+        }
+        programState.customStageIdx = stageIdx;
+        programState.customStageStart = millis() - remainStageSec * 1000UL;
+        if (programState.customStageStart == 0) programState.customStageStart = millis(); // Ensure nonzero for UI
+        // Fast-forward mix steps if mixPattern exists
+        CustomStage &st = p->customStages[programState.customStageIdx];
+        if (!st.mixPattern.empty()) {
+          size_t mixIdx = programState.customMixIdx;
+          unsigned long remainMixSec = elapsedMixSec;
+          while (mixIdx < st.mixPattern.size()) {
+            unsigned long mixDurSec = st.mixPattern[mixIdx].mixSec + st.mixPattern[mixIdx].waitSec;
+            if (remainMixSec < mixDurSec) break;
+            remainMixSec -= mixDurSec;
+            mixIdx++;
+          }
+          if (mixIdx >= st.mixPattern.size()) mixIdx = 0;
+          programState.customMixIdx = mixIdx;
+          programState.customMixStepStart = millis() - remainMixSec * 1000UL;
+          if (programState.customMixStepStart == 0) programState.customMixStepStart = millis(); // Ensure nonzero for UI
+        } else {
+          programState.customMixIdx = 0;
+          programState.customMixStepStart = millis(); // Ensure nonzero for UI
+        }
       }
-      if (mixIdx >= st.mixPattern.size()) mixIdx = 0;
-      programState.customMixIdx = mixIdx;
-      programState.customMixStepStart = millis() - remainMixSec * 1000UL;
-      if (programState.customMixStepStart == 0) programState.customMixStepStart = millis(); // Ensure nonzero for UI
-    } else {
-      programState.customMixIdx = 0;
-      programState.customMixStepStart = millis(); // Ensure nonzero for UI
     }
   } else {
     // Not running or invalid program
@@ -481,6 +614,16 @@ void loadResumeState() {
 // Helper to reset fermentation tracking variables
 // Resets all fermentation tracking variables to initial values for a new fermentation stage.
 void resetFermentationTracking(float temp) {
+  // Add rate limiting to prevent excessive resets
+  static unsigned long lastResetTime = 0;
+  unsigned long now = millis();
+  if (now - lastResetTime < 1000) {
+    return; // Skip reset if less than 1 second since last reset
+  }
+  lastResetTime = now;
+  
+  if (debugSerial) Serial.printf("[FERMENT] Tracking reset: temp=%.1f, previous weighted=%.1fs, clearing all timers\n", temp, fermentState.fermentWeightedSec);
+  
   fermentState.initialFermentTemp = 0.0;
   fermentState.fermentationFactor = 1.0;
   fermentState.predictedCompleteTime = 0;
@@ -489,6 +632,19 @@ void resetFermentationTracking(float temp) {
   fermentState.fermentLastFactor = 1.0;
   fermentState.fermentLastUpdateMs = 0;
   fermentState.fermentWeightedSec = 0.0;
+  
+  // Reset rate limiting to allow immediate update for new stage
+  lastFermentUpdate = 0;
+  
+  if (debugSerial) Serial.printf("[FERMENT] Tracking reset complete: all variables cleared\n");
+}
+
+// Helper to reset fermentation rate limiting
+void resetFermentationRateLimit() {
+  // This function allows external code to reset the rate limiting
+  // when needed (e.g., when starting a new fermentation stage)
+  extern unsigned long lastFermentUpdate;
+  // We'll use a different approach - make the rate limiting variable global
 }
 
 // --- Helper function declarations ---
@@ -506,22 +662,46 @@ void handleCustomStages(bool &stageJustAdvanced);
 // Arduino main loop. Handles temperature sampling, fermentation, manual mode, scheduled start,
 // and custom stage logic for breadmaker operation.
 void loop() {
+  updatePerformanceMetrics(); // Track performance for Home Assistant endpoint
   updateTemperatureSampling();
   updateBuzzerTone();
+  updateDisplay(); // Update TFT display
+  ArduinoOTA.handle(); // Handle OTA updates
+  server.handleClient(); // Handle web server requests - CRITICAL for web interface!
+  // REMOVED: capacitiveButtonsUpdate(); // Capacitive touch buttons disabled due to GPIO boot conflicts
+  checkSerialWifiConfig(); // Check for serial WiFi configuration commands
+  
+  // WiFiManager handles DNS internally, no need for manual processing
+  
   float temp = getAveragedTemperature();
   static bool stageJustAdvanced = false;
   static bool scheduledStartTriggered = false;
+  
+  // Rate limiting for main loop to prevent excessive CPU usage
+  static unsigned long lastMainLoopUpdate = 0;
+  unsigned long nowMs = millis();
+  if (nowMs - lastMainLoopUpdate < 50) { // 50ms for balanced CPU usage and fermentation accuracy
+    yield();
+    delay(10);
+    return;
+  }
+  lastMainLoopUpdate = nowMs;
+
+  // Check and switch PID profile based on temperature
+  checkAndSwitchPIDProfile();
 
   updateFermentationTiming(stageJustAdvanced);
 
   // --- Check for stage advancement and log ---
-  if (stageJustAdvanced && programs.size() > 0 && programState.activeProgramId < programs.size() && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-    Program &p = programs[programState.activeProgramId];
-    CustomStage &st = p.customStages[programState.customStageIdx];
-    if (st.isFermentation) {
-      if (debugSerial) Serial.printf("[STAGE ADVANCE] Fermentation stage advanced to %d\n", (int)programState.customStageIdx);
-    } else {
-      if (debugSerial) Serial.printf("[STAGE ADVANCE] Non-fermentation stage advanced to %d\n", (int)programState.customStageIdx);
+  if (stageJustAdvanced && getProgramCount() > 0 && programState.activeProgramId < getProgramCount()) {
+    Program *p = getActiveProgramMutable();
+    if (p && programState.customStageIdx < p->customStages.size()) {
+      CustomStage &st = p->customStages[programState.customStageIdx];
+      if (st.isFermentation) {
+        if (debugSerial) Serial.printf("[STAGE ADVANCE] Fermentation stage advanced to %d\n", (int)programState.customStageIdx);
+      } else {
+        if (debugSerial) Serial.printf("[STAGE ADVANCE] Non-fermentation stage advanced to %d\n", (int)programState.customStageIdx);
+      }
     }
   }
 
@@ -530,54 +710,106 @@ void loop() {
     checkDelayedResume();
     handleManualMode();
     handleScheduledStart(scheduledStartTriggered);
-    yield(); delay(1); return;
+    yield(); delay(100); return;  // Increased delay for idle state
   }
-  if (programs.size() == 0 || programState.activeProgramId >= programs.size()) {
+  if (getProgramCount() == 0 || programState.activeProgramId >= getProgramCount()) {
     stageJustAdvanced = false;
-    stopBreadmaker(); yield(); delay(1); return;
+    stopBreadmaker(); yield(); delay(100); return;  // Increased delay for error state
   }
   handleCustomStages(stageJustAdvanced);
   temp = getAveragedTemperature();
   yield();
-  delay(1);
+  delay(100);  // Increased delay to reduce CPU load significantly
 }
 
 // --- Helper function definitions ---
 // Updates fermentation timing, calculates weighted time, and advances stage if needed.
+// NOTE: This is the ONLY place where fermentation stages should advance to prevent race conditions.
 void updateFermentationTiming(bool &stageJustAdvanced) {
-  if (programs.size() > 0 && programState.activeProgramId < programs.size() && programState.customStageIdx < programs[programState.activeProgramId].customStages.size()) {
-    Program &p = programs[programState.activeProgramId];
-    CustomStage &st = p.customStages[programState.customStageIdx];
-    if (st.isFermentation) {
-      float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
-      float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
-      float actualTemp = getAveragedTemperature();
-      unsigned long nowMs = millis();
-      if (fermentState.fermentLastUpdateMs == 0) {
-        fermentState.fermentLastTemp = actualTemp;
-        fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0); // Q10: factor < 1 means faster at higher temp
-        fermentState.fermentLastUpdateMs = nowMs;
-        fermentState.fermentWeightedSec = 0.0;
-      } else if (isRunning) {
-        double elapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
-        fermentState.fermentWeightedSec += elapsedSec * fermentState.fermentLastFactor;
-        fermentState.fermentLastTemp = actualTemp;
-        fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
-        fermentState.fermentLastUpdateMs = nowMs;
-      }
-      fermentState.fermentationFactor = fermentState.fermentLastFactor; // For reference: multiply planned time by this factor for Q10
-      double plannedStageSec = (double)st.min * 60.0;
-      double epsilon = 0.05;
-      if (!stageJustAdvanced && (fermentState.fermentWeightedSec + epsilon >= plannedStageSec)) {
-        if (debugSerial) Serial.printf("[FERMENT] Auto-advance: weighted %.1fs >= planned %.1fs\n", fermentState.fermentWeightedSec, plannedStageSec);
-        programState.customStageIdx++;
-        programState.customStageStart = millis();
-        resetFermentationTracking(actualTemp);
-        saveResumeState();
-        stageJustAdvanced = true;
+  if (getProgramCount() > 0 && programState.activeProgramId < getProgramCount()) {
+    Program *p = getActiveProgramMutable();
+    if (p && programState.customStageIdx < p->customStages.size()) {
+      CustomStage &st = p->customStages[programState.customStageIdx];
+      if (st.isFermentation) {
+        float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
+        float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
+        float actualTemp = getAveragedTemperature();
+        unsigned long nowMs = millis();
+        
+        // Rate limiting for fermentation updates to prevent excessive processing
+        if (nowMs - lastFermentUpdate < 5000 && fermentState.fermentLastUpdateMs > 0) {
+          // Skip update if less than 5 seconds since last update
+          return;
+        }
+        lastFermentUpdate = nowMs;
+        
+        if (fermentState.fermentLastUpdateMs == 0) {
+          fermentState.fermentLastTemp = actualTemp;
+          fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0); // Q10: factor < 1 means faster at higher temp
+          fermentState.fermentLastUpdateMs = nowMs;
+          fermentState.fermentWeightedSec = 0.0;
+          if (debugSerial) Serial.printf("[FERMENT] Stage %d (%s) initialized: temp=%.1f, baseline=%.1f, q10=%.1f, factor=%.3f, planned=%.1fs (%.1f hours)\n", 
+                                        programState.customStageIdx, st.label.c_str(), actualTemp, baseline, q10, 
+                                        fermentState.fermentLastFactor, (double)st.min * 60.0, (double)st.min / 60.0);
+        } else if (programState.isRunning) {
+          // Prevent overflow: Check if millis() has wrapped around
+          if (nowMs < fermentState.fermentLastUpdateMs) {
+            if (debugSerial) Serial.println("[FERMENT] WARNING: millis() overflow detected, resetting tracking");
+            fermentState.fermentLastUpdateMs = nowMs;
+            return;
+          }
+          
+          double elapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
+          // Sanity check: prevent accumulation of unreasonably large time periods
+          if (elapsedSec > 1800.0) { // More than 30 minutes since last update
+            if (debugSerial) Serial.printf("[FERMENT] WARNING: Large time gap detected (%.1fs), capping at 1800s\n", elapsedSec);
+            elapsedSec = 1800.0;
+          }
+          
+          double previousWeightedSec = fermentState.fermentWeightedSec;
+          double incrementalWeightedSec = elapsedSec * fermentState.fermentLastFactor;
+          fermentState.fermentWeightedSec += incrementalWeightedSec;
+          fermentState.fermentLastTemp = actualTemp;
+          fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
+          fermentState.fermentLastUpdateMs = nowMs;
+          
+          // Enhanced debug output with detailed accumulation info
+          if (debugSerial) {
+            Serial.printf("[FERMENT] Stage %d (%s) update: real_elapsed=%.1fs, factor=%.3f, increment=%.1fs, weighted=%.1fs->%.1fs (%.1f%% complete), temp=%.1f, target=%.1fs (%.1f hours)\n", 
+                         programState.customStageIdx, st.label.c_str(), elapsedSec, fermentState.fermentLastFactor, 
+                         incrementalWeightedSec, previousWeightedSec, fermentState.fermentWeightedSec, 
+                         (fermentState.fermentWeightedSec / ((double)st.min * 60.0)) * 100.0, 
+                         actualTemp, (double)st.min * 60.0, (double)st.min / 60.0);
+          }
+        }
+        fermentState.fermentationFactor = fermentState.fermentLastFactor; // For reference: multiply planned time by this factor for Q10
+        double plannedStageSec = (double)st.min * 60.0;
+        double epsilon = 0.05;
+        if (!stageJustAdvanced && (fermentState.fermentWeightedSec + epsilon >= plannedStageSec)) {
+          if (debugSerial) Serial.printf("[FERMENT] Auto-advance: Stage %d (%s) COMPLETE - weighted %.1fs >= planned %.1fs (%.1f%% complete, %.1f hours actual)\n", 
+                                        programState.customStageIdx, st.label.c_str(), fermentState.fermentWeightedSec, plannedStageSec, 
+                                        (fermentState.fermentWeightedSec / plannedStageSec) * 100.0, fermentState.fermentWeightedSec / 3600.0);
+          programState.customStageIdx++;
+          programState.customStageStart = millis();
+          
+          // Optimize fermentation stage transition: batch operations and add yield points
+          yield(); // Allow other tasks to run
+          resetFermentationTracking(actualTemp);
+          yield(); // Allow other tasks to run
+          invalidateStatusCache();
+          yield(); // Allow other tasks to run
+          saveResumeState();
+          yield(); // Allow other tasks to run
+          
+          stageJustAdvanced = true;
+        }
+      } else {
+        // Don't continuously reset fermentation tracking for non-fermentation stages
+        // This was causing continuous loop in debug output
       }
     } else {
-      resetFermentationTracking(getAveragedTemperature());
+      // Don't continuously reset fermentation tracking when no valid stage
+      // This was causing continuous loop in debug output
     }
   } else {
     stageJustAdvanced = false;
@@ -589,7 +821,7 @@ void checkDelayedResume() {
   static bool delayedResumeChecked = false;
   if (!delayedResumeChecked && isStartupDelayComplete()) {
     delayedResumeChecked = true;
-    File f = LittleFS.open(RESUME_FILE, "r");
+    File f = FFat.open(RESUME_FILE, "r");
     if (f) {
       DynamicJsonDocument doc(256);
       DeserializationError err = deserializeJson(doc, f);
@@ -604,7 +836,7 @@ void checkDelayedResume() {
 
 // Handles manual mode operation, including direct PID and output control.
 void handleManualMode() {
-  if (manualMode && pid.Setpoint > 0) {
+  if (programState.manualMode && pid.Setpoint > 0) {
     pid.Input = getAveragedTemperature();
     double error = pid.Setpoint - pid.Input;
     double dInput = pid.Input - pid.lastInput;
@@ -615,6 +847,11 @@ void handleManualMode() {
     pid.pidI = pid.lastITerm;
     pid.pidD = -kdUsed * dInput / sampleTimeSec;
     pid.lastInput = pid.Input;
+    // Calculate PID output (custom implementation since pid.controller is commented out)
+    pid.Output = pid.pidP + pid.pidI + pid.pidD;
+    // Clamp output to valid range [0, 1]
+    if (pid.Output < 0) pid.Output = 0;
+    if (pid.Output > 1) pid.Output = 1;
     if (pid.controller) pid.controller->Compute();
     updateTimeProportionalHeater();
     setMotor(false);
@@ -646,6 +883,11 @@ void handleScheduledStart(bool &scheduledStartTriggered) {
     programState.programStartTime = time(nullptr);
     for (int i = 0; i < 20; i++) programState.actualStageStartTimes[i] = 0;
     programState.actualStageStartTimes[programState.customStageIdx] = programState.programStartTime;
+    
+    // Initialize fermentation tracking for the starting stage
+    resetFermentationTracking(getAveragedTemperature());
+    
+    invalidateStatusCache();
     saveResumeState();
     scheduledStart = 0;
     scheduledStartStage = -1;
@@ -655,40 +897,55 @@ void handleScheduledStart(bool &scheduledStartTriggered) {
 
 // Handles the execution and advancement of custom program stages, including mixing and fermentation.
 void handleCustomStages(bool &stageJustAdvanced) {
-  Program &p = programs[programState.activeProgramId];
-  if (!p.customStages.empty()) {
+  Program *p = getActiveProgramMutable();
+  if (!p || p->customStages.empty()) {
     stageJustAdvanced = false;
-    if (programState.customStageIdx >= p.customStages.size()) {
-      stageJustAdvanced = false;
-      stopBreadmaker();
-      programState.customStageIdx = 0;
-      programState.customStageStart = 0;
-      clearResumeState();
-      yield();
-      delay(1);
-      return;
-    }
-    CustomStage &st = p.customStages[programState.customStageIdx];
+    return;
+  }
+  
+  stageJustAdvanced = false;
+  if (programState.customStageIdx >= p->customStages.size()) {
+    stageJustAdvanced = false;
+    stopBreadmaker();
+    programState.customStageIdx = 0;
+    programState.customStageStart = 0;
+    clearResumeState();
+    yield();
+    delay(1);
+    return;
+  }
+  CustomStage &st = p->customStages[programState.customStageIdx];
     pid.Setpoint = st.temp;
     pid.Input = getAveragedTemperature();
+    
+    // Track fermentation stage transitions to prevent continuous reset calls
+    static bool wasLastStageFermentation = false;
+    
     if (st.isFermentation) {
       // Already handled at top of loop
     } else {
-      resetFermentationTracking(getAveragedTemperature());
+      // Only reset fermentation tracking once when entering a non-fermentation stage
+      if (wasLastStageFermentation) {
+        resetFermentationTracking(getAveragedTemperature());
+        wasLastStageFermentation = false;
+      }
     }
+    
+    // Update tracking flag for next iteration
+    wasLastStageFermentation = st.isFermentation;
     if (fermentState.lastFermentAdjust == 0 || millis() - fermentState.lastFermentAdjust > 600000) {
       fermentState.lastFermentAdjust = millis();
       unsigned long nowMs = millis();
       unsigned long elapsedInCurrentStage = (programState.customStageStart > 0) ? (nowMs - programState.customStageStart) : 0UL;
       double cumulativePredictedSec = 0.0;
-      for (size_t i = 0; i < p.customStages.size(); ++i) {
-        CustomStage &stage = p.customStages[i];
+      for (size_t i = 0; i < p->customStages.size(); ++i) {
+        CustomStage &stage = p->customStages[i];
         double plannedStageSec = (double)stage.min * 60.0;
         double adjustedStageSec = plannedStageSec;
         if (stage.isFermentation) {
           if (i < programState.customStageIdx) {
-            float baseline = p.fermentBaselineTemp > 0 ? p.fermentBaselineTemp : 20.0;
-            float q10 = p.fermentQ10 > 0 ? p.fermentQ10 : 2.0;
+            float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
+            float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
             float temp = fermentState.fermentLastTemp;
             float factor = pow(q10, (baseline - temp) / 10.0); // Q10: factor < 1 means faster at higher temp
             cumulativePredictedSec += plannedStageSec * factor; // Multiply: higher temp = less time
@@ -713,8 +970,8 @@ void handleCustomStages(bool &stageJustAdvanced) {
       }
       fermentState.predictedCompleteTime = (unsigned long)(programState.programStartTime + (unsigned long)(cumulativePredictedSec)); // All predicted times use Q10 multiply logic
     }
-    if (st.temp > 0 || manualMode) {
-      if (manualMode && pid.Setpoint > 0) {
+    if (st.temp > 0 || programState.manualMode) {
+      if (programState.manualMode && pid.Setpoint > 0) {
         pid.Input = getAveragedTemperature();
         double error = pid.Setpoint - pid.Input;
         double dInput = pid.Input - pid.lastInput;
@@ -725,9 +982,14 @@ void handleCustomStages(bool &stageJustAdvanced) {
         pid.pidI = pid.lastITerm;
         pid.pidD = -kdUsed * dInput / sampleTimeSec;
         pid.lastInput = pid.Input;
+        // Calculate PID output (custom implementation since pid.controller is commented out)
+        pid.Output = pid.pidP + pid.pidI + pid.pidD;
+        // Clamp output to valid range [0, 1]
+        if (pid.Output < 0) pid.Output = 0;
+        if (pid.Output > 1) pid.Output = 1;
         if (pid.controller) pid.controller->Compute();
         updateTimeProportionalHeater();
-      } else if (!manualMode && st.temp > 0) {
+      } else if (!programState.manualMode && st.temp > 0) {
         double error = pid.Setpoint - pid.Input;
         double dInput = pid.Input - pid.lastInput;
         double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
@@ -737,6 +999,11 @@ void handleCustomStages(bool &stageJustAdvanced) {
         pid.pidI = pid.lastITerm;
         pid.pidD = -kdUsed * dInput / sampleTimeSec;
         pid.lastInput = pid.Input;
+        // Calculate PID output (custom implementation since pid.controller is commented out)
+        pid.Output = pid.pidP + pid.pidI + pid.pidD;
+        // Clamp output to valid range [0, 1]
+        if (pid.Output < 0) pid.Output = 0;
+        if (pid.Output > 1) pid.Output = 1;
         if (pid.controller) pid.controller->Compute();
         updateTimeProportionalHeater();
       } else {
@@ -749,11 +1016,11 @@ void handleCustomStages(bool &stageJustAdvanced) {
       windowStartTime = 0;
       lastPIDOutput = 0.0;
     }
-    if (!manualMode) {
+    if (!programState.manualMode) {
       setLight(false);
       setBuzzer(false);
     }
-    if (!manualMode) {
+    if (!programState.manualMode) {
       bool hasMix = false;
       if (st.noMix) {
         setMotor(false);
@@ -825,20 +1092,20 @@ void handleCustomStages(bool &stageJustAdvanced) {
       }
     }
     bool stageComplete = false;
+    // Note: Fermentation stage advancement is handled in updateFermentationTiming()
+    // to prevent duplicate advancement logic and race conditions
     if (st.isFermentation) {
-      double fermentTargetSec = (double)st.min * 60.0;
-      double epsilon = 0.05;
-      if (fermentState.fermentWeightedSec + epsilon >= fermentTargetSec) {
-        stageComplete = true;
-        if (debugSerial) {
-          Serial.printf("[FERMENT] Advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentState.fermentWeightedSec, fermentTargetSec, st.min);
-        }
-      } else if (debugSerial && (fermentTargetSec - fermentState.fermentWeightedSec) < 2.0) {
-        Serial.printf("[FERMENT] Not yet advancing: fermentWeightedSec=%.3f, target=%.3f (min=%.2f)\n", fermentState.fermentWeightedSec, fermentTargetSec, st.min);
-      }
+      // For fermentation stages, completion is handled by updateFermentationTiming()
+      // We only set stageComplete here if stageJustAdvanced flag is set
+      stageComplete = stageJustAdvanced;
     } else {
       unsigned long elapsedMs = millis() - programState.customStageStart;
-      unsigned long stageMs = (unsigned long)st.min * 60000UL;
+      // Prevent integer overflow: limit stage time to ~71 minutes (2^32 / 60000)
+      unsigned long safeMin = (st.min > 71) ? 71 : st.min;
+      if (st.min > 71 && debugSerial) {
+        Serial.printf("[WARN] Stage duration %u minutes exceeds safe limit, capping at 71 minutes\n", st.min);
+      }
+      unsigned long stageMs = safeMin * 60000UL;
       if (elapsedMs >= stageMs) {
         stageComplete = true;
       } else if (stageMs > 0 && elapsedMs >= stageMs - 1000 && !stageComplete) {
@@ -846,13 +1113,34 @@ void handleCustomStages(bool &stageJustAdvanced) {
         if (debugSerial) Serial.printf("[WARN] Time left is 0 for non-fermentation stage %d but not advancing (elapsed=%lu, stageMs=%lu)\n", (int)programState.customStageIdx, elapsedMs, stageMs);
       }
     }
-    // Extra safety: If time left is 0 for non-fermentation and not advancing, force advancement
+    // Extra safety mechanisms for stuck stages
     if (!st.isFermentation) {
       unsigned long elapsedMs = millis() - programState.customStageStart;
-      unsigned long stageMs = (unsigned long)st.min * 60000UL;
+      // Use same safe calculation to prevent overflow
+      unsigned long safeMin = (st.min > 71) ? 71 : st.min;
+      unsigned long stageMs = safeMin * 60000UL;
       if (stageMs > 0 && elapsedMs > stageMs + 2000 && !stageComplete) {
         if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of non-fermentation stage %d after time expired (elapsed=%lu, stageMs=%lu)\n", (int)programState.customStageIdx, elapsedMs, stageMs);
         stageComplete = true;
+      }
+    } else {
+      // Safety for fermentation stages: if real time is way beyond expected (4x), force advance
+      unsigned long elapsedMs = millis() - programState.customStageStart;
+      // Safety limit: allow up to 4x the planned stage duration
+      unsigned long maxStageMs = (unsigned long)st.min * 60000UL * 4; // 4x expected time as safety limit
+      // For very long stages, cap at 24 hours (1440 minutes) to prevent overflow
+      if (st.min > 360) { // If stage is > 6 hours, cap safety at 24 hours
+        maxStageMs = 1440UL * 60000UL; // 24 hours maximum
+        if (debugSerial) {
+          Serial.printf("[WARN] Fermentation stage %u minutes is very long, capping safety timeout at 24 hours\n", st.min);
+        }
+      }
+      if (maxStageMs > 0 && elapsedMs > maxStageMs && !stageComplete) {
+        if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of stuck fermentation stage %d after %lu minutes (4x limit reached: %lu min planned, %lu min safety limit)\n", 
+                                      (int)programState.customStageIdx, elapsedMs / 60000UL, (unsigned long)st.min, maxStageMs / 60000UL);
+        stageComplete = true;
+        // Reset fermentation tracking to prevent issues in next stage
+        resetFermentationTracking(getAveragedTemperature());
       }
     }
     if (stageComplete) {
@@ -873,404 +1161,175 @@ void handleCustomStages(bool &stageJustAdvanced) {
       programState.customStageStart = millis();
       programState.customMixIdx = 0;
       programState.customMixStepStart = 0;
+      
+      // Optimize stage transition: batch operations and add yield points
+      yield(); // Allow other tasks to run
       saveResumeState();
+      yield(); // Allow other tasks to run
+      invalidateStatusCache();
+      yield(); // Allow other tasks to run
+      
       stageJustAdvanced = true;
       if (debugSerial) Serial.printf("[ADVANCE] Stage advanced to %d\n", programState.customStageIdx);
-      getAveragedTemperature();
+      
+      // Reduce CPU load during transition
       yield();
-      delay(1);
+      delay(50); // Increased delay to reduce CPU spike
+      return;
+    } else {
+      yield();
+      delay(100);
       return;
     }
-  } else {
-    yield();
-    delay(100);
-    return;
-  }
 }
 
-// --- Update active program variables ---
-// Updates pointers and counters for the currently active breadmaker program.
-void updateActiveProgramVars() {
-  if (programs.size() > 0 && programState.activeProgramId < programs.size()) {
-    programState.customProgram = &programs[programState.activeProgramId];
-    programState.maxCustomStages = programState.customProgram->customStages.size();
-  } else {
-    programState.customProgram = nullptr;
-    programState.maxCustomStages = 0;
-  }
-}
-
-// --- Temperature averaging functions ---
-// Samples the temperature sensor, applies outlier rejection and weighted averaging, and updates the global temperature value.
-void updateTemperatureSampling() {
-  unsigned long nowMs = millis();
-  
-  // Sample at the configured interval
-  if (nowMs - tempAvg.lastTempSample >= tempAvg.tempSampleInterval) {
-    tempAvg.lastTempSample = nowMs;
-    // Take a new temperature sample
-    float rawTemp = readTemperature();
-    tempAvg.tempSamples[tempAvg.tempSampleIndex] = rawTemp;
-    tempAvg.tempSampleIndex = (tempAvg.tempSampleIndex + 1) % tempAvg.tempSampleCount;
-    // Mark samples as ready once we've filled the array at least once
-    if (tempAvg.tempSampleIndex == 0 && !tempAvg.tempSamplesReady) {
-      tempAvg.tempSamplesReady = true;
-    }
-    // Calculate averaged temperature if we have enough samples
-    if (tempAvg.tempSamplesReady && tempAvg.tempSampleCount > 0) {
-      // Step 1: Copy and sort samples for outlier rejection
-      float sortedSamples[MAX_TEMP_SAMPLES];
-      for (int i = 0; i < tempAvg.tempSampleCount; i++) {
-        sortedSamples[i] = tempAvg.tempSamples[i];
-      }
-      // Simple bubble sort
-      for (int i = 0; i < tempAvg.tempSampleCount - 1; i++) {
-        for (int j = 0; j < tempAvg.tempSampleCount - i - 1; j++) {
-          if (sortedSamples[j] > sortedSamples[j + 1]) {
-            float temp = sortedSamples[j];
-            sortedSamples[j] = sortedSamples[j + 1];
-            sortedSamples[j + 1] = temp;
-          }
-        }
-      }
-      // Step 2: Get clean samples (reject outliers if we have enough samples)
-      float cleanSamples[MAX_TEMP_SAMPLES];
-      int cleanCount = 0;
-      int effectiveSamples = tempAvg.tempSampleCount - (2 * tempAvg.tempRejectCount);
-      if (effectiveSamples >= 3) {
-        for (int i = tempAvg.tempRejectCount; i < tempAvg.tempSampleCount - tempAvg.tempRejectCount; i++) {
-          cleanSamples[cleanCount++] = sortedSamples[i];
+// Serial WiFi configuration helper
+void checkSerialWifiConfig() {
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    
+    if (cmd.startsWith("wifi:")) {
+      // Format: wifi:SSID,PASSWORD
+      int commaIndex = cmd.indexOf(',', 5);
+      if (commaIndex > 5) {
+        String ssid = cmd.substring(5, commaIndex);
+        String pass = cmd.substring(commaIndex + 1);
+        
+        Serial.printf("[WIFI CONFIG] Setting up WiFi: %s\n", ssid.c_str());
+        
+        // Save to wifi.json
+        DynamicJsonDocument doc(256);
+        doc["ssid"] = ssid;
+        doc["pass"] = pass;
+        
+        File f = FFat.open("/wifi.json", "w");
+        if (f) {
+          serializeJson(doc, f);
+          f.close();
+          Serial.println("[WIFI CONFIG] WiFi configuration saved!");
+          Serial.println("[WIFI CONFIG] Restarting to apply new WiFi settings...");
+          delay(1000);
+          ESP.restart();
+        } else {
+          Serial.println("[WIFI CONFIG] ERROR: Failed to save WiFi configuration");
         }
       } else {
-        for (int i = 0; i < tempAvg.tempSampleCount; i++) {
-          cleanSamples[cleanCount++] = sortedSamples[i];
-        }
+        Serial.println("[WIFI CONFIG] Invalid format. Use: wifi:SSID,PASSWORD");
       }
-      // Step 3: Detect trend direction and strength
-      float firstHalf = 0.0, secondHalf = 0.0;
-      int halfSize = cleanCount / 2;
-      for (int i = 0; i < halfSize; i++) {
-        firstHalf += cleanSamples[i];
+    } else if (cmd == "wifi:help") {
+      Serial.println(F("[WIFI CONFIG] WiFi Configuration Commands:"));
+      Serial.println(F("[WIFI CONFIG] wifi:SSID,PASSWORD - Set WiFi credentials"));
+      Serial.println(F("[WIFI CONFIG] wifi:status - Show current WiFi status"));
+      Serial.println(F("[WIFI CONFIG] wifi:reset - Reset WiFi configuration"));
+      Serial.println(F("[WIFI CONFIG] wifi:help - Show this help"));
+    } else if (cmd == "wifi:status") {
+      Serial.printf("[WIFI CONFIG] WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf("[WIFI CONFIG] IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("[WIFI CONFIG] SSID: %s\n", WiFi.SSID().c_str());
+      } else if (WiFi.getMode() == WIFI_AP) {
+        Serial.printf("[WIFI CONFIG] AP Mode IP: %s\n", WiFi.softAPIP().toString().c_str());
       }
-      for (int i = halfSize; i < cleanCount; i++) {
-        secondHalf += cleanSamples[i];
-      }
-      firstHalf /= halfSize;
-      secondHalf /= (cleanCount - halfSize);
-      float trendStrength = secondHalf - firstHalf;
-      float absTrendStrength = fabs(trendStrength);
-      // Step 4: ALWAYS apply weighted average (adaptive weighting based on trend)
-      float weightedSum = 0.0;
-      float totalWeight = 0.0;
-      for (int i = 0; i < cleanCount; i++) {
-        float weight = 0.5 + (1.5 * i) / (cleanCount - 1);
-        weightedSum += cleanSamples[i] * weight;
-        totalWeight += weight;
-      }
-      tempAvg.averagedTemperature = weightedSum / totalWeight;
-      // Debug output occasionally
-      if (debugSerial && (nowMs % 30000 < tempAvg.tempSampleInterval)) {
-        Serial.printf("[TEMP_AVG] Raw: %.2f°C, Filtered: %.2f°C, Trend: %.2f°C (from %d samples, mode: %s)\n",
-                     rawTemp, tempAvg.averagedTemperature, trendStrength, cleanCount,
-                     (absTrendStrength > 0.2) ? "TREND" : "STABLE");
-      }
-    } else {
-      tempAvg.averagedTemperature = rawTemp;
-    }
-  }
-}
-
-// Returns the most recently calculated averaged temperature.
-float getAveragedTemperature() {
-  return tempAvg.averagedTemperature;
-}
-
-// --- Time-proportional PID control function ---
-// Implements time-proportional relay control for the heater using PID output and dynamic windowing.
-void updateTimeProportionalHeater() {
-  unsigned long nowMs = millis();
-  
-  // Initialize window start time if not set
-  if (windowStartTime == 0) {
-    windowStartTime = nowMs;
-    lastPIDOutput = pid.Output; // Initialize last PID output
-  }
-  
-  // Check for dynamic window restart conditions
-  bool shouldRestartWindow = false;
-  unsigned long elapsed = nowMs - windowStartTime;
-  
-  // Dynamic window restart logic:
-  // If PID output changes significantly AND we've been in this window for at least MIN_WINDOW_TIME
-  if (elapsed >= MIN_WINDOW_TIME) {
-    double outputChange = fabs(pid.Output - lastPIDOutput);
-    
-    // Case 1: Large increase in output (e.g., needs more heat quickly)
-    if (outputChange >= PID_CHANGE_THRESHOLD && pid.Output > lastPIDOutput) {
-      // If we're currently in the OFF part of the window and need much more heat
-      if (elapsed >= onTime && pid.Output > 0.7) { // Need >70% output but heater is OFF
-        shouldRestartWindow = true;
-        if (debugSerial) {
-          Serial.printf("[PID-DYNAMIC] Restarting window: Output jumped from %.2f to %.2f (need more heat)\n", 
-                       lastPIDOutput, pid.Output);
-        }
-      }
-    }
-    
-    // Case 2: Large decrease in output (e.g., overheating, need to turn off quickly)
-    else if (outputChange >= PID_CHANGE_THRESHOLD && pid.Output < lastPIDOutput) {
-      // If we're currently in the ON part of the window and need much less heat
-      if (elapsed < onTime && pid.Output < 0.3) { // Need <30% output but heater is ON
-        shouldRestartWindow = true;
-        if (debugSerial) {
-          Serial.printf("[PID-DYNAMIC] Restarting window: Output dropped from %.2f to %.2f (reduce heat)\n", 
-                       lastPIDOutput, pid.Output);
-        }
-      }
-    }
-  }
-  
-  // Check if we need to start a new window (normal timing or dynamic restart)
-  if (nowMs - windowStartTime >= windowSize || shouldRestartWindow) {
-    // Track dynamic restart events
-    if (shouldRestartWindow) {
-      dynamicRestart.lastDynamicRestart = nowMs;
-      dynamicRestart.dynamicRestartCount++;
-      // Determine restart reason
-      if (pid.Output > lastPIDOutput && pid.Output > 0.7) {
-        dynamicRestart.lastDynamicRestartReason = "Need more heat (output increased to " + String((pid.Output*100), 1) + "%)";
-      } else if (pid.Output < lastPIDOutput && pid.Output < 0.3) {
-        dynamicRestart.lastDynamicRestartReason = "Reduce heat (output decreased to " + String((pid.Output*100), 1) + "%)";
+    } else if (cmd == "wifi:reset") {
+      if (FFat.remove("/wifi.json")) {
+        Serial.println("[WIFI CONFIG] WiFi configuration reset. Restarting...");
+        delay(1000);
+        ESP.restart();
       } else {
-        dynamicRestart.lastDynamicRestartReason = "Output change (from " + String((lastPIDOutput*100), 1) + "% to " + String((pid.Output*100), 1) + "%)";
+        Serial.println("[WIFI CONFIG] No WiFi configuration to reset");
       }
-      if (debugSerial) {
-        Serial.printf("[PID-DYNAMIC] Restart #%u: %s (elapsed: %lums)\n", 
-                     dynamicRestart.dynamicRestartCount, dynamicRestart.lastDynamicRestartReason.c_str(), elapsed);
-      }
-    }
-    
-    windowStartTime = nowMs;
-    lastPIDOutput = pid.Output; // Update the last known PID output
-    
-    // Calculate ON time for this window based on PID output (0.0 to 1.0)
-    onTime = (unsigned long)(pid.Output * windowSize);
-    
-    // Relay protection: smart minimum ON/OFF times
-    const unsigned long minOnTime = 1000;   // Minimum 1 second ON (was 5s - too aggressive!)
-    const unsigned long minOffTime = 1000;  // Minimum 1 second OFF 
-    const float minOutputThreshold = 0.02;  // Below 2% output, turn OFF completely
-\
-    // If output is very low, just turn OFF completely (avoid excessive short cycling)
-    if (pid.Output < minOutputThreshold) {
-      onTime = 0;  // Complete OFF
-    }
-    // If output is 100% (or very close), force ON for entire window
-    else if (pid.Output >= 0.999f) {
-      onTime = windowSize;
-    }
-    // Otherwise apply minimum ON/OFF time logic
-    else {
-      if (onTime > 0 && onTime < minOnTime) {
-        onTime = minOnTime;  // Extend very short ON periods to protect relay
-      }
-      // Ensure minimum OFF time, but only if there is actually an OFF period
-      if (onTime > 0 && onTime < windowSize && (windowSize - onTime) < minOffTime) {
-        onTime = windowSize - minOffTime;  // Ensure minimum OFF time
-      }
-    }
-    
-    if (debugSerial && millis() % 15000 < 50) {  // Debug every 15 seconds
-      Serial.printf("[PID-RELAY] Setpoint: %.1f°C, Input: %.1f°C, Output: %.2f, OnTime: %lums/%lums (%.1f%%) %s\n", 
-                   pid.Setpoint, pid.Input, pid.Output, onTime, windowSize, (onTime * 100.0 / windowSize),
-                   shouldRestartWindow ? "[DYNAMIC]" : "[NORMAL]");
     }
   }
+}
+
+// === OTA Update Support ===
+void setupOTA() {
+  Serial.println("[OTA] Setting up Over-The-Air updates...");
   
-  // Determine heater state based on position within current window
-  elapsed = nowMs - windowStartTime; // Recalculate elapsed after potential window restart
-  bool heaterShouldBeOn = (elapsed < onTime);
-  setHeater(heaterShouldBeOn);
-}
-
-// --- Enhanced heater status reporting for debugging ---
-// Streams detailed heater and PID status as JSON for debugging purposes.
-void streamHeaterDebugStatus(Print& out) {
-  unsigned long nowMs = millis();
-  unsigned long elapsed = (windowStartTime > 0) ? (nowMs - windowStartTime) : 0;
-  float windowProgress = (windowSize > 0) ? ((float)elapsed / windowSize) * 100 : 0;
-  float onTimePercent = (windowSize > 0) ? ((float)onTime / windowSize) * 100 : 0;
-
-  bool canRestartNow = (elapsed >= MIN_WINDOW_TIME);
-  bool significantChange = (abs(pid.Output - lastPIDOutput) >= PID_CHANGE_THRESHOLD);
-  bool needMoreHeat = (pid.Output > lastPIDOutput && elapsed >= onTime && pid.Output > 0.7);
-  bool needLessHeat = (pid.Output < lastPIDOutput && elapsed < onTime && pid.Output < 0.3);
-  unsigned long theoreticalOnTime = (unsigned long)(pid.Output * windowSize);
-  unsigned long minOffTime =  5000;
-  bool relayProtectionActive = (theoreticalOnTime > 0 && (windowSize - theoreticalOnTime) < minOffTime);
-
-  out.print("{");
-  out.printf("\"heater_physical_state\":%s,", heaterState ? "true" : "false");
-  out.printf("\"pid_output_percent\":%.2f,", pid.Output * 100);
-  out.printf("\"setpoint\":%.2f,", pid.Setpoint);
-  out.printf("\"manual_mode\":%s,", manualMode ? "true" : "false");
-  out.printf("\"is_running\":%s,", isRunning ? "true" : "false");
-  out.printf("\"window_size_ms\":%lu,", windowSize);
-  out.printf("\"window_elapsed_ms\":%lu,", elapsed);
-  out.printf("\"window_progress_percent\":%.2f,", windowProgress);
-  out.printf("\"calculated_on_time_ms\":%lu,", onTime);
-  out.printf("\"on_time_percent\":%.2f,", onTimePercent);
-  out.printf("\"should_be_on\":%s,", (elapsed < onTime) ? "true" : "false");
-  out.printf("\"dynamic_restarts\":%u,", dynamicRestart.dynamicRestartCount);
-  out.printf("\"last_restart_reason\":\"%s\",", dynamicRestart.lastDynamicRestartReason.c_str());
-  out.printf("\"last_restart_ago_ms\":%lu,", (dynamicRestart.lastDynamicRestart > 0) ? (nowMs - dynamicRestart.lastDynamicRestart) : 0);
-  out.printf("\"last_pid_output\":%.2f,", lastPIDOutput);
-  out.printf("\"pid_output_change\":%.2f,", abs(pid.Output - lastPIDOutput));
-  out.printf("\"change_threshold\":%.2f,", PID_CHANGE_THRESHOLD);
-  out.printf("\"can_restart_now\":%s,", canRestartNow ? "true" : "false");
-  out.printf("\"significant_change\":%s,", significantChange ? "true" : "false");
-  out.printf("\"restart_condition_more_heat\":%s,", needMoreHeat ? "true" : "false");
-  out.printf("\"restart_condition_less_heat\":%s,", needLessHeat ? "true" : "false");
-  out.printf("\"setpoint_override\":%s,", (pid.Setpoint <= 0) ? "true" : "false");
-  out.printf("\"running_override\":%s,", !isRunning ? "true" : "false");
-  out.printf("\"manual_override\":%s,", manualMode ? "true" : "false");
-  out.printf("\"relay_protection_active\":%s,", relayProtectionActive ? "true" : "false");
-  out.printf("\"theoretical_on_time_ms\":%lu,", theoreticalOnTime);
-  out.printf("\"enforced_min_off_time_ms\":%lu", minOffTime);
-  out.print("}");
-}
-
-// --- Startup delay check for temperature sensor stabilization ---
-// Returns true if the startup delay for temperature sensor stabilization has elapsed.
-bool isStartupDelayComplete() {
-  unsigned long elapsed = millis() - startupTime;
-  return elapsed >= STARTUP_DELAY_MS;
-}
-
-// Stops the breadmaker, turns off all outputs, and saves state.
-void stopBreadmaker() {
-  if (debugSerial) Serial.println("[ACTION] stopBreadmaker() called");
-  isRunning = false;
-  setHeater(false);
-  setMotor(false);
-  setLight(false);
-  setBuzzer(true); // Buzz for 200ms (handled non-blocking in loop)
-  clearResumeState();
-}
-
-// Loads breadmaker settings (PID, temperature, program selection, etc.) from LittleFS.
-void loadSettings() {
-  Serial.println("[loadSettings] Loading settings...");
-  File f = LittleFS.open(SETTINGS_FILE, "r");
-  if (!f) {
-    Serial.println("[loadSettings] settings.json not found, using defaults.");
-    debugSerial = true;
-    return;
-  }
-  DynamicJsonDocument doc(512);
-  DeserializationError err = deserializeJson(doc, f);
-  if (err) {
-    Serial.print("[loadSettings] Failed to parse settings.json: ");
-    Serial.println(err.c_str());
-    f.close();
-    debugSerial = true;
-    return;
-  }
-  const char* mode = doc["outputMode"] | "analog";
-  outputMode = (strcmp(mode, "digital") == 0) ? OUTPUT_DIGITAL : OUTPUT_ANALOG;
-  debugSerial = doc["debugSerial"] | true;
+  // Set OTA hostname
+  ArduinoOTA.setHostname("breadmaker-controller");
   
-  // Load PID parameters
-  if (doc.containsKey("pidKp")) {
-    pid.Kp = doc["pidKp"] | 2.0;
-    pid.Ki = doc["pidKi"] | 5.0;
-    pid.Kd = doc["pidKd"] | 1.0;
-    pid.sampleTime = doc["pidSampleTime"] | 1000;
-    windowSize = doc["pidWindowSize"] | 30000;
+  // Set OTA password (optional but recommended)
+  ArduinoOTA.setPassword("breadmaker123");
+  
+  // OTA event handlers
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_SPIFFS/FFat
+      type = "filesystem";
+    }
+    Serial.println("[OTA] Start updating " + type);
     
-    // Apply loaded PID parameters
+    // Stop all critical operations during update for safety
     if (pid.controller) {
-      pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
-      pid.controller->SetSampleTime(pid.sampleTime);
+      pid.controller->SetMode(MANUAL);
     }
-    Serial.printf("[loadSettings] PID parameters loaded: Kp=%.6f, Ki=%.6f, Kd=%.6f\n", pid.Kp, pid.Ki, pid.Kd);
-    Serial.printf("[loadSettings] Timing parameters loaded: SampleTime=%lums, WindowSize=%lums\n", pid.sampleTime, windowSize);
-  }
+    
+    // Turn off heater during update for safety
+    outputStates.heater = false;
+    setHeater(false);
+    
+    displayMessage("OTA Update...");
+  });
   
-  // Load temperature averaging parameters
-  if (doc.containsKey("tempSampleCount")) {
-    tempAvg.tempSampleCount = doc["tempSampleCount"] | 10;
-    tempAvg.tempRejectCount = doc["tempRejectCount"] | 2;
-    tempAvg.tempSampleInterval = doc["tempSampleInterval"] | 500;
-    // Validate parameters
-    if (tempAvg.tempSampleCount < 5) tempAvg.tempSampleCount = 5;
-    if (tempAvg.tempSampleCount > MAX_TEMP_SAMPLES) tempAvg.tempSampleCount = MAX_TEMP_SAMPLES;
-    if (tempAvg.tempRejectCount < 0) tempAvg.tempRejectCount = 0;
-    // Ensure we have at least 3 samples after rejection
-    int effectiveSamples = tempAvg.tempSampleCount - (2 * tempAvg.tempRejectCount);
-    if (effectiveSamples < 3) {
-      tempAvg.tempRejectCount = (tempAvg.tempSampleCount - 3) / 2;
-    }
-    // Reset sampling system when parameters change
-    tempAvg.tempSamplesReady = false;
-    tempAvg.tempSampleIndex = 0;
-    Serial.printf("[loadSettings] Temperature averaging loaded: Samples=%d, Reject=%d, Interval=%lums\n", 
-                 tempAvg.tempSampleCount, tempAvg.tempRejectCount, tempAvg.tempSampleInterval);
-  }
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\n[OTA] Update complete!");
+    displayMessage("Update Complete");
+    delay(1000);
+  });
   
-  // Restore last selected program by ID if present, fallback to name for backward compatibility
-  if (doc.containsKey("lastProgramId")) {
-    int lastId = doc["lastProgramId"];
-    if (lastId >= 0 && lastId < (int)programs.size()) {
-      programState.activeProgramId = lastId;
-      Serial.print("[loadSettings] lastProgramId loaded: ");
-      Serial.println(lastId);
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    unsigned int percent = (progress / (total / 100));
+    Serial.printf("[OTA] Progress: %u%%\r", percent);
+    
+    // Update display with progress every 10%
+    static unsigned int lastPercent = 0;
+    if (percent != lastPercent && percent % 10 == 0) {
+      String msg = "Updating: " + String(percent) + "%";
+      displayMessage(msg.c_str());
+      lastPercent = percent;
     }
-  } else if (doc.containsKey("lastProgram")) {
-    // Deprecated: fallback to name for backward compatibility
-    String lastProg = doc["lastProgram"].as<String>();
-    for (size_t i = 0; i < programs.size(); ++i) {
-      if (programs[i].name == lastProg) {
-        programState.activeProgramId = i;
-        Serial.print("[loadSettings] lastProgram loaded (deprecated): ");
-        Serial.println(lastProg);
-        break;
-      }
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("[OTA] Error[%u]: ", error);
+    String errorMsg = "OTA Error: ";
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+      errorMsg += "Auth Failed";
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+      errorMsg += "Begin Failed";
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+      errorMsg += "Connect Failed";
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+      errorMsg += "Receive Failed";
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+      errorMsg += "End Failed";
     }
+    displayMessage(errorMsg.c_str());
+    delay(3000);
+    
+    // Restore normal operation after error
+    if (pid.controller) {
+      pid.controller->SetMode(AUTOMATIC);
+    }
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("[OTA] OTA updates ready");
+  Serial.print("[OTA] Hostname: ");
+  Serial.println(ArduinoOTA.getHostname());
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[OTA] Web interface: http://%s.local/update\n", ArduinoOTA.getHostname().c_str());
+    Serial.printf("[OTA] Or direct IP: http://%s/update\n", WiFi.localIP().toString().c_str());
+    Serial.println("[OTA] Arduino IDE: Select network port for wireless uploads");
   }
-  Serial.print("[loadSettings] outputMode loaded: ");
-  Serial.println(mode);
-  Serial.print("[loadSettings] debugSerial: ");
-  Serial.println(debugSerial ? "true" : "false");
-  f.close();
-  Serial.println("[loadSettings] Settings loaded.");
-}
-// Saves breadmaker settings (PID, temperature, program selection, etc.) to LittleFS.
-void saveSettings() {
-  Serial.println("[saveSettings] Saving settings...");
-  DynamicJsonDocument doc(768);
-  doc["outputMode"] = (outputMode == OUTPUT_DIGITAL) ? "digital" : "analog";
-  doc["debugSerial"] = debugSerial;
-  if (programs.size() > 0) {
-    doc["lastProgramId"] = (int)programState.activeProgramId;
-    doc["lastProgram"] = programs[programState.activeProgramId].name; // Deprecated, for backward compatibility
-  }
-  // Save PID parameters
-  doc["pidKp"] = pid.Kp;
-  doc["pidKi"] = pid.Ki;
-  doc["pidKd"] = pid.Kd;
-  doc["pidSampleTime"] = pid.sampleTime;
-  doc["pidWindowSize"] = windowSize;
-  // Save temperature averaging parameters
-  doc["tempSampleCount"] = tempAvg.tempSampleCount;
-  doc["tempRejectCount"] = tempAvg.tempRejectCount;
-  doc["tempSampleInterval"] = tempAvg.tempSampleInterval;
-  File f = LittleFS.open(SETTINGS_FILE, "w");
-  if (!f) {
-    Serial.println("[saveSettings] Failed to open settings.json for writing!");
-    return;
-  }
-  serializeJson(doc, f);
-  f.close();
-  Serial.println("[saveSettings] Settings saved with PID and temperature averaging parameters.");
 }

@@ -1,0 +1,727 @@
+#include "web_endpoints.h"
+#include <Arduino.h>
+#include "globals.h"
+#include <ArduinoJson.h>
+#include "programs_manager.h"
+#include "outputs_manager.h"
+#include <PID_v1.h>
+#include <WiFi.h>
+#include "calibration.h"
+#include <FFat.h>
+#include "ota_manager.h"
+
+#ifdef ESP32
+#include <esp_system.h>
+#endif
+
+// Define missing global variables
+const char* VERSION = "3.0.0";
+bool pidEnabled = false;
+float temperatureSensorValue = 0.0;
+float sensorReadings[10] = {0};
+const int THERMISTOR_PIN = 34;  // GPIO34 for thermistor pin
+
+// Performance tracking variables
+static unsigned long loopCount = 0;
+static unsigned long lastLoopTime = 0;
+static unsigned long totalLoopTime = 0;
+static unsigned long maxLoopTime = 0;
+static unsigned long minFreeHeap = 0xFFFFFFFF;
+static unsigned long wifiReconnectCount = 0;
+static unsigned long lastWifiStatus = WL_CONNECTED;
+
+// Caching variables for frequently accessed endpoints
+static unsigned long lastStatusUpdate = 0;
+static unsigned long lastHaUpdate = 0;
+static const unsigned long STATUS_CACHE_MS = 1000;  // Cache for 1 second
+static const unsigned long HA_CACHE_MS = 3000;      // Cache HA for 3 seconds
+
+// Cache invalidation function - call this when state changes
+void invalidateStatusCache() {
+  lastStatusUpdate = 0;
+  lastHaUpdate = 0;
+}
+
+// Forward declarations for helpers and global variables used in endpoints
+extern bool debugSerial;
+extern unsigned long windowSize, onTime, startupTime;
+extern bool thermalRunawayDetected, sensorFaultDetected;
+extern time_t scheduledStart;
+extern int scheduledStartStage;
+extern bool heaterState, motorState, lightState, buzzerState;
+extern void streamStatusJson(Print& out);
+extern void resetFermentationTracking(float temp);
+extern float getAveragedTemperature();
+extern void saveSettings();
+extern void saveResumeState();
+extern void updateActiveProgramVars();
+extern void stopBreadmaker();
+extern bool isStartupDelayComplete();
+extern void setHeater(bool);
+extern void setMotor(bool);
+extern void setLight(bool);
+extern void setBuzzer(bool);
+extern void shortBeep();
+extern void startBuzzerTone(float, float, unsigned long);
+extern float readTemperature();
+extern void switchToProfile(const String& profileName);
+extern void loadPIDProfiles();
+extern void savePIDProfiles();
+extern WebServer server; // Global server reference
+
+extern void sendJsonError(WebServer& server, const String&, const String&, int);
+void deleteFolderRecursive(const String& path);
+
+extern std::vector<Program> programs;
+extern unsigned long lightOnTime;
+extern unsigned long windowStartTime;
+
+#ifndef FIRMWARE_BUILD_DATE
+#define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
+#endif
+
+// Helper function to get status JSON as string
+String getStatusJsonString() {
+  String response;
+  response.reserve(2048); // Pre-allocate for efficiency
+  
+  response += "{";
+  
+  // Core state
+  response += "\"state\":\"" + String(programState.isRunning ? "on" : "off") + "\",";
+  response += "\"running\":" + String(programState.isRunning ? "true" : "false") + ",";
+  
+  // Program info
+  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+    Program* p = getActiveProgramMutable();
+    if (p) {
+      response += "\"program\":\"" + p->name + "\",";
+      response += "\"programId\":" + String(programState.activeProgramId) + ",";
+      
+      // Stage info
+      if (programState.customStageIdx < p->customStages.size()) {
+        CustomStage& stage = p->customStages[programState.customStageIdx];
+        response += "\"stage\":\"" + stage.label + "\",";
+        response += "\"stageIdx\":" + String(programState.customStageIdx) + ",";
+        response += "\"setpoint\":" + String(stage.temp, 1) + ",";
+        
+        // Calculate time left in current stage
+        unsigned long timeLeft = 0;
+        if (programState.isRunning && programState.customStageStart > 0) {
+          unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
+          unsigned long stageDuration = stage.min * 60;
+          timeLeft = (elapsed < stageDuration) ? (stageDuration - elapsed) : 0;
+        }
+        response += "\"stage_time_left\":" + String(timeLeft) + ",";
+        response += "\"timeLeft\":" + String(timeLeft) + ",";
+        
+        // Stage ready time
+        if (programState.isRunning && timeLeft > 0) {
+          unsigned long readyAt = (time(nullptr) + timeLeft) * 1000; // Convert to ms
+          response += "\"stage_ready_at\":" + String(readyAt) + ",";
+          response += "\"stageReadyAt\":" + String(readyAt / 1000) + ",";
+        } else {
+          response += "\"stage_ready_at\":0,";
+          response += "\"stageReadyAt\":0,";
+        }
+      } else {
+        response += "\"stage\":\"Idle\",";
+        response += "\"stageIdx\":0,";
+        response += "\"setpoint\":0,";
+        response += "\"stage_time_left\":0,";
+        response += "\"timeLeft\":0,";
+        response += "\"stage_ready_at\":0,";
+        response += "\"stageReadyAt\":0,";
+      }
+    } else {
+      response += "\"program\":\"Unknown\",";
+      response += "\"programId\":" + String(programState.activeProgramId) + ",";
+      response += "\"stage\":\"Idle\",";
+      response += "\"stageIdx\":0,";
+      response += "\"setpoint\":0,";
+      response += "\"stage_time_left\":0,";
+      response += "\"timeLeft\":0,";
+      response += "\"stage_ready_at\":0,";
+      response += "\"stageReadyAt\":0,";
+    }
+  } else {
+    response += "\"program\":\"None\",";
+    response += "\"programId\":-1,";
+    response += "\"stage\":\"Idle\",";
+    response += "\"stageIdx\":0,";
+    response += "\"setpoint\":0,";
+    response += "\"stage_time_left\":0,";
+    response += "\"timeLeft\":0,";
+    response += "\"stage_ready_at\":0,";
+    response += "\"stageReadyAt\":0,";
+  }
+  
+  // Temperature and outputs  
+  response += "\"temperature\":" + String(getAveragedTemperature(), 1) + ",";
+  response += "\"temp\":" + String(getAveragedTemperature(), 1) + ",";
+  response += "\"setTemp\":" + String(pid.Setpoint, 1) + ",";
+  response += "\"heater\":" + String(heaterState ? "true" : "false") + ",";
+  response += "\"motor\":" + String(motorState ? "true" : "false") + ",";
+  response += "\"light\":" + String(lightState ? "true" : "false") + ",";
+  response += "\"buzzer\":" + String(buzzerState ? "true" : "false") + ",";
+  response += "\"manual_mode\":" + String(programState.manualMode ? "true" : "false") + ",";
+  response += "\"manualMode\":" + String(programState.manualMode ? "true" : "false") + ",";
+  
+  // Mix and timing
+  response += "\"mixIdx\":" + String(programState.customMixIdx) + ",";
+  
+  // Program completion prediction
+  if (fermentState.predictedCompleteTime > 0) {
+    response += "\"program_ready_at\":" + String(fermentState.predictedCompleteTime * 1000) + ",";
+    response += "\"programReadyAt\":" + String(fermentState.predictedCompleteTime) + ",";
+    response += "\"predictedCompleteTime\":" + String(fermentState.predictedCompleteTime * 1000) + ",";
+  } else {
+    response += "\"program_ready_at\":0,";
+    response += "\"programReadyAt\":0,";
+    response += "\"predictedCompleteTime\":0,";
+  }
+  
+  // Startup delay
+  bool startupComplete = isStartupDelayComplete();
+  response += "\"startupDelayComplete\":" + String(startupComplete ? "true" : "false") + ",";
+  if (!startupComplete) {
+    unsigned long remaining = STARTUP_DELAY_MS - (millis() - startupTime);
+    response += "\"startupDelayRemainingMs\":" + String(remaining) + ",";
+  } else {
+    response += "\"startupDelayRemainingMs\":0,";
+  }
+  
+  // Fermentation data
+  response += "\"fermentationFactor\":" + String(fermentState.fermentationFactor, 3) + ",";
+  response += "\"initialFermentTemp\":" + String(fermentState.initialFermentTemp, 1) + ",";
+  
+  // Stage start times array
+  response += "\"actualStageStartTimes\":[";
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) response += ",";
+    response += String(programState.actualStageStartTimes[i]);
+  }
+  response += "],";
+  
+  // Simplified health data
+  response += "\"uptime_sec\":" + String(millis() / 1000) + ",";
+  response += "\"firmware_version\":\"ESP32-WebServer\",";
+  response += "\"build_date\":\"" + String(FIRMWARE_BUILD_DATE) + "\",";
+  response += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
+  response += "\"connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
+  response += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
+  
+  response += "}"; // Close main object
+  
+  return response;
+}
+
+// Helper function to serve static files from FFat
+bool serveStaticFile(WebServer& server, const String& path) {
+  String fullPath = path;
+  if (fullPath.endsWith("/")) {
+    fullPath += "index.html";
+  }
+  
+  if (!FFat.exists(fullPath)) {
+    return false;
+  }
+  
+  String contentType = "text/plain";
+  if (fullPath.endsWith(".html")) contentType = "text/html";
+  else if (fullPath.endsWith(".css")) contentType = "text/css";
+  else if (fullPath.endsWith(".js")) contentType = "application/javascript";
+  else if (fullPath.endsWith(".json")) contentType = "application/json";
+  else if (fullPath.endsWith(".png")) contentType = "image/png";
+  else if (fullPath.endsWith(".jpg") || fullPath.endsWith(".jpeg")) contentType = "image/jpeg";
+  else if (fullPath.endsWith(".gif")) contentType = "image/gif";
+  else if (fullPath.endsWith(".svg")) contentType = "image/svg+xml";
+  else if (fullPath.endsWith(".ico")) contentType = "image/x-icon";
+  
+  File file = FFat.open(fullPath, "r");
+  if (!file) {
+    return false;
+  }
+  
+  server.streamFile(file, contentType);
+  file.close();
+  return true;
+}
+
+// Core endpoints
+void coreEndpoints(WebServer& server) {
+    server.on("/", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] Root / requested"));
+        if (!serveStaticFile(server, "/index.html")) {
+            server.send(404, "text/plain", "index.html not found");
+        }
+    });
+    
+    // Add a simple test endpoint
+    server.on("/test", HTTP_GET, [&](){
+        Serial.println(F("[DEBUG] /test endpoint hit!"));
+        server.send(200, "text/plain", "ESP32 Web Server is working!");
+    });
+    
+    server.on("/status", HTTP_GET, [&](){
+        Serial.println(F("[DEBUG] /status requested"));
+        server.send(200, "application/json", getStatusJsonString());
+    });
+    
+    server.on("/api/status", HTTP_GET, [&](){
+        Serial.println(F("[DEBUG] /api/status requested"));
+        server.send(200, "application/json", getStatusJsonString());
+    });
+    
+    server.on("/api/firmware_info", HTTP_GET, [&](){
+        String response = "{";
+        response += "\"build\":\"" + String(FIRMWARE_BUILD_DATE) + "\",";
+        response += "\"version\":\"ESP32-WebServer\"";
+        response += "}";
+        server.send(200, "application/json", response);
+    });
+    
+    server.on("/api/restart", HTTP_POST, [&](){
+        server.send(200, "application/json", "{\"status\":\"restarting\"}");
+        delay(1000);
+        ESP.restart();
+    });
+    
+    server.on("/api/output_mode", HTTP_GET, [&](){
+        String response = "{\"mode\":\"" + String(outputMode) + "\"}";
+        server.send(200, "application/json", response);
+    });
+    
+    server.on("/api/output_mode", HTTP_POST, [&](){
+        if (server.hasArg("plain")) {
+            DynamicJsonDocument doc(256);
+            DeserializationError err = deserializeJson(doc, server.arg("plain"));
+            if (!err && doc.containsKey("mode")) {
+                String mode = doc["mode"];
+                if (mode == "relay" || mode == "pwm") {
+                    outputMode = OUTPUT_DIGITAL; // Fix: use proper enum value
+                    saveSettings();
+                    server.send(200, "application/json", "{\"status\":\"ok\"}");
+                    return;
+                }
+            }
+        }
+        sendJsonError(server, "invalid_request", "Invalid mode parameter", 400);
+    });
+}
+
+// State Machine Endpoints
+void stateMachineEndpoints(WebServer& server) {
+    server.on("/start", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /start called"));
+        
+        if (server.hasArg("time")) {
+            String t = server.arg("time");
+            struct tm nowTm;
+            time_t now = time(nullptr);
+            localtime_r(&now, &nowTm);
+            int hh, mm;
+            if (sscanf(t.c_str(), "%d:%d", &hh, &mm) != 2 || hh < 0 || hh > 23 || mm < 0 || mm > 59) {
+                server.send(400, "application/json", "{\"error\":\"Invalid time format. Use HH:MM\"}");
+                return;
+            }
+            
+            struct tm startTm = nowTm;
+            startTm.tm_hour = hh;
+            startTm.tm_min = mm;
+            startTm.tm_sec = 0;
+            time_t startEpoch = mktime(&startTm);
+            if (startEpoch <= now) startEpoch += 24*60*60;
+            
+            scheduledStart = startEpoch;
+            
+            if (server.hasArg("stage")) {
+                int stageIdx = server.arg("stage").toInt();
+                if (stageIdx < 0) {
+                    server.send(400, "application/json", "{\"error\":\"Invalid stage index\"}");
+                    return;
+                }
+                scheduledStartStage = stageIdx;
+                server.send(200, "application/json", "{\"status\":\"Scheduled to start at stage " + String(stageIdx + 1) + " at " + t + "\"}");
+            } else {
+                scheduledStartStage = -1;
+                server.send(200, "application/json", "{\"status\":\"Scheduled to start at " + t + "\"}");
+            }
+            return;
+        }
+        
+        // Immediate start
+        updateActiveProgramVars();
+        
+        if (server.hasArg("stage")) {
+            int stageIdx = server.arg("stage").toInt();
+            if (stageIdx < 0 || stageIdx >= programState.maxCustomStages) {
+                server.send(400, "application/json", "{\"error\":\"Invalid stage index\"}");
+                return;
+            }
+            programState.customStageIdx = stageIdx;
+        } else {
+            programState.customStageIdx = 0;
+        }
+        
+        programState.isRunning = true;
+        programState.customMixIdx = 0;
+        programState.customStageStart = millis();
+        programState.customMixStepStart = 0;
+        programState.programStartTime = time(nullptr);
+        
+        for (int i = 0; i < 20; i++) programState.actualStageStartTimes[i] = 0;
+        programState.actualStageStartTimes[programState.customStageIdx] = programState.programStartTime;
+        
+        resetFermentationTracking(getAveragedTemperature());
+        invalidateStatusCache();
+        saveResumeState();
+        
+        server.send(200, "application/json", "{\"status\":\"started\"}");
+        if (debugSerial) Serial.println(F("[START] Breadmaker started"));
+    });
+    
+    server.on("/stop", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /stop called"));
+        stopBreadmaker();
+        server.send(200, "application/json", "{\"status\":\"stopped\"}");
+    });
+}
+
+// Manual Output Endpoints
+void manualOutputEndpoints(WebServer& server) {
+    server.on("/toggle_heater", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[MANUAL] Toggle heater"));
+        setHeater(!heaterState);
+        server.send(200, "application/json", "{\"heater\":" + String(heaterState ? "true" : "false") + "}");
+    });
+    
+    server.on("/toggle_motor", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[MANUAL] Toggle motor"));
+        setMotor(!motorState);
+        server.send(200, "application/json", "{\"motor\":" + String(motorState ? "true" : "false") + "}");
+    });
+    
+    server.on("/toggle_light", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[MANUAL] Toggle light"));
+        setLight(!lightState);
+        server.send(200, "application/json", "{\"light\":" + String(lightState ? "true" : "false") + "}");
+    });
+    
+    server.on("/toggle_buzzer", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[MANUAL] Toggle buzzer"));
+        setBuzzer(!buzzerState);
+        server.send(200, "application/json", "{\"buzzer\":" + String(buzzerState ? "true" : "false") + "}");
+    });
+    
+    server.on("/beep", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[MANUAL] Beep"));
+        shortBeep();
+        server.send(200, "application/json", "{\"status\":\"beeped\"}");
+    });
+}
+
+// PID Control Endpoints
+void pidControlEndpoints(WebServer& server) {
+    server.on("/api/pid", HTTP_GET, [&](){
+        String response = "{";
+        response += "\"kp\":" + String(pid.Kp, 6) + ",";
+        response += "\"ki\":" + String(pid.Ki, 6) + ",";
+        response += "\"kd\":" + String(pid.Kd, 6) + ",";
+        response += "\"setpoint\":" + String(pid.Setpoint, 1) + ",";
+        response += "\"input\":" + String(pid.Input, 1) + ",";
+        response += "\"output\":" + String(pid.Output, 3) + "";
+        response += "}";
+        server.send(200, "application/json", response);
+    });
+    
+    server.on("/api/pid", HTTP_POST, [&](){
+        if (server.hasArg("plain")) {
+            DynamicJsonDocument doc(512);
+            DeserializationError err = deserializeJson(doc, server.arg("plain"));
+            if (!err) {
+                if (doc.containsKey("kp")) pid.Kp = doc["kp"];
+                if (doc.containsKey("ki")) pid.Ki = doc["ki"];
+                if (doc.containsKey("kd")) pid.Kd = doc["kd"];
+                if (doc.containsKey("setpoint")) pid.Setpoint = doc["setpoint"];
+                
+                if (pid.controller) {
+                    pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
+                }
+                
+                server.send(200, "application/json", "{\"status\":\"ok\"}");
+                return;
+            }
+        }
+        sendJsonError(server, "invalid_request", "Invalid PID parameters", 400);
+    });
+}
+
+// Placeholder implementations for remaining endpoints
+void pidProfileEndpoints(WebServer& server) {
+    server.on("/api/pid_profiles", HTTP_GET, [&](){
+        server.send(200, "application/json", "{\"profiles\":[]}");
+    });
+}
+
+void homeAssistantEndpoint(WebServer& server) {
+    server.on("/api/home_assistant", HTTP_GET, [&](){
+        server.send(200, "application/json", getStatusJsonString());
+    });
+}
+
+void calibrationEndpoints(WebServer& server) {
+    server.on("/api/calibration", HTTP_GET, [&](){
+        String response = "{";
+        response += "\"points\":[],";
+        response += "\"currentTemp\":" + String(getAveragedTemperature(), 2) + ",";
+        response += "\"currentRaw\":" + String(analogRead(34)) + ",";  // Using GPIO34 for thermistor
+        response += "\"validPoints\":0";
+        response += "}";
+        server.send(200, "application/json", response);
+    });
+    
+    server.on("/api/calibration", HTTP_POST, [&](){
+        if (server.hasArg("temp") && server.hasArg("action")) {
+            String action = server.arg("action");
+            float temp = server.arg("temp").toFloat();
+            
+            if (action == "add") {
+                if (temp >= 0 && temp <= 100) {
+                    int rawValue = analogRead(34);  // Using GPIO34 for thermistor
+                    server.send(200, "application/json", "{\"status\":\"calibration point added\",\"temp\":" + String(temp, 2) + ",\"raw\":" + String(rawValue) + "}");
+                } else {
+                    server.send(400, "application/json", "{\"error\":\"Temperature out of range (0-100°C)\"}");
+                }
+            } else if (action == "remove") {
+                server.send(200, "application/json", "{\"status\":\"calibration point removed\"}");
+            } else if (action == "clear") {
+                server.send(200, "application/json", "{\"status\":\"calibration data cleared\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid action\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing required parameters\"}");
+        }
+    });
+}
+
+void fileEndPoints(WebServer& server) {
+    server.on("/api/files", HTTP_GET, [&](){
+        String response = "{\"files\":[";
+        
+        File root = FFat.open("/");
+        if (root && root.isDirectory()) {
+            File file = root.openNextFile();
+            bool first = true;
+            while (file) {
+                if (!first) response += ",";
+                first = false;
+                
+                response += "{";
+                response += "\"name\":\"" + String(file.name()) + "\",";
+                response += "\"size\":" + String(file.size()) + ",";
+                response += "\"isDirectory\":" + String(file.isDirectory() ? "true" : "false");
+                response += "}";
+                
+                file = root.openNextFile();
+            }
+        }
+        
+        response += "],";
+        response += "\"totalBytes\":" + String(FFat.totalBytes()) + ",";
+        response += "\"usedBytes\":" + String(FFat.usedBytes());
+        response += "}";
+        server.send(200, "application/json", response);
+    });
+    
+    server.on("/api/files/upload", HTTP_POST, [&](){
+        server.send(200, "application/json", "{\"status\":\"upload endpoint available\"}");
+    }, [&](){
+        HTTPUpload& upload = server.upload();
+        static File uploadFile;
+        
+        if (upload.status == UPLOAD_FILE_START) {
+            String filename = "/" + upload.filename;
+            uploadFile = FFat.open(filename, "w");
+            if (!uploadFile) {
+                return;
+            }
+        } else if (upload.status == UPLOAD_FILE_WRITE) {
+            if (uploadFile) {
+                uploadFile.write(upload.buf, upload.currentSize);
+            }
+        } else if (upload.status == UPLOAD_FILE_END) {
+            if (uploadFile) {
+                uploadFile.close();
+            }
+        }
+    });
+    
+    server.on("/api/files/delete", HTTP_POST, [&](){
+        if (server.hasArg("filename")) {
+            String filename = "/" + server.arg("filename");
+            if (FFat.remove(filename)) {
+                server.send(200, "application/json", "{\"status\":\"file deleted\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Failed to delete file\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing filename parameter\"}");
+        }
+    });
+}
+
+void systemEndpoints(WebServer& server) {
+    server.on("/sensor", HTTP_GET, [&](){
+        String response = "{";
+        response += "\"temperature\":" + String(getAveragedTemperature(), 2) + ",";
+        response += "\"temperatureRaw\":" + String(temperatureSensorValue, 2) + ",";
+        response += "\"sensors\":[";
+        for (int i = 0; i < 3; i++) {
+            if (i > 0) response += ",";
+            response += String(sensorReadings[i], 2);
+        }
+        response += "],";
+        response += "\"analog\":" + String(analogRead(THERMISTOR_PIN)) + ",";
+        response += "\"voltage\":" + String(analogRead(THERMISTOR_PIN) * 3.3 / 4095.0, 3);
+        response += "}";
+        server.send(200, "application/json", response);
+    });
+    
+    server.on("/api/firmware_info", HTTP_GET, [&](){
+        String response = "{";
+        response += "\"version\":\"" + String(VERSION) + "\",";
+        response += "\"buildDate\":\"" + String(__DATE__) + " " + String(__TIME__) + "\",";
+        response += "\"chipModel\":\"" + String(ESP.getChipModel()) + "\",";
+        response += "\"chipRevision\":" + String(ESP.getChipRevision()) + ",";
+        response += "\"cpuFreq\":" + String(ESP.getCpuFreqMHz()) + ",";
+        response += "\"flashSize\":" + String(ESP.getFlashChipSize()) + ",";
+        response += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
+        response += "\"uptime\":" + String(millis() / 1000) + ",";
+        response += "\"wifiConnected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false");
+        response += "}";
+        server.send(200, "application/json", response);
+    });
+    
+    server.on("/api/restart", HTTP_GET, [&](){
+        server.send(200, "application/json", "{\"status\":\"restarting\"}");
+        delay(1000);
+        ESP.restart();
+    });
+    
+    server.on("/api/settings", HTTP_GET, [&](){
+        String response = "{";
+        response += "\"wifiSSID\":\"" + String(WiFi.SSID()) + "\",";
+        response += "\"debugSerial\":" + String(debugSerial ? "true" : "false") + ",";
+        response += "\"temperatureUnit\":\"C\",";
+        response += "\"pidEnabled\":" + String(pidEnabled ? "true" : "false");
+        response += "}";
+        server.send(200, "application/json", response);
+    });
+}
+
+void programsEndpoints(WebServer& server) {
+    server.on("/api/programs", HTTP_GET, [&](){
+        String response = "[";
+        for (size_t i = 0; i < getProgramCount(); i++) {
+            if (i > 0) response += ",";
+            if (ensureProgramLoaded(i)) {
+                Program* p = getActiveProgramMutable();
+                if (p) {
+                    response += "{";
+                    response += "\"id\":" + String(i) + ",";
+                    response += "\"name\":\"" + p->name + "\",";
+                    response += "\"stages\":" + String(p->customStages.size()) + ",";
+                    response += "\"description\":\"" + String(p->name) + " program\"";
+                    response += "}";
+                } else {
+                    response += "{\"id\":" + String(i) + ",\"name\":\"Invalid\",\"stages\":0,\"description\":\"Error loading program\"}";
+                }
+            } else {
+                response += "{\"id\":" + String(i) + ",\"name\":\"Unknown\",\"stages\":0,\"description\":\"Failed to load\"}";
+            }
+        }
+        response += "]";
+        server.send(200, "application/json", response);
+    });
+    
+    server.on("/api/program", HTTP_GET, [&](){
+        if (server.hasArg("id")) {
+            int id = server.arg("id").toInt();
+            if (id >= 0 && id < getProgramCount() && isProgramValid(id)) {
+                if (ensureProgramLoaded(id)) {
+                    Program* p = getActiveProgramMutable();
+                    if (p) {
+                        String response = "{";
+                        response += "\"id\":" + String(id) + ",";
+                        response += "\"name\":\"" + p->name + "\",";
+                        response += "\"description\":\"" + String(p->name) + " program\",";
+                        response += "\"stages\":[";
+                        for (size_t i = 0; i < p->customStages.size(); i++) {
+                            if (i > 0) response += ",";
+                            CustomStage& stage = p->customStages[i];
+                            response += "{";
+                            response += "\"label\":\"" + stage.label + "\",";
+                            response += "\"temp\":" + String(stage.temp) + ",";
+                            response += "\"min\":" + String(stage.min) + ",";
+                            response += "\"isFermentation\":" + String(stage.isFermentation ? "true" : "false");
+                            response += "}";
+                        }
+                        response += "],";
+                        response += "\"valid\":" + String(isProgramValid(id) ? "true" : "false");
+                        response += "}";
+                        server.send(200, "application/json", response);
+                        return;
+                    }
+                }
+            }
+        }
+        server.send(400, "application/json", "{\"error\":\"Invalid program ID\"}");
+    });
+    
+    server.on("/select", HTTP_GET, [&](){
+        if (server.hasArg("program")) {
+            int id = server.arg("program").toInt();
+            if (id >= 0 && id < getProgramCount() && isProgramValid(id)) {
+                programState.activeProgramId = id;
+                updateActiveProgramVars();
+                invalidateStatusCache();
+                saveResumeState();
+                server.send(200, "application/json", "{\"status\":\"program selected\",\"id\":" + String(id) + "}");
+                return;
+            }
+        }
+        server.send(400, "application/json", "{\"error\":\"Invalid program parameter\"}");
+    });
+}
+
+void otaEndpoints(WebServer& server) {
+    server.on("/api/ota", HTTP_GET, [&](){
+        server.send(200, "application/json", "{\"status\":\"ota_available\"}");
+    });
+}
+
+// Main registration function
+void registerWebEndpoints(WebServer& server) {
+    coreEndpoints(server);
+    stateMachineEndpoints(server);
+    manualOutputEndpoints(server);
+    pidControlEndpoints(server);
+    pidProfileEndpoints(server);
+    homeAssistantEndpoint(server);
+    calibrationEndpoints(server);
+    fileEndPoints(server);
+    systemEndpoints(server);
+    programsEndpoints(server);
+    otaEndpoints(server);
+    
+    // Handle static files (catch-all)
+    server.onNotFound([&](){
+        String path = server.uri();
+        if (serveStaticFile(server, path)) {
+            return;
+        }
+        server.send(404, "text/plain", "File Not Found: " + path);
+    });
+}

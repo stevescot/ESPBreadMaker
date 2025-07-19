@@ -1,0 +1,55 @@
+{
+  "id": 5,
+  "name": "Bread - Enriched Sweet",
+  "customStages": [
+    {
+      "label": "Mix",
+      "min": 15,
+      "temp": 25,
+      "mixPattern": [
+        {
+          "mixSec": 360,
+          "waitSec": 240
+        }
+      ],
+      "instructions": "Add 500g bread flour, 200g milk, 100g water, 2 eggs, 10g instant yeast, 10g salt, 60g sugar, 60g butter at the beginning of this stage."
+    },
+    {
+      "label": "Bulk Ferment",
+      "min": 90,
+      "temp": 28,
+      "noMix": true
+    },
+    {
+      "label": "Knockdown",
+      "min": 2,
+      "temp": 25,
+      "mixPattern": [
+        {
+          "mixSec": 60,
+          "waitSec": 60
+        }
+      ],
+      "instructions": "Degas dough gently, then rest."
+    },
+    {
+      "label": "Proof",
+      "min": 60,
+      "temp": 28,
+      "noMix": true
+    },
+    {
+      "label": "Bake",
+      "min": 35,
+      "temp": 175,
+      "noMix": true
+    },
+    {
+      "label": "Cool",
+      "min": 10,
+      "temp": 25,
+      "noMix": true,
+      "instructions": "Remove bread when cool."
+    }
+  ]
+}

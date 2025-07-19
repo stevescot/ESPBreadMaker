@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OTA Update - Breadmaker Controller</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f0f0f0; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; text-align: center; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .section h3 { margin-top: 0; color: #555; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; text-align: center; }
+        .status.enabled { background-color: #d4edda; color: #155724; }
+        .status.disabled { background-color: #f8d7da; color: #721c24; }
+        .status.progress { background-color: #fff3cd; color: #856404; }
+        .form-group { margin: 10px 0; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+        .form-group input, .form-group select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+        .button { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; margin: 5px; }
+        .button:hover { background-color: #0056b3; }
+        .button.danger { background-color: #dc3545; }
+        .button.danger:hover { background-color: #c82333; }
+        .info-box { background-color: #e9ecef; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        .progress-bar { width: 100%; height: 20px; background-color: #e9ecef; border-radius: 10px; overflow: hidden; margin: 10px 0; }
+        .progress-fill { height: 100%; background-color: #28a745; transition: width 0.3s ease; }
+        .back-link { text-align: center; margin-top: 20px; }
+        .back-link a { color: #007bff; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>OTA Update Management</h1>
+        
+        <div class="section">
+            <h3>OTA Status</h3>
+            <div id="otaStatus" class="status">Loading...</div>
+            <div id="progressContainer" style="display: none;">
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill" style="width: 0%"></div>
+                </div>
+                <div id="progressText">0%</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>OTA Settings</h3>
+            <div class="form-group">
+                <label for="otaEnabled">Enable OTA Updates:</label>
+                <select id="otaEnabled">
+                    <option value="true">Enabled</option>
+                    <option value="false">Disabled</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="otaHostname">OTA Hostname:</label>
+                <input type="text" id="otaHostname" placeholder="breadmaker-controller">
+            </div>
+            <div class="form-group">
+                <label for="otaPassword">OTA Password:</label>
+                <input type="password" id="otaPassword" placeholder="Enter new password (min 8 chars)">
+            </div>
+            <button class="button" onclick="updateOTASettings()">Update Settings</button>
+        </div>
+        
+        <div class="section">
+            <h3>Upload Instructions</h3>
+            <div class="info-box">
+                <p><strong>Arduino IDE:</strong></p>
+                <ol>
+                    <li>Make sure your ESP32 is connected to the same WiFi network</li>
+                    <li>In Arduino IDE, go to Tools → Port and select your device's network port</li>
+                    <li>Upload your sketch normally - it will upload over WiFi</li>
+                </ol>
+                
+                <p><strong>PlatformIO:</strong></p>
+                <ol>
+                    <li>Add this to your platformio.ini:</li>
+                    <code>upload_protocol = espota<br>upload_port = <span id="otaIP">IP_ADDRESS</span></code>
+                    <li>Use "Upload" command to upload over WiFi</li>
+                </ol>
+                
+                <p><strong>Connection Details:</strong></p>
+                <ul>
+                    <li>Hostname: <span id="displayHostname">loading...</span></li>
+                    <li>IP Address: <span id="displayIP">loading...</span></li>
+                    <li>Port: 3232</li>
+                    <li>Password: Required (set above)</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="back-link">
+            <a href="/">&larr; Back to Main Page</a>
+        </div>
+    </div>
+
+    <script>
+        let otaData = {};
+        
+        function updateOTAStatus() {
+            fetch('/api/ota/status')
+                .then(response => response.json())
+                .then(data => {
+                    otaData = data;
+                    const statusDiv = document.getElementById('otaStatus');
+                    const progressContainer = document.getElementById('progressContainer');
+                    
+                    if (data.inProgress) {
+                        statusDiv.className = 'status progress';
+                        statusDiv.textContent = `OTA Update in Progress: ${data.progress}%`;
+                        progressContainer.style.display = 'block';
+                        document.getElementById('progressFill').style.width = `${data.progress}%`;
+                        document.getElementById('progressText').textContent = `${data.progress}%`;
+                    } else if (data.enabled) {
+                        statusDiv.className = 'status enabled';
+                        statusDiv.textContent = 'OTA Updates Enabled';
+                        progressContainer.style.display = 'none';
+                    } else {
+                        statusDiv.className = 'status disabled';
+                        statusDiv.textContent = 'OTA Updates Disabled';
+                        progressContainer.style.display = 'none';
+                    }
+                    
+                    if (data.error) {
+                        statusDiv.textContent += ` (Error: ${data.error})`;
+                    }
+                    
+                    // Update form fields
+                    document.getElementById('otaEnabled').value = data.enabled.toString();
+                    document.getElementById('otaHostname').value = data.hostname;
+                })
+                .catch(error => {
+                    console.error('Error fetching OTA status:', error);
+                    document.getElementById('otaStatus').textContent = 'Error loading OTA status';
+                });
+        }
+        
+        function updateOTAInfo() {
+            fetch('/api/ota/info')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('displayHostname').textContent = data.hostname;
+                    document.getElementById('displayIP').textContent = data.ip;
+                    document.getElementById('otaIP').textContent = data.ip;
+                })
+                .catch(error => {
+                    console.error('Error fetching OTA info:', error);
+                });
+        }
+        
+        function updateOTASettings() {
+            const enabled = document.getElementById('otaEnabled').value === 'true';
+            const hostname = document.getElementById('otaHostname').value;
+            const password = document.getElementById('otaPassword').value;
+            
+            // Update enabled status
+            fetch('/api/ota/enable', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: enabled })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('OTA enabled status updated:', data);
+                
+                // Update hostname if changed
+                if (hostname !== otaData.hostname) {
+                    return fetch('/api/ota/hostname', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ hostname: hostname })
+                    });
+                }
+                return Promise.resolve();
+            })
+            .then(() => {
+                // Update password if provided
+                if (password.length >= 8) {
+                    return fetch('/api/ota/password', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: password })
+                    });
+                }
+                return Promise.resolve();
+            })
+            .then(() => {
+                alert('OTA settings updated successfully!');
+                document.getElementById('otaPassword').value = '';
+                updateOTAStatus();
+                updateOTAInfo();
+            })
+            .catch(error => {
+                console.error('Error updating OTA settings:', error);
+                alert('Error updating OTA settings');
+            });
+        }
+        
+        // Update status every 2 seconds
+        setInterval(updateOTAStatus, 2000);
+        
+        // Initial load
+        updateOTAStatus();
+        updateOTAInfo();
+    </script>
+</body>
+</html>

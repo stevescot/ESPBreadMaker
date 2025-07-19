@@ -26,6 +26,17 @@ struct CustomStage {
     String buzzer; // legacy, can be ignored
 };
 
+// --- Lightweight program metadata for selection lists ---
+struct ProgramMetadata {
+    int id = -1;
+    String name;
+    String notes;
+    String icon;
+    float fermentBaselineTemp = 20.0f;
+    float fermentQ10 = 2.0f;
+    size_t stageCount = 0; // Number of stages without loading them
+};
+
 // --- Program struct ---
 struct Program {
     int id = -1; // Unique program ID
@@ -37,15 +48,29 @@ struct Program {
     std::vector<CustomStage> customStages;
 };
 
-
-
-// --- Programs map ---
-extern std::vector<Program> programs;
-// --- Ordered program names (matches load order from JSON) ---
-// programNamesOrdered is no longer needed; use programs[programId].name for lookups
+// --- Programs storage ---
+extern std::vector<ProgramMetadata> programMetadata; // Lightweight metadata for all programs
+extern Program activeProgram; // Only the currently active program is fully loaded
 
 // --- Program management functions ---
-void loadPrograms();
-void savePrograms();
+void loadProgramMetadata(); // Load only names and basic info
+bool loadSpecificProgram(int programId); // Load full program data for specific program
+
+// --- Helper functions ---
+bool isProgramLoaded(int programId); // Check if a program is currently loaded
+void unloadActiveProgram(); // Free memory by unloading active program
+size_t getAvailableMemory(); // Check available heap memory
+
+// --- API functions ---
+const std::vector<ProgramMetadata>& getProgramMetadata(); // Get metadata for all programs
+const Program* getActiveProgram(); // Get currently loaded program (null if none)
+bool ensureProgramLoaded(int programId); // Ensure a program is loaded, load if necessary
+
+// --- Helper functions for legacy migration ---
+size_t getProgramCount(); // Get program count (replaces programs.size())
+String getProgramName(int programId); // Get program name by ID 
+bool isProgramValid(int programId); // Check if program exists and is valid
+Program* getActiveProgramMutable(); // Get active program reference for modification
+int findProgramIdByName(const String& name); // Find program ID by name
 
 #endif // PROGRAMS_MANAGER_H

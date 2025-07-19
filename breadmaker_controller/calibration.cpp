@@ -1,4 +1,5 @@
 #include "calibration.h"
+#include "globals.h"  // For PIN_RTD definition
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 
@@ -47,6 +48,15 @@ float tempFromRaw(int raw) {
 }
 
 float readTemperature() {
-  int raw = analogRead(A0);  // RTD on analog pin A0
-  return tempFromRaw(raw);
+  int raw = analogRead(PIN_RTD);  // RTD on ESP32 analog pin
+  float temp = tempFromRaw(raw);
+  
+  // Temperature sensor fault detection
+  if (temp > 200.0f || temp < -40.0f) {
+    Serial.println("WARNING: Temperature sensor fault detected - extreme reading: " + String(temp) + "°C");
+    Serial.println("Raw ADC value: " + String(raw));
+    return 25.0f;  // Return safe room temperature default
+  }
+  
+  return temp;
 }

@@ -1,8 +1,8 @@
 #pragma once
 #include <Arduino.h>
 
-// Output mode setting
-enum OutputMode { OUTPUT_DIGITAL, OUTPUT_ANALOG };
+// Output mode setting (digital only now)
+enum OutputMode { OUTPUT_DIGITAL };
 extern OutputMode outputMode;
 
 extern bool heaterState;

@@ -1,38 +1,46 @@
 #include "outputs_manager.h"
 #include <Arduino.h>
+#include "globals.h"
 
 // Output pins (define here for linker visibility)
-const int PIN_HEATER = D1;     // Heater (PWM ~1V ON, 0V OFF)
-const int PIN_MOTOR  = D2;     // Mixer motor (PWM ~1V ON, 0V OFF)
-const int PIN_LIGHT  = D5;     // Light (PWM ~1V ON, 0V OFF)
-const int PIN_BUZZER = D6;     // Buzzer (PWM ~1V ON, 0V OFF)
+// ESP32 TTGO T-Display Pin Assignments
+// Display pins (used by TFT_eSPI): 19(MOSI), 18(SCK), 5(CS), 16(DC), 23(RST), 4(BL)
+// Buttons: 0, 35 (check your board silkscreen)
+// Available GPIO pins for breadmaker outputs (digital only):
+const int PIN_HEATER = 32;     // Heater (digital ON/OFF)
+const int PIN_MOTOR  = 33;     // Mixer motor (digital ON/OFF)  
+const int PIN_LIGHT  = 25;     // Light (digital ON/OFF)
+const int PIN_BUZZER = 26;     // Buzzer (digital ON/OFF)
 
 // Output pins (should be defined in main or here if needed)
 extern bool debugSerial;
 
-OutputMode outputMode = OUTPUT_ANALOG;
-bool heaterState = true;
-bool motorState = true;
-bool lightState = true;
-bool buzzerState = true;
+OutputMode outputMode = OUTPUT_DIGITAL;  // Default to digital-only mode
+bool heaterState = false;
+bool motorState = false;
+bool lightState = false;
+bool buzzerState = false;
 
 void setHeater(bool on) {
   if (heaterState == on) return;
   heaterState = on;
+  outputStates.heater = on;  // Keep struct in sync
   if (debugSerial) Serial.printf("[setHeater] Setting heater to %s\n", on ? "ON" : "OFF");
-  if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_HEATER, on ? HIGH : LOW);
-  else analogWrite(PIN_HEATER, on ? 77 : 0);
+  digitalWrite(PIN_HEATER, on ? HIGH : LOW);
 }
+
 void setMotor(bool on) {
   if (motorState == on) return;
   motorState = on;
+  outputStates.motor = on;  // Keep struct in sync
   if (debugSerial) Serial.printf("[setMotor] Setting motor to %s\n", on ? "ON" : "OFF");
-  if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_MOTOR, on ? HIGH : LOW);
-  else analogWrite(PIN_MOTOR, on ? 77 : 0);
+  digitalWrite(PIN_MOTOR, on ? HIGH : LOW);
 }
+
 void setLight(bool on) {
   if (lightState == on) return;
   lightState = on;
+  outputStates.light = on;  // Keep struct in sync
   if (debugSerial) Serial.printf("[setLight] Setting light to %s\n", on ? "ON" : "OFF");
   digitalWrite(PIN_LIGHT, on ? HIGH : LOW);
   if (on) {
@@ -40,26 +48,30 @@ void setLight(bool on) {
     lightOnTime = millis();
   }
 }
+
 void setBuzzer(bool on) {
   if (buzzerState == on) return;
   buzzerState = on;
+  outputStates.buzzer = on;  // Keep struct in sync
   if (debugSerial) Serial.printf("[setBuzzer] Setting buzzer to %s\n", on ? "ON" : "OFF");
-  if (outputMode == OUTPUT_DIGITAL) digitalWrite(PIN_BUZZER, on ? HIGH : LOW);
-  else analogWrite(PIN_BUZZER, on ? 77 : 0);
+  digitalWrite(PIN_BUZZER, on ? HIGH : LOW);
   extern bool buzzActive;
   extern unsigned long buzzStart;
   buzzActive = on; if (on) buzzStart = millis();
 }
 void outputsManagerInit() {
-  // Set pin modes for all outputs
+  // Set pin modes for all outputs (digital only)
   pinMode(PIN_HEATER, OUTPUT);
   pinMode(PIN_MOTOR, OUTPUT);
   pinMode(PIN_LIGHT, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
+  
+  // Initialize all outputs to off state
   setHeater(false);
   setMotor(false);
   setLight(false);
   setBuzzer(false);
+  // outputStates is now synced by the setter functions
 }
 
 // Buzzer tone generation variables
@@ -97,23 +109,14 @@ void updateBuzzerTone() {
     return;
   }
   
-  // Generate sine wave tone (simplified)
-  // For ESP8266, we'll use a simple on/off pattern based on frequency
+  // Generate square wave tone with digital output
   float period = 1000.0 / buzzerFrequency; // Period in milliseconds
   unsigned long cycleTime = elapsed % (unsigned long)period;
   float duty = 0.5 + (buzzerAmplitude * 0.5); // Convert amplitude to duty cycle
   
   if (cycleTime < (period * duty)) {
-    if (outputMode == OUTPUT_DIGITAL) {
-      digitalWrite(PIN_BUZZER, HIGH);
-    } else {
-      analogWrite(PIN_BUZZER, (int)(77 * buzzerAmplitude));
-    }
+    digitalWrite(PIN_BUZZER, HIGH);
   } else {
-    if (outputMode == OUTPUT_DIGITAL) {
-      digitalWrite(PIN_BUZZER, LOW);
-    } else {
-      analogWrite(PIN_BUZZER, 0);
-    }
+    digitalWrite(PIN_BUZZER, LOW);
   }
 }

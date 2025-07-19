@@ -1,53 +1,64 @@
-# Build Scripts for ESP8266 Breadmaker Controller
+# Build Scripts for ESP32 Breadmaker Controller
 
-This directory contains scripts to build and upload the breadmaker controller firmware and web interface to your ESP8266.
+This directory contains scripts to build and upload the breadmaker controller firmware and web interface to your ESP32 TTGO T-Display.
+
+## ⚠️ CRITICAL VERSION REQUIREMENTS
+
+**ESP32 Arduino Core 2.0.17 ONLY** - Do not use newer versions (3.x) as they have breaking changes and will cause crashes!
 
 ## Files
 
-- `build_and_upload.ps1` - Main PowerShell script that compiles firmware and uploads both ROM and LittleFS
-- `build_and_upload.bat` - Batch file version for Windows
-- `upload_files.ps1` - Quick script to only upload web files (LittleFS) without recompiling firmware
+- `setup_esp32_core.ps1` - **Run this first!** Sets up ESP32 Arduino Core 2.0.17 and removes incompatible versions
+- `build_esp32.ps1` - Main build script that compiles and uploads firmware (includes version check)
+- `upload_files_esp32.ps1` - Quick script to only upload web files (FFat) without recompiling firmware
+- `reset_and_monitor.ps1` - Utility to reset ESP32 and monitor serial output
 
 ## Requirements
 
 1. **Arduino CLI** - Install from https://arduino.cc/en/software
-2. **ESP8266 Arduino Core** - Install via Arduino IDE Board Manager
-3. **esptool** - Install with: `pip install esptool`
-4. **Python** - Required for esptool
+2. **ESP32 Arduino Core 2.0.17** - Installed automatically by `setup_esp32_core.ps1`
+3. **Python** - For monitoring and utilities
 
 ## Usage
 
-### Full Build and Upload (PowerShell - Recommended)
+### First Time Setup
 ```powershell
-.\build_and_upload.ps1
+# 1. Setup ESP32 core (run once)
+.\setup_esp32_core.ps1
+
+# 2. Build and upload firmware
+.\build_esp32.ps1 COM3
+```
+
+### Full Build and Upload
+```powershell
+.\build_esp32.ps1 COM3
 ```
 
 This will:
-1. Compile the firmware
-2. Create a LittleFS image from the `data` directory
-3. Upload the firmware to ESP8266 on COM4
-4. Upload the LittleFS image (web files) to ESP8266
-
-### Full Build and Upload (Batch)
-```cmd
-build_and_upload.bat
-```
+1. Check ESP32 Arduino Core version (must be 2.0.17)
+2. Compile the firmware 
+3. Upload the firmware to ESP32 TTGO T-Display
+4. Display memory usage and OTA information
 
 ### Upload Only Web Files
 If you only changed web files and don't need to recompile firmware:
 ```powershell
-.\upload_files.ps1
+.\upload_files_esp32.ps1 COM3
 ```
 
-### Custom COM Port
+### Monitor Serial Output
 ```powershell
-.\build_and_upload.ps1 -Port "COM3"
+.\reset_and_monitor.ps1 COM3
 ```
 
 ## Configuration
 
 The scripts are configured for:
-- **COM Port:** COM4 (change with `-Port` parameter)
+- **ESP32 Board:** TTGO T-Display (16MB flash)
+- **Partition Scheme:** app3M_fat9M_16MB (3MB app + 9.9MB FFat)
+- **Flash Size:** 16MB 
+- **Upload Speed:** 921600 baud
 - **Board:** esp8266:esp8266:nodemcuv2 (NodeMCU v2)
 - **Baud Rate:** 921600
 - **LittleFS Size:** 2MB

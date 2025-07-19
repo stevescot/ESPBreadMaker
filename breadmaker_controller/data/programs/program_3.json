@@ -1,0 +1,58 @@
+{
+  "id": 3,
+  "name": "Bread - White Basic",
+  "fermentBaselineTemp": 20,
+  "fermentQ10": 2,
+  "customStages": [
+    {
+      "label": "Mix",
+      "min": 10,
+      "temp": 25,
+      "mixPattern": [
+        {
+          "mixSec": 300,
+          "waitSec": 300
+        }
+      ],
+      "instructions": "Add 500g bread flour, 300g water, 7g instant yeast, 10g salt, 30g butter at the beginning of this stage."
+    },
+    {
+      "label": "Bulk Ferment",
+      "min": 60,
+      "temp": 27,
+      "noMix": true,
+      "isFermentation": true
+    },
+    {
+      "label": "Knockdown",
+      "min": 2,
+      "temp": 25,
+      "mixPattern": [
+        {
+          "mixSec": 60,
+          "waitSec": 60
+        }
+      ]
+    },
+    {
+      "label": "Proof",
+      "min": 40,
+      "temp": 27,
+      "noMix": true,
+      "isFermentation": true
+    },
+    {
+      "label": "Bake",
+      "min": 40,
+      "temp": 190,
+      "noMix": true
+    },
+    {
+      "label": "Cool",
+      "min": 10,
+      "temp": 25,
+      "noMix": true,
+      "instructions": "Remove bread when cool."
+    }
+  ]
+}

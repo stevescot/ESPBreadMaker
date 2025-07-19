@@ -1,0 +1,32 @@
+{
+  "id": 13,
+  "name": "Utility - Butter Melting",
+  "customStages": [
+    {
+      "label": "Gentle Melt",
+      "min": 5,
+      "temp": 45,
+      "mixPattern": [
+        {
+          "mixSec": 5,
+          "waitSec": 55,
+          "durationSec": 60
+        }
+      ],
+      "instructions": "Add cold butter (up to 250g). Watch carefully to avoid browning."
+    },
+    {
+      "label": "Hold Warm",
+      "min": 30,
+      "temp": 40,
+      "mixPattern": [
+        {
+          "mixSec": 5,
+          "waitSec": 295,
+          "durationSec": 300
+        }
+      ],
+      "instructions": "Butter will stay liquid but won't brown. Use as needed."
+    }
+  ]
+}

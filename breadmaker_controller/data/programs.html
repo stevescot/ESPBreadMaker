@@ -11,7 +11,7 @@
     <a href="/config.html">&#9881; Config</a>
     <a href="/programs.html" class="active">&#9998; Programs</a>
     <a href="/calibration.html">&#127777; Calibration</a>
-    <a href="/controllertuning.html">&#128293; PID Tuning</a>
+    <a href="/pid-tune.html">&#128293; PID Tuning</a>
     <a href="/update.html">&#8593; Update</a>
   </nav>
   <div class="container">
@@ -30,6 +30,16 @@
       • <b>Mixing:</b> If you define a <b>mixPattern</b> whose total time is less than the stage duration, the pattern will <b>repeat automatically</b> until the stage ends<br>
       • <b>No mixing:</b> Check "No Mixing" and omit mixPattern for stages without mixing<br>
       To avoid surprises, always check your pattern and stage duration!
+    </div>
+    
+    <div style="margin:1em 0 1.5em 0; background:#e8f4fd; color:#0d4f8c; border-radius:7px; padding:0.8em 1.2em; font-size:1.05em; max-width:600px; border-left:4px solid #2196f3;">
+      <b>⚙️ Technical Notes - Timing & Fermentation:</b><br>
+      • <b>Fermentation Stages:</b> Use Q10 temperature-dependent timing - higher temperatures reduce fermentation time automatically<br>
+      • <b>Safety Limits:</b> Non-fermentation stages are capped at 71 minutes to prevent overflow. Fermentation stages have 4x timeout safety<br>
+      • <b>Resume Feature:</b> Programs automatically resume after power loss, with fast-forward logic to correct stage/timing<br>
+      • <b>Mixing Patterns:</b> Support 3 modes - noMix (motor off), pattern-based (mix/wait cycles), and continuous (motor always on)<br>
+      • <b>Stage Advancement:</b> Fermentation uses weighted time calculations, non-fermentation uses exact duration timing<br>
+      • <b>Temperature Stabilization:</b> System waits 30 seconds after boot before starting to ensure accurate temperature readings
     </div>
     <button id="addProg">+ Add Program</button>
     <button id="saveAll">Save All</button>

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP32 File Uploader</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background-color: #f5f5f5;
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .upload-area { 
+            border: 2px dashed #ccc; 
+            padding: 20px; 
+            margin: 20px 0; 
+            text-align: center;
+            border-radius: 8px;
+        }
+        .upload-area.dragover {
+            border-color: #4CAF50;
+            background-color: #f0f8f0;
+        }
+        .file-list { 
+            margin: 20px 0; 
+        }
+        .progress { 
+            width: 100%; 
+            height: 20px; 
+            background: #f0f0f0; 
+            margin: 10px 0; 
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .progress-bar { 
+            height: 100%; 
+            background: #4CAF50; 
+            width: 0%; 
+            transition: width 0.3s ease;
+        }
+        button { 
+            padding: 10px 20px; 
+            margin: 5px; 
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .upload-btn {
+            background: #4CAF50;
+            color: white;
+        }
+        .upload-btn:hover {
+            background: #45a049;
+        }
+        .nav-btn {
+            background: #2196F3;
+            color: white;
+        }
+        .nav-btn:hover {
+            background: #1976D2;
+        }
+        .status-item {
+            padding: 5px 10px;
+            margin: 2px 0;
+            border-radius: 4px;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        #esp32-ip {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 200px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ESP32 Breadmaker File Uploader</h1>
+        
+        <div style="margin-bottom: 20px;">
+            <label for="esp32-ip">ESP32 IP Address:</label>
+            <input type="text" id="esp32-ip" value="192.168.250.125" placeholder="192.168.x.x">
+            <button onclick="testConnection()" class="nav-btn">Test Connection</button>
+        </div>
+        
+        <div class="upload-area" id="uploadArea">
+            <h3>Drop files here or click to select</h3>
+            <input type="file" id="fileInput" multiple accept=".html,.css,.js,.json,.svg,.md,.yaml,.yml" style="display: none;">
+            <button onclick="document.getElementById('fileInput').click()" class="upload-btn">Select Files</button>
+            <p>Supported: HTML, CSS, JS, JSON, SVG, MD, YAML files</p>
+        </div>
+        
+        <div style="margin: 20px 0;">
+            <button onclick="uploadFiles()" class="upload-btn">Upload Selected Files</button>
+            <button onclick="uploadDataFolder()" class="upload-btn">Upload All Data Folder Files</button>
+            <button onclick="clearStatus()" class="nav-btn">Clear Status</button>
+        </div>
+        
+        <div id="progress" class="progress" style="display:none;">
+            <div id="progressBar" class="progress-bar"></div>
+        </div>
+        
+        <div id="status"></div>
+        
+        <div class="file-list">
+            <h3>Quick Actions:</h3>
+            <button onclick="openESP32Page('/')" class="nav-btn">Main Interface</button>
+            <button onclick="openESP32Page('/debug/fs')" class="nav-btn">View Filesystem</button>
+            <button onclick="openESP32Page('/status')" class="nav-btn">Status</button>
+        </div>
+    </div>
+    
+    <script>
+        // Drag and drop functionality
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            fileInput.files = e.dataTransfer.files;
+            displaySelectedFiles();
+        });
+        
+        fileInput.addEventListener('change', displaySelectedFiles);
+        
+        function displaySelectedFiles() {
+            const files = fileInput.files;
+            const statusDiv = document.getElementById('status');
+            
+            if (files.length > 0) {
+                let fileList = '<div class="info status-item"><strong>Selected Files:</strong><ul>';
+                for (let file of files) {
+                    fileList += `<li>${file.name} (${formatFileSize(file.size)})</li>`;
+                }
+                fileList += '</ul></div>';
+                statusDiv.innerHTML = fileList + statusDiv.innerHTML;
+            }
+        }
+        
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        function getESP32IP() {
+            return document.getElementById('esp32-ip').value.trim();
+        }
+        
+        function addStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            const timestamp = new Date().toLocaleTimeString();
+            statusDiv.innerHTML = `<div class="${type} status-item">[${timestamp}] ${message}</div>` + statusDiv.innerHTML;
+        }
+        
+        function clearStatus() {
+            document.getElementById('status').innerHTML = '';
+        }
+        
+        async function testConnection() {
+            const ip = getESP32IP();
+            addStatus(`Testing connection to ${ip}...`);
+            
+            try {
+                const response = await fetch(`http://${ip}/debug/fs`, { 
+                    method: 'GET',
+                    timeout: 5000
+                });
+                
+                if (response.ok) {
+                    addStatus(`✓ Connection successful to ${ip}`, 'success');
+                } else {
+                    addStatus(`✗ Connection failed: HTTP ${response.status}`, 'error');
+                }
+            } catch (error) {
+                addStatus(`✗ Connection failed: ${error.message}`, 'error');
+            }
+        }
+        
+        async function uploadFiles() {
+            const files = fileInput.files;
+            const ip = getESP32IP();
+            
+            if (files.length === 0) {
+                addStatus('Please select files to upload', 'error');
+                return;
+            }
+            
+            const progressDiv = document.getElementById('progress');
+            const progressBar = document.getElementById('progressBar');
+            
+            progressDiv.style.display = 'block';
+            addStatus(`Starting upload of ${files.length} files to ${ip}...`);
+            
+            let uploaded = 0;
+            let failed = 0;
+            const total = files.length;
+            
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const content = await file.text();
+                
+                try {
+                    const response = await fetch(`http://${ip}/debug/upload`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: `filename=${encodeURIComponent(file.name)}&content=${encodeURIComponent(content)}`
+                    });
+                    
+                    const result = await response.text();
+                    
+                    if (response.ok) {
+                        addStatus(`✓ ${file.name} uploaded successfully (${formatFileSize(file.size)})`, 'success');
+                        uploaded++;
+                    } else {
+                        addStatus(`✗ ${file.name} failed: ${result}`, 'error');
+                        failed++;
+                    }
+                } catch (error) {
+                    addStatus(`✗ ${file.name} error: ${error.message}`, 'error');
+                    failed++;
+                }
+                
+                const progress = ((i + 1) / total) * 100;
+                progressBar.style.width = progress + '%';
+            }
+            
+            addStatus(`Upload completed: ${uploaded} successful, ${failed} failed`, uploaded > 0 ? 'success' : 'error');
+            
+            if (uploaded > 0) {
+                addStatus('Files uploaded successfully! You can now access the ESP32 web interface.', 'success');
+            }
+        }
+        
+        async function uploadDataFolder() {
+            // This would require pre-defining the file list or using a file picker for the data folder
+            addStatus('Please select the files from the data folder manually and use "Upload Selected Files"', 'info');
+        }
+        
+        function openESP32Page(path) {
+            const ip = getESP32IP();
+            window.open(`http://${ip}${path}`, '_blank');
+        }
+    </script>
+</body>
+</html>

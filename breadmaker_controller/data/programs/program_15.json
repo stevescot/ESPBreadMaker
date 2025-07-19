@@ -1,0 +1,19 @@
+{
+  "id": 15,
+  "name": "Utility - Proof Box",
+  "customStages": [
+    {
+      "label": "Maintain Warm",
+      "min": 180,
+      "temp": 28,
+      "mixPattern": [
+        {
+          "mixSec": 0,
+          "waitSec": 10800,
+          "durationSec": 10800
+        }
+      ],
+      "instructions": "Add a small dish of warm water for humidity. Place covered dough inside to proof."
+    }
+  ]
+}

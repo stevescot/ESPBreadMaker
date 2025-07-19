@@ -1,0 +1,32 @@
+{
+  "id": 18,
+  "name": "Utility - DIY Lotions",
+  "customStages": [
+    {
+      "label": "Heat Oil Phase",
+      "min": 20,
+      "temp": 70,
+      "mixPattern": [
+        {
+          "mixSec": 5,
+          "waitSec": 115,
+          "durationSec": 120
+        }
+      ],
+      "instructions": "Add oils, butters, emulsifier, and oil-soluble ingredients."
+    },
+    {
+      "label": "Cool & Mix",
+      "min": 15,
+      "temp": 40,
+      "mixPattern": [
+        {
+          "mixSec": 30,
+          "waitSec": 30,
+          "durationSec": 60
+        }
+      ],
+      "instructions": "Add water phase ingredients. Mix until emulsified and cooled."
+    }
+  ]
+}

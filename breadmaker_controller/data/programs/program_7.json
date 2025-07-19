@@ -1,0 +1,19 @@
+{
+  "id": 7,
+  "name": "Dairy - Yogurt Making",
+  "customStages": [
+    {
+      "label": "Incubate",
+      "min": 480,
+      "temp": 40,
+      "mixPattern": [
+        {
+          "mixSec": 10,
+          "waitSec": 1790,
+          "durationSec": 1800
+        }
+      ],
+      "instructions": "Add 1L milk and 2 tbsp yogurt starter at the beginning of this stage."
+    }
+  ]
+}

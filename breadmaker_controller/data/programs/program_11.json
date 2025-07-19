@@ -1,0 +1,19 @@
+{
+  "id": 11,
+  "name": "Utility - Sous Vide",
+  "customStages": [
+    {
+      "label": "Sous Vide",
+      "min": 120,
+      "temp": 60,
+      "mixPattern": [
+        {
+          "mixSec": 0,
+          "waitSec": 7200,
+          "durationSec": 7200
+        }
+      ],
+      "instructions": "Fill with water, set desired temperature. Seal food in bag and submerge. For eggs or fragile items, do not use mixing."
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "id": 9,
+  "name": "Dessert - Chocolate Tempering",
+  "customStages": [
+    {
+      "label": "Melt",
+      "min": 10,
+      "temp": 50,
+      "mixPattern": [
+        {
+          "mixSec": 12,
+          "waitSec": 48,
+          "durationSec": 60
+        }
+      ],
+      "instructions": "Add 300g chocolate (chopped) at the beginning of this stage."
+    },
+    {
+      "label": "Cool",
+      "min": 15,
+      "temp": 28,
+      "mixPattern": [
+        {
+          "mixSec": 60,
+          "waitSec": 120,
+          "durationSec": 180
+        }
+      ]
+    }
+  ]
+}
