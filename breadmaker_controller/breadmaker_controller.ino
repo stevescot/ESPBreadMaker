@@ -370,7 +370,7 @@ void setup() {
   delay(1000);  // Give WiFi time to stabilize
   
   Serial.println(F("[setup] Starting OTA services..."));
-  setupOTA();
+  // OTA initialization handled by otaManagerInit() in WiFi setup
 
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   
@@ -1244,92 +1244,6 @@ void checkSerialWifiConfig() {
 }
 
 // === OTA Update Support ===
-void setupOTA() {
-  Serial.println("[OTA] Setting up Over-The-Air updates...");
-  
-  // Set OTA hostname
-  ArduinoOTA.setHostname("breadmaker-controller");
-  
-  // Set OTA password (optional but recommended)
-  ArduinoOTA.setPassword("breadmaker123");
-  
-  // OTA event handlers
-  ArduinoOTA.onStart([]() {
-    String type;
-    if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch";
-    } else { // U_SPIFFS/FFat
-      type = "filesystem";
-    }
-    Serial.println("[OTA] Start updating " + type);
-    
-    // Stop all critical operations during update for safety
-    if (pid.controller) {
-      pid.controller->SetMode(MANUAL);
-    }
-    
-    // Turn off heater during update for safety
-    outputStates.heater = false;
-    setHeater(false);
-    
-    displayMessage("OTA Update...");
-  });
-  
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\n[OTA] Update complete!");
-    displayMessage("Update Complete");
-    delay(1000);
-  });
-  
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    unsigned int percent = (progress / (total / 100));
-    Serial.printf("[OTA] Progress: %u%%\r", percent);
-    
-    // Update display with progress every 10%
-    static unsigned int lastPercent = 0;
-    if (percent != lastPercent && percent % 10 == 0) {
-      String msg = "Updating: " + String(percent) + "%";
-      displayMessage(msg.c_str());
-      lastPercent = percent;
-    }
-  });
-  
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("[OTA] Error[%u]: ", error);
-    String errorMsg = "OTA Error: ";
-    if (error == OTA_AUTH_ERROR) {
-      Serial.println("Auth Failed");
-      errorMsg += "Auth Failed";
-    } else if (error == OTA_BEGIN_ERROR) {
-      Serial.println("Begin Failed");
-      errorMsg += "Begin Failed";
-    } else if (error == OTA_CONNECT_ERROR) {
-      Serial.println("Connect Failed");
-      errorMsg += "Connect Failed";
-    } else if (error == OTA_RECEIVE_ERROR) {
-      Serial.println("Receive Failed");
-      errorMsg += "Receive Failed";
-    } else if (error == OTA_END_ERROR) {
-      Serial.println("End Failed");
-      errorMsg += "End Failed";
-    }
-    displayMessage(errorMsg.c_str());
-    delay(3000);
-    
-    // Restore normal operation after error
-    if (pid.controller) {
-      pid.controller->SetMode(AUTOMATIC);
-    }
-  });
-  
-  ArduinoOTA.begin();
-  Serial.println("[OTA] OTA updates ready");
-  Serial.print("[OTA] Hostname: ");
-  Serial.println(ArduinoOTA.getHostname());
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[OTA] Web interface: http://%s.local/update\n", ArduinoOTA.getHostname().c_str());
-    Serial.printf("[OTA] Or direct IP: http://%s/update\n", WiFi.localIP().toString().c_str());
-    Serial.println("[OTA] Arduino IDE: Select network port for wireless uploads");
-  }
-}
+// setupOTA function removed - OTA is now handled by ota_manager.cpp
+// This eliminates conflicts between multiple OTA implementations
+// OTA functionality is provided by otaManagerInit() and otaManagerLoop()

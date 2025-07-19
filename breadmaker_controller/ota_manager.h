@@ -16,7 +16,7 @@ struct OTAStatus {
   bool inProgress = false;
   int progress = 0;
   String error = "";
-  String hostname = "breadmaker-controller";
+  String hostname = "breadmaker";  // Match mDNS hostname for consistency
 };
 
 extern OTAStatus otaStatus;
