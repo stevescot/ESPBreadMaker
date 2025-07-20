@@ -282,50 +282,20 @@ void coreEndpoints(WebServer& server) {
     server.on("/status", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /status requested"));
         
-        // Create a string stream for the JSON output
-        String jsonOutput = "";
-        
-        // Create a custom Print class that writes to our string
-        class StringPrint : public Print {
-            String* str;
-        public:
-            StringPrint(String* s) : str(s) {}
-            size_t write(uint8_t c) override { *str += (char)c; return 1; }
-            size_t write(const uint8_t *buffer, size_t size) override {
-                for (size_t i = 0; i < size; i++) *str += (char)buffer[i];
-                return size;
-            }
-        };
-        
-        StringPrint stringPrint(&jsonOutput);
-        streamStatusJson(stringPrint);
-        
-        server.send(200, "application/json", jsonOutput);
+        // Direct streaming to avoid StringPrint wrapper overhead
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        streamStatusJson(server);
     });
     
     // Add missing /api/status endpoint for frontend compatibility
     server.on("/api/status", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/status requested"));
         
-        // Create a string stream for the JSON output
-        String jsonOutput = "";
-        
-        // Create a custom Print class that writes to our string
-        class StringPrint : public Print {
-            String* str;
-        public:
-            StringPrint(String* s) : str(s) {}
-            size_t write(uint8_t c) override { *str += (char)c; return 1; }
-            size_t write(const uint8_t *buffer, size_t size) override {
-                for (size_t i = 0; i < size; i++) *str += (char)buffer[i];
-                return size;
-            }
-        };
-        
-        StringPrint stringPrint(&jsonOutput);
-        streamStatusJson(stringPrint);
-        
-        server.send(200, "application/json", jsonOutput);
+        // Direct streaming to avoid StringPrint wrapper overhead
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        streamStatusJson(server);
     });
     
     server.on("/api/firmware_info", HTTP_GET, [&](){
@@ -1199,27 +1169,28 @@ void otaEndpoints(WebServer& server) {
     
     // OTA status endpoint - provides current OTA state
     server.on("/api/ota/status", HTTP_GET, [&](){
-        // Use actual OTA manager state
-        String json = "{";
-        json += "\"enabled\":" + String(isOTAEnabled() ? "true" : "false") + ",";
-        json += "\"inProgress\":" + String(otaStatus.inProgress ? "true" : "false") + ",";
-        json += "\"progress\":" + String(otaStatus.progress) + ",";
-        json += "\"hostname\":\"" + getOTAHostname() + "\",";
-        json += "\"error\":" + (otaStatus.error.length() > 0 ? "\"" + otaStatus.error + "\"" : "null");
-        json += "}";
-        server.send(200, "application/json", json);
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        server.sendContent("{");
+        server.sendContent("\"enabled\":" + String(isOTAEnabled() ? "true" : "false") + ",");
+        server.sendContent("\"inProgress\":" + String(otaStatus.inProgress ? "true" : "false") + ",");
+        server.sendContent("\"progress\":" + String(otaStatus.progress) + ",");
+        server.sendContent("\"hostname\":\"" + getOTAHostname() + "\",");
+        server.sendContent("\"error\":" + (otaStatus.error.length() > 0 ? "\"" + otaStatus.error + "\"" : "null"));
+        server.sendContent("}");
     });
     
     // OTA info endpoint - provides device information
     server.on("/api/ota/info", HTTP_GET, [&](){
-        String json = "{";
-        json += "\"hostname\":\"" + String(WiFi.getHostname()) + "\",";
-        json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
-        json += "\"version\":\"1.0.0\",";
-        json += "\"freeSpace\":" + String(FFat.freeBytes()) + ",";
-        json += "\"totalSpace\":" + String(FFat.totalBytes());
-        json += "}";
-        server.send(200, "application/json", json);
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        server.sendContent("{");
+        server.sendContent("\"hostname\":\"" + String(WiFi.getHostname()) + "\",");
+        server.sendContent("\"ip\":\"" + WiFi.localIP().toString() + "\",");
+        server.sendContent("\"version\":\"1.0.0\",");
+        server.sendContent("\"freeSpace\":" + String(FFat.freeBytes()) + ",");
+        server.sendContent("\"totalSpace\":" + String(FFat.totalBytes()));
+        server.sendContent("}");
     });
     
     // Web-based firmware update endpoint
@@ -1335,15 +1306,14 @@ void otaEndpoints(WebServer& server) {
     server.on("/api/pid_profile", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile GET requested"));
         
-        // Return current PID profiles - for now, return a basic structure
-        String json = "{\"profiles\":[";
-        json += "{\"key\":\"default\",\"kp\":" + String(pid.Kp) + ",";
-        json += "\"ki\":" + String(pid.Ki) + ",";
-        json += "\"kd\":" + String(pid.Kd) + ",";
-        json += "\"windowMs\":" + String(pid.sampleTime) + "}";
-        json += "]}";
-        
-        server.send(200, "application/json", json);
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        server.sendContent("{\"profiles\":[");
+        server.sendContent("{\"key\":\"default\",\"kp\":" + String(pid.Kp) + ",");
+        server.sendContent("\"ki\":" + String(pid.Ki) + ",");
+        server.sendContent("\"kd\":" + String(pid.Kd) + ",");
+        server.sendContent("\"windowMs\":" + String(pid.sampleTime) + "}");
+        server.sendContent("]}");
     });
     
     server.on("/api/pid_profile", HTTP_POST, [&](){
@@ -1371,11 +1341,7 @@ void otaEndpoints(WebServer& server) {
                 
                 // savePIDProfiles(); // TODO: Implement savePIDProfiles() function
                 
-                String json = "{\"status\":\"ok\",\"kp\":" + String(kp) + ",";
-                json += "\"ki\":" + String(ki) + ",";
-                json += "\"kd\":" + String(kd) + "}";
-                
-                server.send(200, "application/json", json);
+                server.send(200, "application/json", "{\"status\":\"ok\",\"kp\":" + String(kp) + ",\"ki\":" + String(ki) + ",\"kd\":" + String(kd) + "}");
                 if (debugSerial) Serial.printf("[DEBUG] PID parameters updated: Kp=%.3f, Ki=%.3f, Kd=%.3f\n", kp, ki, kd);
             } else {
                 server.send(400, "application/json", "{\"error\":\"Invalid JSON or missing PID parameters\"}");

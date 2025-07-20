@@ -154,11 +154,7 @@ void deleteFolderRecursive(const String& path) {
 // Helper function to send a JSON error response (WebServer compatible)
 // Sends a JSON-formatted error message to the client with a specified HTTP status code.
 void sendJsonError(WebServer& server, const String& error, const String& message, int code = 400) {
-  String response = "{";
-  response += "\"error\":\"" + error + "\",";
-  response += "\"message\":\"" + message + "\"";
-  response += "}";
-  server.send(code, "application/json", response);
+  server.send(code, "application/json", "{\"error\":\"" + error + "\",\"message\":\"" + message + "\"}");
 }
 
 // Initializes all hardware, outputs, file systems, and loads configuration and calibration data.
