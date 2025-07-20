@@ -845,22 +845,32 @@ void checkDelayedResume() {
 // Handles manual mode operation, including direct PID and output control.
 void handleManualMode() {
   if (programState.manualMode && pid.Setpoint > 0) {
-    pid.Input = getAveragedTemperature();
-    double error = pid.Setpoint - pid.Input;
-    double dInput = pid.Input - pid.lastInput;
-    double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
-    double sampleTimeSec = pid.sampleTime / 1000.0;
-    pid.pidP = kpUsed * error;
-    pid.lastITerm += kiUsed * error * sampleTimeSec;
-    pid.pidI = pid.lastITerm;
-    pid.pidD = -kdUsed * dInput / sampleTimeSec;
-    pid.lastInput = pid.Input;
-    // Calculate PID output (custom implementation since pid.controller is commented out)
-    pid.Output = pid.pidP + pid.pidI + pid.pidD;
-    // Clamp output to valid range [0, 1]
-    if (pid.Output < 0) pid.Output = 0;
-    if (pid.Output > 1) pid.Output = 1;
-    if (pid.controller) pid.controller->Compute();
+    // Rate limit PID calculations to configured sample time
+    static unsigned long lastPIDCalculation = 0;
+    unsigned long nowMs = millis();
+    
+    if (nowMs - lastPIDCalculation >= pid.sampleTime) {
+      lastPIDCalculation = nowMs;
+      
+      pid.Input = getAveragedTemperature();
+      double error = pid.Setpoint - pid.Input;
+      double dInput = pid.Input - pid.lastInput;
+      double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
+      double sampleTimeSec = pid.sampleTime / 1000.0;
+      pid.pidP = kpUsed * error;
+      pid.lastITerm += kiUsed * error * sampleTimeSec;
+      pid.pidI = pid.lastITerm;
+      pid.pidD = -kdUsed * dInput / sampleTimeSec;
+      pid.lastInput = pid.Input;
+      // Calculate PID output (custom implementation since pid.controller is commented out)
+      pid.Output = pid.pidP + pid.pidI + pid.pidD;
+      // Clamp output to valid range [0, 1]
+      if (pid.Output < 0) pid.Output = 0;
+      if (pid.Output > 1) pid.Output = 1;
+      if (pid.controller) pid.controller->Compute();
+    }
+    
+    // Always update heater control (this can run more frequently than PID)
     updateTimeProportionalHeater();
     setMotor(false);
     setLight(false);
@@ -979,40 +989,55 @@ void handleCustomStages(bool &stageJustAdvanced) {
       fermentState.predictedCompleteTime = (unsigned long)(programState.programStartTime + (unsigned long)(cumulativePredictedSec)); // All predicted times use Q10 multiply logic
     }
     if (st.temp > 0 || programState.manualMode) {
+      // Rate limit PID calculations to configured sample time
+      static unsigned long lastCustomStagePIDCalculation = 0;
+      unsigned long nowMs = millis();
+      bool shouldCalculatePID = (nowMs - lastCustomStagePIDCalculation >= pid.sampleTime);
+      
       if (programState.manualMode && pid.Setpoint > 0) {
-        pid.Input = getAveragedTemperature();
-        double error = pid.Setpoint - pid.Input;
-        double dInput = pid.Input - pid.lastInput;
-        double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
-        double sampleTimeSec = pid.sampleTime / 1000.0;
-        pid.pidP = kpUsed * error;
-        pid.lastITerm += kiUsed * error * sampleTimeSec;
-        pid.pidI = pid.lastITerm;
-        pid.pidD = -kdUsed * dInput / sampleTimeSec;
-        pid.lastInput = pid.Input;
-        // Calculate PID output (custom implementation since pid.controller is commented out)
-        pid.Output = pid.pidP + pid.pidI + pid.pidD;
-        // Clamp output to valid range [0, 1]
-        if (pid.Output < 0) pid.Output = 0;
-        if (pid.Output > 1) pid.Output = 1;
-        if (pid.controller) pid.controller->Compute();
+        if (shouldCalculatePID) {
+          lastCustomStagePIDCalculation = nowMs;
+          
+          pid.Input = getAveragedTemperature();
+          double error = pid.Setpoint - pid.Input;
+          double dInput = pid.Input - pid.lastInput;
+          double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
+          double sampleTimeSec = pid.sampleTime / 1000.0;
+          pid.pidP = kpUsed * error;
+          pid.lastITerm += kiUsed * error * sampleTimeSec;
+          pid.pidI = pid.lastITerm;
+          pid.pidD = -kdUsed * dInput / sampleTimeSec;
+          pid.lastInput = pid.Input;
+          // Calculate PID output (custom implementation since pid.controller is commented out)
+          pid.Output = pid.pidP + pid.pidI + pid.pidD;
+          // Clamp output to valid range [0, 1]
+          if (pid.Output < 0) pid.Output = 0;
+          if (pid.Output > 1) pid.Output = 1;
+          if (pid.controller) pid.controller->Compute();
+        }
+        // Always update heater control (this can run more frequently than PID)
         updateTimeProportionalHeater();
       } else if (!programState.manualMode && st.temp > 0) {
-        double error = pid.Setpoint - pid.Input;
-        double dInput = pid.Input - pid.lastInput;
-        double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
-        double sampleTimeSec = pid.sampleTime / 1000.0;
-        pid.pidP = kpUsed * error;
-        pid.lastITerm += kiUsed * error * sampleTimeSec;
-        pid.pidI = pid.lastITerm;
-        pid.pidD = -kdUsed * dInput / sampleTimeSec;
-        pid.lastInput = pid.Input;
-        // Calculate PID output (custom implementation since pid.controller is commented out)
-        pid.Output = pid.pidP + pid.pidI + pid.pidD;
-        // Clamp output to valid range [0, 1]
-        if (pid.Output < 0) pid.Output = 0;
-        if (pid.Output > 1) pid.Output = 1;
-        if (pid.controller) pid.controller->Compute();
+        if (shouldCalculatePID) {
+          lastCustomStagePIDCalculation = nowMs;
+          
+          double error = pid.Setpoint - pid.Input;
+          double dInput = pid.Input - pid.lastInput;
+          double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
+          double sampleTimeSec = pid.sampleTime / 1000.0;
+          pid.pidP = kpUsed * error;
+          pid.lastITerm += kiUsed * error * sampleTimeSec;
+          pid.pidI = pid.lastITerm;
+          pid.pidD = -kdUsed * dInput / sampleTimeSec;
+          pid.lastInput = pid.Input;
+          // Calculate PID output (custom implementation since pid.controller is commented out)
+          pid.Output = pid.pidP + pid.pidI + pid.pidD;
+          // Clamp output to valid range [0, 1]
+          if (pid.Output < 0) pid.Output = 0;
+          if (pid.Output > 1) pid.Output = 1;
+          if (pid.controller) pid.controller->Compute();
+        }
+        // Always update heater control (this can run more frequently than PID)
         updateTimeProportionalHeater();
       } else {
         setHeater(false);

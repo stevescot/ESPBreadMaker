@@ -329,12 +329,14 @@ void coreEndpoints(WebServer& server) {
     });
     
     server.on("/api/firmware_info", HTTP_GET, [&](){
-        String response = "{";
-        response += "\"build\":\"" + String(FIRMWARE_BUILD_DATE) + "\",";
-        response += "\"version\":\"ESP32-WebServer\"";
-
-        response += "}";
-        server.send(200, "application/json", response);
+        // Use efficient streaming for consistency
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        
+        server.sendContent("{\"build\":\"");
+        server.sendContent(FIRMWARE_BUILD_DATE);
+        server.sendContent("\",\"version\":\"ESP32-WebServer\"}");
+        server.sendContent(""); // End chunked response
     });
     
     // Debug endpoint to check filesystem
@@ -515,8 +517,7 @@ void coreEndpoints(WebServer& server) {
     });
     
     server.on("/api/output_mode", HTTP_GET, [&](){
-        String response = "{\"mode\":\"" + String(outputMode) + "\"}";
-        server.send(200, "application/json", response);
+        server.send(200, "application/json", "{\"mode\":\"" + String(outputMode) + "\"}");
     });
     
     server.on("/api/output_mode", HTTP_POST, [&](){
@@ -613,6 +614,57 @@ void stateMachineEndpoints(WebServer& server) {
         stopBreadmaker();
         server.send(200, "application/json", "{\"status\":\"stopped\"}");
     });
+    
+    server.on("/advance", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /advance called"));
+        
+        if (!programState.isRunning) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Program not running\"}");
+            return;
+        }
+        
+        Program* p = getActiveProgramMutable();
+        if (!p || p->customStages.empty()) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"No active program\"}");
+            return;
+        }
+        
+        if (programState.customStageIdx >= p->customStages.size() - 1) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Already at last stage\"}");
+            return;
+        }
+        
+        // Manually advance to next stage
+        programState.customStageIdx++;
+        programState.customStageStart = millis();
+        
+        // Update actual stage start times array
+        if (programState.customStageIdx < 20) {
+            programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
+        }
+        
+        resetFermentationTracking(getAveragedTemperature());
+        invalidateStatusCache();
+        saveResumeState();
+        
+        if (debugSerial) Serial.printf("[MANUAL ADVANCE] Advanced to stage %d\n", (int)programState.customStageIdx);
+        
+        // Create a string stream for the JSON output  
+        String jsonOutput = "";
+        class StringPrint : public Print {
+            String* str;
+        public:
+            StringPrint(String* s) : str(s) {}
+            size_t write(uint8_t c) override { *str += (char)c; return 1; }
+            size_t write(const uint8_t *buffer, size_t size) override {
+                for (size_t i = 0; i < size; i++) *str += (char)buffer[i];
+                return size;
+            }
+        };
+        StringPrint stringPrint(&jsonOutput);
+        streamStatusJson(stringPrint);
+        server.send(200, "application/json", jsonOutput);
+    });
 }
 
 // Manual Output Endpoints
@@ -651,15 +703,16 @@ void manualOutputEndpoints(WebServer& server) {
 // PID Control Endpoints
 void pidControlEndpoints(WebServer& server) {
     server.on("/api/pid", HTTP_GET, [&](){
-        String response = "{";
-        response += "\"kp\":" + String(pid.Kp, 6) + ",";
-        response += "\"ki\":" + String(pid.Ki, 6) + ",";
-        response += "\"kd\":" + String(pid.Kd, 6) + ",";
-        response += "\"setpoint\":" + String(pid.Setpoint, 1) + ",";
-        response += "\"input\":" + String(pid.Input, 1) + ",";
-        response += "\"output\":" + String(pid.Output, 3) + "";
-        response += "}";
-        server.send(200, "application/json", response);
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        server.sendContent("{");
+        server.sendContent("\"kp\":" + String(pid.Kp, 6) + ",");
+        server.sendContent("\"ki\":" + String(pid.Ki, 6) + ",");
+        server.sendContent("\"kd\":" + String(pid.Kd, 6) + ",");
+        server.sendContent("\"setpoint\":" + String(pid.Setpoint, 1) + ",");
+        server.sendContent("\"input\":" + String(pid.Input, 1) + ",");
+        server.sendContent("\"output\":" + String(pid.Output, 3) + "");
+        server.sendContent("}");
     });
     
     server.on("/api/pid", HTTP_POST, [&](){
@@ -696,28 +749,47 @@ void homeAssistantEndpoint(WebServer& server) {
     server.on("/ha", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /ha requested"));
         
-        String response = "{";
+        // Use efficient streaming instead of string concatenation
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        
+        // Stream JSON directly to avoid memory allocation issues
+        server.sendContent("{");
         
         // Basic status - matches template expectations
-        response += "\"state\":\"" + String(programState.isRunning ? "running" : "idle") + "\",";
-        response += "\"temperature\":" + String(getAveragedTemperature(), 1) + ",";
-        response += "\"setpoint\":" + String(pid.Setpoint, 1) + ",";
+        server.sendContent("\"state\":\"");
+        server.sendContent(programState.isRunning ? "running" : "idle");
+        server.sendContent("\",\"temperature\":");
+        server.sendContent(String(getAveragedTemperature(), 1));
+        server.sendContent(",\"setpoint\":");
+        server.sendContent(String(pid.Setpoint, 1));
+        server.sendContent(",");
         
         // Output states (direct boolean values as expected)
-        response += "\"motor\":" + String(outputStates.motor ? "true" : "false") + ",";
-        response += "\"light\":" + String(outputStates.light ? "true" : "false") + ",";
-        response += "\"buzzer\":" + String(outputStates.buzzer ? "true" : "false") + ",";
-        response += "\"heater\":" + String(outputStates.heater ? "true" : "false") + ",";
-        response += "\"manual_mode\":" + String(programState.manualMode ? "true" : "false") + ",";
+        server.sendContent("\"motor\":");
+        server.sendContent(outputStates.motor ? "true" : "false");
+        server.sendContent(",\"light\":");
+        server.sendContent(outputStates.light ? "true" : "false");
+        server.sendContent(",\"buzzer\":");
+        server.sendContent(outputStates.buzzer ? "true" : "false");
+        server.sendContent(",\"heater\":");
+        server.sendContent(outputStates.heater ? "true" : "false");
+        server.sendContent(",\"manual_mode\":");
+        server.sendContent(programState.manualMode ? "true" : "false");
+        server.sendContent(",");
         
         // Program and stage info
         if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
             Program* p = getActiveProgramMutable();
             if (p) {
-                response += "\"program\":\"" + String(p->name.c_str()) + "\",";
+                server.sendContent("\"program\":\"");
+                server.sendContent(p->name.c_str());
+                server.sendContent("\",");
                 
                 if (programState.isRunning && programState.customStageIdx < p->customStages.size()) {
-                    response += "\"stage\":\"" + String(p->customStages[programState.customStageIdx].label.c_str()) + "\",";
+                    server.sendContent("\"stage\":\"");
+                    server.sendContent(p->customStages[programState.customStageIdx].label.c_str());
+                    server.sendContent("\",");
                     
                     // Calculate total program remaining time (stage + all remaining stages)
                     unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
@@ -734,10 +806,12 @@ void homeAssistantEndpoint(WebServer& server) {
                         totalRemainingTime += adjustedDurationMs / 1000;
                     }
                     
-                    response += "\"stage_time_left\":" + String(totalRemainingTime / 60) + ","; // Convert to minutes
+                    server.sendContent("\"stage_time_left\":");
+                    server.sendContent(String(totalRemainingTime / 60)); // Convert to minutes
+                    server.sendContent(",");
                 } else if (!programState.isRunning) {
                     // Not running - calculate total program time if started now
-                    response += "\"stage\":\"Idle\",";
+                    server.sendContent("\"stage\":\"Idle\",");
                     
                     unsigned long totalProgramTime = 0;
                     for (size_t i = 0; i < p->customStages.size(); ++i) {
@@ -745,20 +819,17 @@ void homeAssistantEndpoint(WebServer& server) {
                                                                                   p->customStages[i].isFermentation);
                         totalProgramTime += adjustedDurationMs / 1000;
                     }
-                    response += "\"stage_time_left\":" + String(totalProgramTime / 60) + ","; // Convert to minutes
+                    server.sendContent("\"stage_time_left\":");
+                    server.sendContent(String(totalProgramTime / 60)); // Convert to minutes
+                    server.sendContent(",");
                 } else {
-                    response += "\"stage\":\"Idle\",";
-                    response += "\"stage_time_left\":0,";
+                    server.sendContent("\"stage\":\"Idle\",\"stage_time_left\":0,");
                 }
             } else {
-                response += "\"program\":\"\",";
-                response += "\"stage\":\"Idle\",";
-                response += "\"stage_time_left\":0,";
+                server.sendContent("\"program\":\"\",\"stage\":\"Idle\",\"stage_time_left\":0,");
             }
         } else {
-            response += "\"program\":\"\",";
-            response += "\"stage\":\"Idle\",";
-            response += "\"stage_time_left\":0,";
+            server.sendContent("\"program\":\"\",\"stage\":\"Idle\",\"stage_time_left\":0,");
         }
         
         // Timing information (Unix timestamps as expected)
@@ -787,68 +858,96 @@ void homeAssistantEndpoint(WebServer& server) {
             }
         }
         
-        response += "\"stage_ready_at\":" + String((unsigned long)stageReadyAt) + ",";
-        response += "\"program_ready_at\":" + String((unsigned long)programReadyAt) + ",";
+        server.sendContent("\"stage_ready_at\":");
+        server.sendContent(String((unsigned long)stageReadyAt));
+        server.sendContent(",\"program_ready_at\":");
+        server.sendContent(String((unsigned long)programReadyAt));
+        server.sendContent(",");
         
         // Health section (comprehensive system information as expected by template)
-        response += "\"health\":{";
+        server.sendContent("\"health\":{");
         
         // System info
-        response += "\"uptime_sec\":" + String(millis() / 1000) + ",";
-        response += "\"firmware_version\":\"ESP32-WebServer\",";
-        response += "\"build_date\":\"" + String(__DATE__) + " " + String(__TIME__) + "\",";
-        response += "\"reset_reason\":\"" + String(esp_reset_reason()) + "\",";
-        response += "\"chip_id\":\"" + String((uint32_t)ESP.getEfuseMac(), HEX) + "\",";
+        server.sendContent("\"uptime_sec\":");
+        server.sendContent(String(millis() / 1000));
+        server.sendContent(",\"firmware_version\":\"ESP32-WebServer\",\"build_date\":\"");
+        server.sendContent(__DATE__);
+        server.sendContent(" ");
+        server.sendContent(__TIME__);
+        server.sendContent("\",\"reset_reason\":\"");
+        server.sendContent(String(esp_reset_reason()));
+        server.sendContent("\",\"chip_id\":\"");
+        server.sendContent(String((uint32_t)ESP.getEfuseMac(), HEX));
+        server.sendContent("\",");
         
         // Performance metrics
-        response += "\"performance\":{";
-        response += "\"loop_count\":" + String(getLoopCount()) + ",";
-        response += "\"max_loop_time_us\":" + String(getMaxLoopTime()) + ",";
-        response += "\"avg_loop_time_us\":" + String(getAverageLoopTime()) + ",";
-        response += "\"wifi_reconnects\":" + String(getWifiReconnectCount());
-        response += "},";
+        server.sendContent("\"performance\":{\"loop_count\":");
+        server.sendContent(String(getLoopCount()));
+        server.sendContent(",\"max_loop_time_us\":");
+        server.sendContent(String(getMaxLoopTime()));
+        server.sendContent(",\"avg_loop_time_us\":");
+        server.sendContent(String(getAverageLoopTime()));
+        server.sendContent(",\"wifi_reconnects\":");
+        server.sendContent(String(getWifiReconnectCount()));
+        server.sendContent("},");
         
         // Memory information with fragmentation
-        response += "\"memory\":{";
-        response += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
-        response += "\"max_free_block\":" + String(ESP.getMaxAllocHeap()) + ",";
-        response += "\"heap_size\":" + String(ESP.getHeapSize()) + ",";
-        response += "\"min_free_heap\":" + String(getMinFreeHeap()) + ",";
-        response += "\"fragmentation_pct\":" + String(getHeapFragmentation(), 1);
-        response += "},";
+        server.sendContent("\"memory\":{\"free_heap\":");
+        server.sendContent(String(ESP.getFreeHeap()));
+        server.sendContent(",\"max_free_block\":");
+        server.sendContent(String(ESP.getMaxAllocHeap()));
+        server.sendContent(",\"heap_size\":");
+        server.sendContent(String(ESP.getHeapSize()));
+        server.sendContent(",\"min_free_heap\":");
+        server.sendContent(String(getMinFreeHeap()));
+        server.sendContent(",\"fragmentation_pct\":");
+        server.sendContent(String(getHeapFragmentation(), 1));
+        server.sendContent("},");
         
         // PID controller information
-        response += "\"pid\":{";
-        response += "\"kp\":" + String(pid.Kp, 6) + ",";
-        response += "\"ki\":" + String(pid.Ki, 6) + ",";
-        response += "\"kd\":" + String(pid.Kd, 6) + ",";
-        response += "\"output\":" + String(pid.Output, 2) + ",";
-        response += "\"input\":" + String(pid.Input, 2) + ",";
-        response += "\"setpoint\":" + String(pid.Setpoint, 2) + ",";
-        response += "\"sample_time_ms\":" + String(pid.sampleTime) + ",";
-        response += "\"active_profile\":\"" + pid.activeProfile + "\",";
-        response += "\"auto_switching\":" + String(pid.autoSwitching ? "true" : "false");
-        response += "},";
+        server.sendContent("\"pid\":{\"kp\":");
+        server.sendContent(String(pid.Kp, 6));
+        server.sendContent(",\"ki\":");
+        server.sendContent(String(pid.Ki, 6));
+        server.sendContent(",\"kd\":");
+        server.sendContent(String(pid.Kd, 6));
+        server.sendContent(",\"output\":");
+        server.sendContent(String(pid.Output, 2));
+        server.sendContent(",\"input\":");
+        server.sendContent(String(pid.Input, 2));
+        server.sendContent(",\"setpoint\":");
+        server.sendContent(String(pid.Setpoint, 2));
+        server.sendContent(",\"sample_time_ms\":");
+        server.sendContent(String(pid.sampleTime));
+        server.sendContent(",\"active_profile\":\"");
+        server.sendContent(pid.activeProfile);
+        server.sendContent("\",\"auto_switching\":");
+        server.sendContent(pid.autoSwitching ? "true" : "false");
+        server.sendContent("},");
         
         // Flash information
-        response += "\"flash\":{";
-        response += "\"size\":" + String(ESP.getFlashChipSize()) + ",";
-        response += "\"speed\":" + String(ESP.getFlashChipSpeed()) + ",";
-        response += "\"mode\":" + String(ESP.getFlashChipMode());
-        response += "},";
+        server.sendContent("\"flash\":{\"size\":");
+        server.sendContent(String(ESP.getFlashChipSize()));
+        server.sendContent(",\"speed\":");
+        server.sendContent(String(ESP.getFlashChipSpeed()));
+        server.sendContent(",\"mode\":");
+        server.sendContent(String(ESP.getFlashChipMode()));
+        server.sendContent("},");
         
         // WiFi information
-        response += "\"wifi\":{";
-        response += "\"connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
-        response += "\"ssid\":\"" + String(WiFi.SSID()) + "\",";
-        response += "\"rssi\":" + String(WiFi.RSSI()) + ",";
-        response += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
-        response += "}";
+        server.sendContent("\"wifi\":{\"connected\":");
+        server.sendContent(WiFi.status() == WL_CONNECTED ? "true" : "false");
+        server.sendContent(",\"ssid\":\"");
+        server.sendContent(WiFi.SSID());
+        server.sendContent("\",\"rssi\":");
+        server.sendContent(String(WiFi.RSSI()));
+        server.sendContent(",\"ip\":\"");
+        server.sendContent(WiFi.localIP().toString());
+        server.sendContent("\"}");
         
-        response += "}"; // Close health section
-        response += "}"; // Close main object
-        
-        server.send(200, "application/json", response);
+        server.sendContent("}"); // Close health section
+        server.sendContent("}"); // Close main object
+        server.sendContent(""); // End chunked response
     });
 }
 
@@ -858,18 +957,26 @@ void calibrationEndpoints(WebServer& server) {
         int currentRaw = analogRead(PIN_RTD);
         float currentTemp = readTemperature();
         
-        String response = "{";
-        response += "\"raw\":" + String(currentRaw) + ",";
-        response += "\"temp\":" + String(currentTemp, 1) + ",";
-        response += "\"table\":[";
+        // Use efficient streaming instead of string concatenation
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        
+        server.sendContent("{\"raw\":");
+        server.sendContent(String(currentRaw));
+        server.sendContent(",\"temp\":");
+        server.sendContent(String(currentTemp, 1));
+        server.sendContent(",\"table\":[");
         
         for(size_t i = 0; i < rtdCalibTable.size(); i++) {
-            if(i > 0) response += ",";
-            response += "{\"raw\":" + String(rtdCalibTable[i].raw) + 
-                       ",\"temp\":" + String(rtdCalibTable[i].temp) + "}";
+            if(i > 0) server.sendContent(",");
+            server.sendContent("{\"raw\":");
+            server.sendContent(String(rtdCalibTable[i].raw));
+            server.sendContent(",\"temp\":");
+            server.sendContent(String(rtdCalibTable[i].temp));
+            server.sendContent("}");
         }
-        response += "]}";
-        server.send(200, "application/json", response);
+        server.sendContent("]}");
+        server.sendContent(""); // End chunked response
     });
     
     // Add calibration point endpoint
@@ -957,36 +1064,46 @@ void fileEndPoints(WebServer& server) {
         if (!folder.startsWith("/")) folder = "/" + folder;
         if (!folder.endsWith("/") && folder != "/") folder += "/";
         
-        String response = "{\"files\":[],\"folders\":[]}";
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
         
         File root = FFat.open(folder);
         if (root && root.isDirectory()) {
-            response = "{\"files\":[";
-            String folders = "\"folders\":[";
+            server.sendContent("{\"files\":[");
             
-            bool firstFile = true, firstFolder = true;
+            bool firstFile = true;
             File file = root.openNextFile();
             while (file) {
-                if (file.isDirectory()) {
-                    if (!firstFolder) folders += ",";
-                    folders += "\"" + String(file.name()) + "\"";
-                    firstFolder = false;
-                } else {
-                    if (!firstFile) response += ",";
-                    response += "{";
-                    response += "\"name\":\"" + String(file.name()) + "\",";
-                    response += "\"size\":" + String(file.size());
-                    response += "}";
+                if (!file.isDirectory()) {
+                    if (!firstFile) server.sendContent(",");
+                    server.sendContent("{\"name\":\"" + String(file.name()) + "\",");
+                    server.sendContent("\"size\":" + String(file.size()) + "}");
                     firstFile = false;
                 }
                 file = root.openNextFile();
             }
             root.close();
             
-            response += "]," + folders + "]}";
+            // Second pass for folders
+            root = FFat.open(folder);
+            server.sendContent("],\"folders\":[");
+            bool firstFolder = true;
+            if (root && root.isDirectory()) {
+                file = root.openNextFile();
+                while (file) {
+                    if (file.isDirectory()) {
+                        if (!firstFolder) server.sendContent(",");
+                        server.sendContent("\"" + String(file.name()) + "\"");
+                        firstFolder = false;
+                    }
+                    file = root.openNextFile();
+                }
+                root.close();
+            }
+            server.sendContent("]}");
+        } else {
+            server.sendContent("{\"files\":[],\"folders\":[]}");
         }
-        
-        server.send(200, "application/json", response);
     });
     
     // Delete file endpoint
@@ -1060,17 +1177,14 @@ void fileEndPoints(WebServer& server) {
 
 void programsEndpoints(WebServer& server) {
     server.on("/api/programs", HTTP_GET, [&](){
-        String response = "{\"count\":" + String(getProgramCount()) + "}";
-        server.send(200, "application/json", response);
+        server.send(200, "application/json", "{\"count\":" + String(getProgramCount()) + "}");
     });
     
     server.on("/api/program", HTTP_GET, [&](){
         if (server.hasArg("id")) {
             int id = server.arg("id").toInt();
             if (id >= 0 && id < getProgramCount()) {
-                // Basic program info - could be expanded
-                String response = "{\"id\":" + String(id) + ",\"valid\":" + String(isProgramValid(id) ? "true" : "false") + "}";
-                server.send(200, "application/json", response);
+                server.send(200, "application/json", "{\"id\":" + String(id) + ",\"valid\":" + String(isProgramValid(id) ? "true" : "false") + "}");
                 return;
             }
         }

@@ -3,7 +3,7 @@
 // Start status updates
 function startStatusUpdates() {
   if (updateInterval) clearInterval(updateInterval);
-  updateInterval = setInterval(updateStatus, 1000);
+  updateInterval = setInterval(updateStatus, 2000); // Reduced from 1000ms to 2000ms to improve system responsiveness during PID control
 }
 
 // Update status and chart

@@ -1,28 +1,30 @@
 # File Cleanup Recommendations
 
-## Files That Can Be Removed
-The following files are now superseded by `unified_build.ps1`:
+## ✅ CLEANUP COMPLETED
+All legacy upload scripts have been successfully removed and replaced with `unified_build.ps1`.
 
-### Batch Files (.bat)
-- `upload_programs.bat` → Use `.\unified_build.ps1 -UploadData`
+## Files That Were Removed
+The following files were superseded by `unified_build.ps1` and have been removed:
 
-### PowerShell Scripts (.ps1) in Root
-- `build_and_upload_ota.ps1` → Use `.\unified_build.ps1 -Build -WebOTA`
-- `upload_files_robust.ps1` → Use `.\unified_build.ps1 -UploadData`
-- `upload_ota_direct.ps1` → Use `.\unified_build.ps1 -WebOTA`
-- `upload_simple.ps1` → Use `.\unified_build.ps1 -UploadData`
-- `upload_programs_index.ps1` → Use `.\unified_build.ps1 -UploadData`
-- `upload_all.ps1` → Use `.\unified_build.ps1 -Build -WebOTA -UploadData`
+### ✅ Batch Files (.bat) - REMOVED
+- `upload_programs.bat` ✅ REMOVED → Use `.\unified_build.ps1 -UploadData`
+- `manual_upload.bat` ✅ REMOVED
 
-### Archive Folder Scripts
-The entire `archive/` folder contains old scripts that are no longer needed:
-- `archive/build_and_upload.ps1`
-- `archive/upload_data*.ps1`
-- `archive/upload_files*.ps1`
-- `archive/old_upload_scripts/` (entire folder)
+### ✅ PowerShell Scripts (.ps1) in Root - REMOVED
+- `upload_files_robust.ps1` ✅ REMOVED → Use `.\unified_build.ps1 -UploadData`
+- `upload_files_robust_deprecated.ps1` ✅ REMOVED
+- `upload.ps1` ✅ REMOVED → Use `.\unified_build.ps1 -WebOTA`
+- `quick_upload.ps1` ✅ REMOVED → Use `.\unified_build.ps1 -WebOTA`
 
-### Legacy Display Library Files
-- `TFT_eSPI_Setup.h` → No longer used (project uses LovyanGFX, not TFT_eSPI)
+### ✅ Archive Folder Scripts - REMOVED
+The entire `archive/` folder has been removed containing all legacy scripts:
+- `archive/build_and_upload.ps1` ✅ REMOVED
+- `archive/upload_data*.ps1` ✅ REMOVED
+- `archive/upload_files*.ps1` ✅ REMOVED
+- `archive/old_upload_scripts/` (entire folder) ✅ REMOVED
+
+### ✅ Legacy Display Library Files - REMOVED
+- `TFT_eSPI_Setup.h` ✅ REMOVED → No longer used (project uses LovyanGFX, not TFT_eSPI)
 
 ## Files to Keep
 
@@ -44,20 +46,24 @@ The entire `archive/` folder contains old scripts that are no longer needed:
 
 ## Migration Commands
 
-To clean up the old files while preserving functionality:
+~~The cleanup has been completed. The following commands were executed:~~
 
 ```powershell
-# Remove superseded batch files
+# ✅ COMPLETED: Remove superseded batch files
 Remove-Item upload_programs.bat
+Remove-Item manual_upload.bat
 
-# Remove superseded PowerShell scripts
-Remove-Item build_and_upload_ota.ps1, upload_files_robust.ps1, upload_ota_direct.ps1
-Remove-Item upload_simple.ps1, upload_programs_index.ps1, upload_all.ps1
+# ✅ COMPLETED: Remove superseded PowerShell scripts
+Remove-Item upload_files_robust.ps1, upload_files_robust_deprecated.ps1
+Remove-Item upload.ps1, quick_upload.ps1
 
-# Remove archive folder (contains only legacy scripts)
+# ✅ COMPLETED: Remove legacy display library file
+Remove-Item TFT_eSPI_Setup.h
+
+# ✅ COMPLETED: Remove archive folder (contains only legacy scripts)
 Remove-Item archive -Recurse -Force
 
-# Verify the new unified script works
+# ✅ VERIFIED: New unified script works
 .\unified_build.ps1 -Test
 ```
 

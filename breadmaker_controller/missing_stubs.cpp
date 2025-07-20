@@ -626,9 +626,10 @@ void streamStatusJson(Print& out) {
       out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)programEndTime);
       
       // === Additional timing data for UI ===
-      if (programState.isRunning && programState.customStageStart > 0) {
+      if (programState.isRunning && programState.actualStageStartTimes[0] > 0) {
         // Calculate total program duration and elapsed/remaining for UI display
-        time_t programStart = time(nullptr) - ((millis() - programState.customStageStart) / 1000);
+        // Use the actual program start time (first stage start), not current stage start
+        time_t programStart = programState.actualStageStartTimes[0];
         unsigned long totalProgramDuration = programEndTime - programStart;
         unsigned long elapsedTime = time(nullptr) - programStart;
         unsigned long remainingTime = (programEndTime > time(nullptr)) ? (programEndTime - time(nullptr)) : 0;
