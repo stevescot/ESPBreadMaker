@@ -76,11 +76,12 @@ extern void shortBeep();
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 #endif
 
-// Helper function to get status JSON as string
+// Note: getStatusJsonString is deprecated - use direct streaming with streamStatusJson() instead
+// This function is kept for backward compatibility but creates strings in memory
 String getStatusJsonString() {
   String response;
   response.reserve(2048);
-  // ...existing code...
+  
   class StringPrint : public Print {
     String& str;
     public:
@@ -276,7 +277,51 @@ void coreEndpoints(WebServer& server) {
     
     server.on("/status", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /status requested"));
-        server.send(200, "application/json", getStatusJsonString());
+        
+        // Create a string stream for the JSON output
+        String jsonOutput = "";
+        
+        // Create a custom Print class that writes to our string
+        class StringPrint : public Print {
+            String* str;
+        public:
+            StringPrint(String* s) : str(s) {}
+            size_t write(uint8_t c) override { *str += (char)c; return 1; }
+            size_t write(const uint8_t *buffer, size_t size) override {
+                for (size_t i = 0; i < size; i++) *str += (char)buffer[i];
+                return size;
+            }
+        };
+        
+        StringPrint stringPrint(&jsonOutput);
+        streamStatusJson(stringPrint);
+        
+        server.send(200, "application/json", jsonOutput);
+    });
+    
+    // Add missing /api/status endpoint for frontend compatibility
+    server.on("/api/status", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/status requested"));
+        
+        // Create a string stream for the JSON output
+        String jsonOutput = "";
+        
+        // Create a custom Print class that writes to our string
+        class StringPrint : public Print {
+            String* str;
+        public:
+            StringPrint(String* s) : str(s) {}
+            size_t write(uint8_t c) override { *str += (char)c; return 1; }
+            size_t write(const uint8_t *buffer, size_t size) override {
+                for (size_t i = 0; i < size; i++) *str += (char)buffer[i];
+                return size;
+            }
+        };
+        
+        StringPrint stringPrint(&jsonOutput);
+        streamStatusJson(stringPrint);
+        
+        server.send(200, "application/json", jsonOutput);
     });
     
     server.on("/api/firmware_info", HTTP_GET, [&](){
@@ -852,6 +897,46 @@ void otaEndpoints(WebServer& server) {
             }
         }
     });
+    
+    // OTA firmware upload endpoint (alias for /api/update for script compatibility)
+    server.on("/api/ota/upload", HTTP_POST, [&](){
+        server.sendHeader("Connection", "close");
+        if (Update.hasError()) {
+            server.send(500, "text/plain", "OTA Update failed: " + String(Update.getError()));
+        } else {
+            server.send(200, "text/plain", "OTA Update successful! Rebooting...");
+            delay(100);
+            ESP.restart();
+        }
+    }, [&](){
+        // Handle firmware upload (same as /api/update)
+        HTTPUpload& upload = server.upload();
+        
+        if (upload.status == UPLOAD_FILE_START) {
+            if (debugSerial) Serial.printf("[OTA] Starting firmware update: %s\n", upload.filename.c_str());
+            
+            // Begin firmware update
+            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+                if (debugSerial) Serial.printf("[OTA] Begin failed: %s\n", Update.errorString());
+                return;
+            }
+            
+        } else if (upload.status == UPLOAD_FILE_WRITE) {
+            // Write firmware data
+            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+                if (debugSerial) Serial.printf("[OTA] Write failed: %s\n", Update.errorString());
+                return;
+            }
+            
+        } else if (upload.status == UPLOAD_FILE_END) {
+            // Complete firmware update
+            if (Update.end(true)) {
+                if (debugSerial) Serial.printf("[OTA] Firmware update completed: %u bytes\n", upload.totalSize);
+            } else {
+                if (debugSerial) Serial.printf("[OTA] End failed: %s\n", Update.errorString());
+            }
+        }
+    });
 }
 
 // Main registration function
@@ -1001,6 +1086,47 @@ void registerWebEndpoints(WebServer& server) {
             // Return current temperature - this should work with existing code
             float currentTemp = readTemperature();
             server.send(200, "application/json", "{\"temperature\":" + String(currentTemp) + "}");
+        }
+    });
+    
+    // Missing API endpoints for output control (expected by script.js)
+    server.on("/api/heater", HTTP_GET, [&](){
+        if (server.hasArg("on")) {
+            bool on = server.arg("on") == "1";
+            setHeater(on);
+            server.send(200, "application/json", "{\"heater\":" + String(on ? "true" : "false") + "}");
+        } else {
+            server.send(200, "application/json", "{\"heater\":" + String(outputStates.heater ? "true" : "false") + "}");
+        }
+    });
+    
+    server.on("/api/motor", HTTP_GET, [&](){
+        if (server.hasArg("on")) {
+            bool on = server.arg("on") == "1";
+            setMotor(on);
+            server.send(200, "application/json", "{\"motor\":" + String(on ? "true" : "false") + "}");
+        } else {
+            server.send(200, "application/json", "{\"motor\":" + String(outputStates.motor ? "true" : "false") + "}");
+        }
+    });
+    
+    server.on("/api/light", HTTP_GET, [&](){
+        if (server.hasArg("on")) {
+            bool on = server.arg("on") == "1";
+            setLight(on);
+            server.send(200, "application/json", "{\"light\":" + String(on ? "true" : "false") + "}");
+        } else {
+            server.send(200, "application/json", "{\"light\":" + String(outputStates.light ? "true" : "false") + "}");
+        }
+    });
+    
+    server.on("/api/buzzer", HTTP_GET, [&](){
+        if (server.hasArg("on")) {
+            bool on = server.arg("on") == "1";
+            setBuzzer(on);
+            server.send(200, "application/json", "{\"buzzer\":" + String(on ? "true" : "false") + "}");
+        } else {
+            server.send(200, "application/json", "{\"buzzer\":" + String(outputStates.buzzer ? "true" : "false") + "}");
         }
     });
     

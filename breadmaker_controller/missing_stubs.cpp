@@ -11,6 +11,11 @@
 #include <WiFi.h>
 #endif
 
+// Define build date if not already defined
+#ifndef FIRMWARE_BUILD_DATE
+#define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
+#endif
+
 // Stub implementations for missing functions
 
 // Add these includes if needed
@@ -33,6 +38,11 @@ extern void invalidateStatusCache();
 extern void clearResumeState();
 extern size_t getProgramCount();
 extern String getProgramName(int programId);
+extern bool isProgramValid(int programId);
+extern bool ensureProgramLoaded(int programId);
+extern Program* getActiveProgramMutable();
+extern void switchToProfile(const String& profileName);
+extern void saveSettings();
 
 // Performance tracking variables
 static unsigned long lastLoopTime = 0;
@@ -479,20 +489,208 @@ void displayMessage(const String& message) {
   Serial.println("Display: " + message);
 }
 
-// Stream status JSON function - basic implementation
+// Stream status JSON function - comprehensive implementation
+// This function streams JSON directly without creating large strings in memory
 void streamStatusJson(Print& out) {
-  // Basic status JSON for web endpoints
+  // Start main JSON object
   out.print("{");
-  out.print("\"temperature\":" + String(getAveragedTemperature(), 1) + ",");
-  out.print("\"running\":" + String(programState.isRunning ? "true" : "false") + ",");
-  out.print("\"stage\":" + String(programState.customStageIdx) + ",");
   
-  // Add current program name for frontend display
-  String currentProgramName = getProgramName(programState.activeProgramId);
-  if (currentProgramName.length() > 0) {
-    out.print("\"program\":\"" + currentProgramName + "\",");
+  // === Core State ===
+  out.print("\"state\":\"");
+  out.print(programState.isRunning ? "on" : "off");
+  out.print("\",");
+  
+  out.print("\"running\":");
+  out.print(programState.isRunning ? "true" : "false");
+  out.print(",");
+  
+  // === Program Information ===
+  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+    Program* p = getActiveProgramMutable();
+    if (p) {
+      out.print("\"program\":\"");
+      out.print(p->name);
+      out.print("\",");
+      
+      out.printf("\"programId\":%d,", programState.activeProgramId);
+      
+      // === Stage Information ===
+      if (programState.customStageIdx < p->customStages.size()) {
+        CustomStage& stage = p->customStages[programState.customStageIdx];
+        
+        out.print("\"stage\":\"");
+        out.print(stage.label);
+        out.print("\",");
+        
+        out.printf("\"stageIdx\":%u,", (unsigned)programState.customStageIdx);
+        out.printf("\"setpoint\":%.1f,", stage.temp);
+        
+        // Calculate time left in current stage
+        unsigned long timeLeft = 0;
+        if (programState.isRunning && programState.customStageStart > 0) {
+          unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
+          unsigned long stageDuration = stage.min * 60;
+          timeLeft = (elapsed < stageDuration) ? (stageDuration - elapsed) : 0;
+        }
+        out.printf("\"stage_time_left\":%lu,", timeLeft);
+        out.printf("\"timeLeft\":%lu,", timeLeft);
+        
+        // Stage ready time
+        if (programState.isRunning && timeLeft > 0) {
+          unsigned long readyAt = (time(nullptr) + timeLeft) * 1000; // Convert to ms
+          out.printf("\"stage_ready_at\":%lu,", readyAt);
+          out.printf("\"stageReadyAt\":%lu,", readyAt / 1000);
+        } else {
+          out.print("\"stage_ready_at\":0,");
+          out.print("\"stageReadyAt\":0");
+        }
+        out.print(",");
+      } else {
+        out.print("\"stage\":\"Idle\",");
+        out.print("\"stageIdx\":0,");
+        out.print("\"setpoint\":0,");
+        out.print("\"stage_time_left\":0,");
+        out.print("\"timeLeft\":0,");
+        out.print("\"stage_ready_at\":0,");
+        out.print("\"stageReadyAt\":0,");
+      }
+    } else {
+      out.print("\"program\":\"Unknown\",");
+      out.printf("\"programId\":%d,", programState.activeProgramId);
+      out.print("\"stage\":\"Idle\",");
+      out.print("\"stageIdx\":0,");
+      out.print("\"setpoint\":0,");
+      out.print("\"stage_time_left\":0,");
+      out.print("\"timeLeft\":0,");
+      out.print("\"stage_ready_at\":0,");
+      out.print("\"stageReadyAt\":0,");
+    }
+  } else {
+    out.print("\"program\":\"None\",");
+    out.print("\"programId\":-1,");
+    out.print("\"stage\":\"Idle\",");
+    out.print("\"stageIdx\":0,");
+    out.print("\"setpoint\":0,");
+    out.print("\"stage_time_left\":0,");
+    out.print("\"timeLeft\":0,");
+    out.print("\"stage_ready_at\":0,");
+    out.print("\"stageReadyAt\":0,");
   }
   
+  // === Temperature and Outputs ===
+  float temp = getAveragedTemperature();
+  out.printf("\"temperature\":%.1f,", temp);
+  out.printf("\"temp\":%.1f,", temp);
+  out.printf("\"setTemp\":%.1f,", pid.Setpoint);
+  
+  out.print("\"heater\":");
+  out.print(outputStates.heater ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"motor\":");
+  out.print(outputStates.motor ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"light\":");
+  out.print(outputStates.light ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"buzzer\":");
+  out.print(outputStates.buzzer ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"manual_mode\":");
+  out.print(programState.manualMode ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"manualMode\":");
+  out.print(programState.manualMode ? "true" : "false");
+  out.print(",");
+  
+  // === Mix and Timing ===
+  out.printf("\"mixIdx\":%u,", (unsigned)programState.customMixIdx);
+  
+  // === Program Completion Prediction ===
+  if (fermentState.predictedCompleteTime > 0) {
+    out.printf("\"program_ready_at\":%lu,", fermentState.predictedCompleteTime * 1000);
+    out.printf("\"programReadyAt\":%lu,", fermentState.predictedCompleteTime);
+    out.printf("\"predictedCompleteTime\":%lu,", fermentState.predictedCompleteTime * 1000);
+  } else {
+    out.print("\"program_ready_at\":0,");
+    out.print("\"programReadyAt\":0,");
+    out.print("\"predictedCompleteTime\":0,");
+  }
+  
+  // === Startup Delay ===
+  bool startupComplete = isStartupDelayComplete();
+  out.print("\"startupDelayComplete\":");
+  out.print(startupComplete ? "true" : "false");
+  out.print(",");
+  
+  if (!startupComplete) {
+    unsigned long remaining = STARTUP_DELAY_MS - (millis() - startupTime);
+    out.printf("\"startupDelayRemainingMs\":%lu,", remaining);
+  } else {
+    out.print("\"startupDelayRemainingMs\":0,");
+  }
+  
+  // === Fermentation Data ===
+  out.printf("\"fermentationFactor\":%.3f,", fermentState.fermentationFactor);
+  out.printf("\"initialFermentTemp\":%.1f,", fermentState.initialFermentTemp);
+  
+  // === Stage Start Times Array ===
+  out.print("\"actualStageStartTimes\":[");
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) out.print(",");
+    out.printf("%lu", (unsigned long)programState.actualStageStartTimes[i]);
+  }
+  out.print("],");
+  
+  // === Health and System Data ===
+  out.printf("\"uptime_sec\":%lu,", millis() / 1000);
+  
+  out.print("\"firmware_version\":\"ESP32-WebServer\",");
+  
+  out.print("\"build_date\":\"");
+  out.print(FIRMWARE_BUILD_DATE);
+  out.print("\",");
+  
+  out.printf("\"free_heap\":%u,", ESP.getFreeHeap());
+  
+  out.print("\"connected\":");
+  out.print(WiFi.status() == WL_CONNECTED ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"ip\":\"");
+  out.print(WiFi.localIP().toString());
+  out.print("\",");
+  
+  // === WiFi Details ===
+  out.print("\"wifi\":{");
+  if (WiFi.status() == WL_CONNECTED) {
+    out.print("\"connected\":true,");
+    out.print("\"ssid\":\"");
+    out.print(WiFi.SSID());
+    out.print("\",");
+    out.printf("\"rssi\":%d,", WiFi.RSSI());
+    out.print("\"ip\":\"");
+    out.print(WiFi.localIP().toString());
+    out.print("\"");
+  } else {
+    out.print("\"connected\":false");
+  }
+  out.print("},");
+  
+  // === PID Information for debugging ===
+  out.printf("\"pid_kp\":%.6f,", pid.Kp);
+  out.printf("\"pid_ki\":%.6f,", pid.Ki);
+  out.printf("\"pid_kd\":%.6f,", pid.Kd);
+  out.printf("\"pid_output\":%.3f,", pid.Output);
+  out.printf("\"pid_input\":%.1f,", pid.Input);
+  
+  // === Status ===
   out.print("\"status\":\"ok\"");
+  
+  // Close main JSON object
   out.print("}");
 }
