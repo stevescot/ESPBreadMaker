@@ -13,8 +13,20 @@ LGFX display;
 
 // Display state variables
 static DisplayState currentState = DISPLAY_STATUS;
+static DisplayState lastState = DISPLAY_STATUS;
 static unsigned long lastDisplayUpdate = 0;
-static const unsigned long DISPLAY_UPDATE_INTERVAL = 500; // Update every 500ms
+static const unsigned long DISPLAY_UPDATE_INTERVAL = 1000; // Update every 1000ms (reduced frequency)
+
+// Cached values to detect changes
+static float lastTemperature = -999.0;
+static bool lastHeaterState = false;
+static bool lastMotorState = false;
+static bool lastLightState = false;
+static bool lastBuzzerState = false;
+static bool lastRunningState = false;
+static String lastProgramName = "";
+static String lastStageName = "";
+static bool forceFullRedraw = true;
 
 // Button pins for TTGO T-Display
 const int BUTTON_1 = 0;
@@ -48,6 +60,12 @@ void updateDisplay() {
   if (now - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
     lastDisplayUpdate = now;
     
+    // Check if we need a full redraw (state change)
+    if (currentState != lastState) {
+      forceFullRedraw = true;
+      lastState = currentState;
+    }
+    
     switch (currentState) {
       case DISPLAY_STATUS:
         displayStatus();
@@ -65,6 +83,8 @@ void updateDisplay() {
         displayWiFiSetup();
         break;
     }
+    
+    forceFullRedraw = false; // Reset after update
   }
   
   // Handle button presses
@@ -72,141 +92,194 @@ void updateDisplay() {
 }
 
 void displayStatus() {
-  display.fillScreen(COLOR_BLACK);
+  // Only clear screen if we need a full redraw
+  if (forceFullRedraw) {
+    display.fillScreen(COLOR_BLACK);
+    
+    // Title (static, only draw on full redraw)
+    display.setTextColor(COLOR_WHITE);
+    display.setTextSize(2);
+    display.setCursor(5, 5);
+    display.println("Breadmaker");
+  }
   
-  // Title
-  display.setTextColor(COLOR_WHITE);
-  display.setTextSize(2);
-  display.setCursor(5, 5);
-  display.println("Breadmaker");
-  
-  // Temperature on the right side
+  // Temperature on the right side - only update if changed
   float temp = readTemperature();
-  drawTemperature(140, 5, temp);
+  if (forceFullRedraw || abs(temp - lastTemperature) > 0.5) { // Update if temp changed by more than 0.5°C
+    // Clear temperature area
+    display.fillRect(140, 5, 95, 25, COLOR_BLACK);
+    drawTemperature(140, 5, temp);
+    lastTemperature = temp;
+  }
   
   // Current program info
   const Program* activeProgram = getActiveProgram();
-  if (activeProgram && programState.isRunning) {
-    // Show current stage
-    if (programState.customStageIdx < activeProgram->customStages.size()) {
-      const CustomStage& stage = activeProgram->customStages[programState.customStageIdx];
-      drawStageInfo(5, 35, stage.label, 0); // TODO: Calculate time left
-    }
-    
-    // Show progress bar - wider for landscape
-    float progress = 0.5; // TODO: Calculate actual progress
-    drawProgressBar(5, 65, 220, 15, progress);
-  } else {
-    display.setTextColor(COLOR_GRAY);
-    display.setTextSize(1);
-    display.setCursor(5, 35);
-    display.println("No program running");
+  bool currentRunning = (activeProgram && programState.isRunning);
+  String currentProgramName = activeProgram ? String(activeProgram->name) : "";
+  String currentStageName = "";
+  
+  if (currentRunning && programState.customStageIdx < activeProgram->customStages.size()) {
+    const CustomStage& stage = activeProgram->customStages[programState.customStageIdx];
+    currentStageName = String(stage.label);
   }
   
-  // Output states at bottom
-  drawOutputStates(5, 95, outputStates.heater, outputStates.motor, 
-                   outputStates.light, outputStates.buzzer);
+  // Only update program area if something changed
+  if (forceFullRedraw || currentRunning != lastRunningState || 
+      currentProgramName != lastProgramName || currentStageName != lastStageName) {
+    
+    // Clear program area
+    display.fillRect(5, 35, 230, 55, COLOR_BLACK);
+    
+    if (currentRunning) {
+      // Show current stage
+      drawStageInfo(5, 35, currentStageName.c_str(), 0); // TODO: Calculate time left
+      
+      // Show progress bar - wider for landscape
+      float progress = 0.5; // TODO: Calculate actual progress
+      drawProgressBar(5, 65, 220, 15, progress);
+    } else {
+      display.setTextColor(COLOR_GRAY);
+      display.setTextSize(1);
+      display.setCursor(5, 35);
+      display.println("No program running");
+    }
+    
+    lastRunningState = currentRunning;
+    lastProgramName = currentProgramName;
+    lastStageName = currentStageName;
+  }
+  
+  // Output states at bottom - only update if changed
+  if (forceFullRedraw || 
+      outputStates.heater != lastHeaterState ||
+      outputStates.motor != lastMotorState ||
+      outputStates.light != lastLightState ||
+      outputStates.buzzer != lastBuzzerState) {
+    
+    // Clear output area
+    display.fillRect(5, 95, 230, 35, COLOR_BLACK);
+    drawOutputStates(5, 95, outputStates.heater, outputStates.motor, 
+                     outputStates.light, outputStates.buzzer);
+    
+    lastHeaterState = outputStates.heater;
+    lastMotorState = outputStates.motor;
+    lastLightState = outputStates.light;
+    lastBuzzerState = outputStates.buzzer;
+  }
 }
 
 void displayMenu() {
-  display.fillScreen(COLOR_BLACK);
-  
-  display.setTextColor(COLOR_WHITE);
-  display.setTextSize(2);
-  display.setCursor(5, 5);
-  display.println("Menu");
-  
-  display.setTextSize(1);
-  display.setCursor(5, 30);
-  display.println("1. Status");
-  display.setCursor(5, 45);
-  display.println("2. Programs");
-  display.setCursor(5, 60);
-  display.println("3. Settings");
-  display.setCursor(5, 75);
-  display.println("4. WiFi Setup");
-  
-  display.setTextColor(COLOR_GRAY);
-  display.setCursor(5, 110);
-  display.println("BTN1: Select  BTN2: Back");
+  // Only clear screen on state change
+  if (forceFullRedraw) {
+    display.fillScreen(COLOR_BLACK);
+    
+    display.setTextColor(COLOR_WHITE);
+    display.setTextSize(2);
+    display.setCursor(5, 5);
+    display.println("Menu");
+    
+    display.setTextSize(1);
+    display.setCursor(5, 30);
+    display.println("1. Status");
+    display.setCursor(5, 45);
+    display.println("2. Programs");
+    display.setCursor(5, 60);
+    display.println("3. Settings");
+    display.setCursor(5, 75);
+    display.println("4. WiFi Setup");
+    
+    display.setTextColor(COLOR_GRAY);
+    display.setCursor(5, 110);
+    display.println("BTN1: Select  BTN2: Back");
+  }
 }
 
 void displayPrograms() {
-  display.fillScreen(COLOR_BLACK);
-  
-  display.setTextColor(COLOR_WHITE);
-  display.setTextSize(2);
-  display.setCursor(5, 5);
-  display.println("Programs");
-  
-  // Show available programs in two columns for landscape
-  const auto& metadata = getProgramMetadata();
-  int y = 30;
-  int col1_x = 5;
-  int col2_x = 125;
-  
-  for (size_t i = 0; i < metadata.size() && i < 8; i++) {
-    display.setTextSize(1);
-    if (i < 4) {
-      display.setCursor(col1_x, y + (i * 15));
-    } else {
-      display.setCursor(col2_x, y + ((i-4) * 15));
+  // Only clear screen on state change
+  if (forceFullRedraw) {
+    display.fillScreen(COLOR_BLACK);
+    
+    display.setTextColor(COLOR_WHITE);
+    display.setTextSize(2);
+    display.setCursor(5, 5);
+    display.println("Programs");
+    
+    // Show available programs in two columns for landscape
+    const auto& metadata = getProgramMetadata();
+    int y = 30;
+    int col1_x = 5;
+    int col2_x = 125;
+    
+    for (size_t i = 0; i < metadata.size() && i < 8; i++) {
+      display.setTextSize(1);
+      if (i < 4) {
+        display.setCursor(col1_x, y + (i * 15));
+      } else {
+        display.setCursor(col2_x, y + ((i-4) * 15));
+      }
+      display.printf("%d. %s", metadata[i].id, metadata[i].name.c_str());
     }
-    display.printf("%d. %s", metadata[i].id, metadata[i].name.c_str());
+    display.setTextColor(COLOR_GRAY);
+    display.setCursor(5, 110);
+    display.println("BTN1: Select  BTN2: Back");
   }
-  
-  display.setTextColor(COLOR_GRAY);
-  display.setCursor(5, 110);
-  display.println("BTN1: Select  BTN2: Back");
 }
 
 void displaySettings() {
-  display.fillScreen(COLOR_BLACK);
-  
-  display.setTextColor(COLOR_WHITE);
-  display.setTextSize(2);
-  display.setCursor(10, 10);
-  display.println("Settings");
-  
-  display.setTextSize(1);
-  display.setCursor(10, 40);
-  display.printf("Heap: %d bytes", ESP.getFreeHeap());
-  display.setCursor(10, 55);
-  display.printf("Build: %s", FIRMWARE_BUILD_DATE);
-  
-  display.setTextColor(COLOR_GRAY);
-  display.setCursor(10, 115);
-  display.println("BTN1: Select  BTN2: Back");
+  // Only clear screen on state change
+  if (forceFullRedraw) {
+    display.fillScreen(COLOR_BLACK);
+    
+    display.setTextColor(COLOR_WHITE);
+    display.setTextSize(2);
+    display.setCursor(10, 10);
+    display.println("Settings");
+    display.println("Settings");
+    
+    display.setTextSize(1);
+    display.setCursor(10, 40);
+    display.printf("Heap: %d bytes", ESP.getFreeHeap());
+    display.setCursor(10, 55);
+    display.printf("Build: %s", FIRMWARE_BUILD_DATE);
+    
+    display.setTextColor(COLOR_GRAY);
+    display.setCursor(10, 115);
+    display.println("BTN1: Select  BTN2: Back");
+  }
 }
 
 void displayWiFiSetup() {
-  display.fillScreen(COLOR_BLACK);
-  
-  display.setTextColor(COLOR_WHITE);
-  display.setTextSize(2);
-  display.setCursor(10, 10);
-  display.println("WiFi Setup");
-  
-  display.setTextSize(1);
-  display.setCursor(10, 40);
-  if (WiFi.status() == WL_CONNECTED) {
-    display.setTextColor(COLOR_GREEN);
-    display.println("Connected");
-    display.setCursor(10, 55);
-    display.printf("IP: %s", WiFi.localIP().toString().c_str());
-  } else {
-    display.setTextColor(COLOR_RED);
-    display.println("Disconnected");
-    display.setCursor(10, 55);
-    display.println("Starting AP mode...");
+  // Only clear screen on state change
+  if (forceFullRedraw) {
+    display.fillScreen(COLOR_BLACK);
+    
+    display.setTextColor(COLOR_WHITE);
+    display.setTextSize(2);
+    display.setCursor(10, 10);
+    display.println("WiFi Setup");
+    
+    display.setTextSize(1);
+    display.setCursor(10, 40);
+    if (WiFi.status() == WL_CONNECTED) {
+      display.setTextColor(COLOR_GREEN);
+      display.println("Connected");
+      display.setCursor(10, 55);
+      display.printf("IP: %s", WiFi.localIP().toString().c_str());
+    } else {
+      display.setTextColor(COLOR_RED);
+      display.println("Disconnected");
+      display.setCursor(10, 55);
+      display.println("Starting AP mode...");
+    }
+    
+    display.setTextColor(COLOR_GRAY);
+    display.setCursor(10, 115);
+    display.println("BTN1: Select  BTN2: Back");
   }
-  
-  display.setTextColor(COLOR_GRAY);
-  display.setCursor(10, 115);
-  display.println("BTN1: Select  BTN2: Back");
 }
 
 void displayError(const String& message) {
+  // Error display should always update immediately
   display.fillScreen(COLOR_RED);
   display.setTextColor(COLOR_WHITE);
   display.setTextSize(2);
@@ -289,6 +362,7 @@ void handleButtons() {
 
 void setDisplayState(DisplayState state) {
   currentState = state;
+  forceFullRedraw = true; // Force full redraw when state changes
   lastDisplayUpdate = 0; // Force immediate update
 }
 

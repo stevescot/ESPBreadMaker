@@ -243,6 +243,7 @@ function Send-OTAToESP32 {
         
         # Look for the main firmware binary
         $patterns = @(
+            "build\breadmaker_controller.ino.bin",
             "*.ino.bin",
             "breadmaker_controller.ino.bin", 
             "build/*.ino.bin",
@@ -251,7 +252,7 @@ function Send-OTAToESP32 {
         
         foreach ($pattern in $patterns) {
             $files = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Where-Object { 
-                $_.Name -notmatch "bootloader|partition" -and $_.Length -gt 100KB
+                $_.Name -notmatch "bootloader|partition|fatfs" -and $_.Length -gt 100KB
             } | Sort-Object LastWriteTime -Descending
             
             if ($files) {
@@ -280,37 +281,99 @@ function Send-OTAToESP32 {
         Write-Host "Firmware file: $FirmwareFile ($([math]::Round($fileSize/1KB, 1)) KB)" -ForegroundColor White
     }
     
-    # Use python espota.py if available, otherwise try Arduino CLI
-    $espotaScript = Get-Command "espota.py" -ErrorAction SilentlyContinue
-    if ($espotaScript) {
+    # Try to find espota.py in Arduino ESP32 installation (same method as build_esp32.ps1)
+    $possiblePaths = @(
+        "$env:LOCALAPPDATA\Arduino15\packages\esp32\hardware\esp32\*\tools\espota.py",
+        "$env:APPDATA\Arduino15\packages\esp32\hardware\esp32\*\tools\espota.py",
+        "C:\Users\*\AppData\Local\Arduino15\packages\esp32\hardware\esp32\*\tools\espota.py"
+    )
+    
+    $espotaPath = $null
+    foreach ($pathPattern in $possiblePaths) {
+        $found = Get-ChildItem $pathPattern -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) {
+            $espotaPath = $found.FullName
+            break
+        }
+    }
+    
+    if (-not $espotaPath) {
+        Write-Host "ERROR: espota.py not found in Arduino ESP32 installation" -ForegroundColor Red
+        Write-Host "Please make sure ESP32 Arduino Core is installed via Arduino IDE or arduino-cli" -ForegroundColor Yellow
+        return $false
+    }
+    
+    if (-not $Quiet) {
+        Write-Host "Using espota.py: $espotaPath" -ForegroundColor Green
+    }
+    
+    # Test connectivity (same method as build_esp32.ps1)
+    if (-not $Quiet) {
+        Write-Host "Testing connectivity to $IP`:$Port..." -ForegroundColor Blue
+    }
+    try {
+        $tcpClient = New-Object System.Net.Sockets.TcpClient
+        $tcpClient.ReceiveTimeout = 3000
+        $tcpClient.SendTimeout = 3000
+        $tcpClient.Connect($IP, $Port)
+        $tcpClient.Close()
         if (-not $Quiet) {
-            Write-Host "Using espota.py for OTA upload..." -ForegroundColor Yellow
+            Write-Host "✓ Device is reachable" -ForegroundColor Green
         }
-        
-        $otaCommand = "python `"$($espotaScript.Source)`" -i $IP -p $Port -a `"$plainPassword`" -f `"$FirmwareFile`""
-        
-        try {
-            if (-not $Quiet) {
-                Write-Host "Running: $otaCommand" -ForegroundColor Cyan
-            }
-            
-            $result = cmd /c $otaCommand 2>&1
-            
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "OTA upload completed successfully!" -ForegroundColor Green
-                return $true
-            } else {
-                Write-Host "OTA upload failed with exit code: $LASTEXITCODE" -ForegroundColor Red
-                Write-Host "Output: $result" -ForegroundColor Yellow
-                return $false
-            }
-        }
-        catch {
-            Write-Host "Error running espota.py: $($_.Exception.Message)" -ForegroundColor Red
-            return $false
-        }
+    } catch {
+        Write-Host "✗ Cannot reach device at $IP`:$Port" -ForegroundColor Red
+        Write-Host "Make sure the ESP32 is:" -ForegroundColor Yellow
+        Write-Host "  - Connected to WiFi" -ForegroundColor White
+        Write-Host "  - Running firmware with OTA enabled" -ForegroundColor White
+        Write-Host "  - Accessible on the network" -ForegroundColor White
+        return $false
+    }
+    
+    # Execute OTA upload (same method as build_esp32.ps1)
+    if (-not $Quiet) {
+        Write-Host "Starting OTA upload..." -ForegroundColor Blue
+    }
+    $espotaArgs = @("-i", $IP, "-p", $Port.ToString(), "-f", "`"$FirmwareFile`"")
+    if ($plainPassword) {
+        $espotaArgs += @("-a", $plainPassword)
+    }
+    
+    if (-not $Quiet) {
+        Write-Host "Command: python `"$espotaPath`" $($espotaArgs -join ' ')" -ForegroundColor Gray
+    }
+    
+    $process = Start-Process -FilePath "python" -ArgumentList (@("`"$espotaPath`"") + $espotaArgs) -NoNewWindow -Wait -PassThru -RedirectStandardOutput "ota_output.log" -RedirectStandardError "ota_error.log"
+    
+    # Check results
+    if ($process.ExitCode -eq 0) {
+        Write-Host "✓ OTA upload completed successfully!" -ForegroundColor Green
+        # Cleanup log files
+        Remove-Item "ota_output.log" -ErrorAction SilentlyContinue
+        Remove-Item "ota_error.log" -ErrorAction SilentlyContinue
+        return $true
     } else {
-        Write-Host "ERROR: espota.py not found. Please install ESP32 tools or specify firmware upload method." -ForegroundColor Red
+        Write-Host "✗ OTA upload failed!" -ForegroundColor Red
+        Write-Host "Exit code: $($process.ExitCode)" -ForegroundColor Red
+        
+        if (Test-Path "ota_error.log") {
+            $errorContent = Get-Content "ota_error.log"
+            if ($errorContent) {
+                Write-Host "Error details:" -ForegroundColor Yellow
+                Write-Host $errorContent -ForegroundColor Red
+            }
+        }
+        
+        if (Test-Path "ota_output.log") {
+            $outputContent = Get-Content "ota_output.log"
+            if ($outputContent) {
+                Write-Host "Output:" -ForegroundColor Yellow
+                Write-Host $outputContent -ForegroundColor White
+            }
+        }
+        
+        # Cleanup log files
+        Remove-Item "ota_output.log" -ErrorAction SilentlyContinue
+        Remove-Item "ota_error.log" -ErrorAction SilentlyContinue
         return $false
     }
 }

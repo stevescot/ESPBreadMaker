@@ -232,6 +232,13 @@ void initialState(){
   updateActiveProgramVars(); // Initialize program variables after loading
   loadCalibration();
   Serial.println(F("[setup] Calibration loaded."));
+  
+  // Initialize fermentation tracking
+  float initialTemp = getAveragedTemperature();
+  resetFermentationTracking(initialTemp);
+  Serial.printf("[setup] Fermentation tracking initialized: temp=%.1f°C, factor=%.3fx\n", 
+                initialTemp, fermentState.fermentationFactor);
+  
   loadSettings();
   Serial.println(F("[setup] Settings loaded."));
   loadResumeState();
@@ -624,19 +631,19 @@ void resetFermentationTracking(float temp) {
   
   if (debugSerial) Serial.printf("[FERMENT] Tracking reset: temp=%.1f, previous weighted=%.1fs, clearing all timers\n", temp, fermentState.fermentWeightedSec);
   
-  fermentState.initialFermentTemp = 0.0;
-  fermentState.fermentationFactor = 1.0;
+  fermentState.initialFermentTemp = temp;
+  fermentState.fermentationFactor = calculateFermentationFactor(temp); // Calculate proper factor
   fermentState.predictedCompleteTime = 0;
   fermentState.lastFermentAdjust = 0;
   fermentState.fermentLastTemp = temp;
-  fermentState.fermentLastFactor = 1.0;
-  fermentState.fermentLastUpdateMs = 0;
+  fermentState.fermentLastFactor = fermentState.fermentationFactor;
+  fermentState.fermentLastUpdateMs = now;
   fermentState.fermentWeightedSec = 0.0;
   
   // Reset rate limiting to allow immediate update for new stage
   lastFermentUpdate = 0;
   
-  if (debugSerial) Serial.printf("[FERMENT] Tracking reset complete: all variables cleared\n");
+  if (debugSerial) Serial.printf("[FERMENT] Tracking reset complete: factor=%.3fx\n", fermentState.fermentationFactor);
 }
 
 // Helper to reset fermentation rate limiting
@@ -664,6 +671,7 @@ void handleCustomStages(bool &stageJustAdvanced);
 void loop() {
   updatePerformanceMetrics(); // Track performance for Home Assistant endpoint
   updateTemperatureSampling();
+  updateFermentationFactor(); // Update fermentation calculations based on current temperature
   updateBuzzerTone();
   updateDisplay(); // Update TFT display
   otaManagerLoop(); // Handle OTA updates via OTA manager

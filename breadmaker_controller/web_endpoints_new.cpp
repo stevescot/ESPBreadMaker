@@ -10,6 +10,8 @@
 #include <FFat.h>
 #include "ota_manager.h"
 #include <Update.h>  // For web-based firmware updates
+#include <algorithm>  // For std::sort
+#include "missing_stubs.h"  // For getAdjustedStageTimeMs and other functions
 
 // External OTA status for web integration
 extern OTAStatus otaStatus;
@@ -690,15 +692,261 @@ void pidProfileEndpoints(WebServer& server) {
 }
 
 void homeAssistantEndpoint(WebServer& server) {
-    server.on("/api/home_assistant", HTTP_GET, [&](){
-        server.send(200, "application/json", getStatusJsonString());
+    // Home Assistant integration endpoint (matches template configuration.yaml)
+    server.on("/ha", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /ha requested"));
+        
+        String response = "{";
+        
+        // Basic status - matches template expectations
+        response += "\"state\":\"" + String(programState.isRunning ? "running" : "idle") + "\",";
+        response += "\"temperature\":" + String(getAveragedTemperature(), 1) + ",";
+        response += "\"setpoint\":" + String(pid.Setpoint, 1) + ",";
+        
+        // Output states (direct boolean values as expected)
+        response += "\"motor\":" + String(outputStates.motor ? "true" : "false") + ",";
+        response += "\"light\":" + String(outputStates.light ? "true" : "false") + ",";
+        response += "\"buzzer\":" + String(outputStates.buzzer ? "true" : "false") + ",";
+        response += "\"heater\":" + String(outputStates.heater ? "true" : "false") + ",";
+        response += "\"manual_mode\":" + String(programState.manualMode ? "true" : "false") + ",";
+        
+        // Program and stage info
+        if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+            Program* p = getActiveProgramMutable();
+            if (p) {
+                response += "\"program\":\"" + String(p->name.c_str()) + "\",";
+                
+                if (programState.isRunning && programState.customStageIdx < p->customStages.size()) {
+                    response += "\"stage\":\"" + String(p->customStages[programState.customStageIdx].label.c_str()) + "\",";
+                    
+                    // Calculate total program remaining time (stage + all remaining stages)
+                    unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+                    unsigned long stageTimeMs = getAdjustedStageTimeMs(p->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                       p->customStages[programState.customStageIdx].isFermentation);
+                    unsigned long stageTimeLeft = (stageTimeMs / 1000) - elapsed;
+                    if (stageTimeLeft < 0) stageTimeLeft = 0;
+                    
+                    // Add time for all remaining stages
+                    unsigned long totalRemainingTime = stageTimeLeft;
+                    for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
+                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
+                                                                                  p->customStages[i].isFermentation);
+                        totalRemainingTime += adjustedDurationMs / 1000;
+                    }
+                    
+                    response += "\"stage_time_left\":" + String(totalRemainingTime / 60) + ","; // Convert to minutes
+                } else if (!programState.isRunning) {
+                    // Not running - calculate total program time if started now
+                    response += "\"stage\":\"Idle\",";
+                    
+                    unsigned long totalProgramTime = 0;
+                    for (size_t i = 0; i < p->customStages.size(); ++i) {
+                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
+                                                                                  p->customStages[i].isFermentation);
+                        totalProgramTime += adjustedDurationMs / 1000;
+                    }
+                    response += "\"stage_time_left\":" + String(totalProgramTime / 60) + ","; // Convert to minutes
+                } else {
+                    response += "\"stage\":\"Idle\",";
+                    response += "\"stage_time_left\":0,";
+                }
+            } else {
+                response += "\"program\":\"\",";
+                response += "\"stage\":\"Idle\",";
+                response += "\"stage_time_left\":0,";
+            }
+        } else {
+            response += "\"program\":\"\",";
+            response += "\"stage\":\"Idle\",";
+            response += "\"stage_time_left\":0,";
+        }
+        
+        // Timing information (Unix timestamps as expected)
+        time_t now = time(nullptr);
+        time_t stageReadyAt = 0;
+        time_t programReadyAt = 0;
+        
+        if (programState.isRunning && programState.activeProgramId >= 0) {
+            Program* p = getActiveProgramMutable();
+            if (p && programState.customStageIdx < p->customStages.size()) {
+                unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+                unsigned long stageTimeMs = getAdjustedStageTimeMs(p->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                   p->customStages[programState.customStageIdx].isFermentation);
+                int timeLeftSec = (stageTimeMs / 1000) - elapsed;
+                if (timeLeftSec < 0) timeLeftSec = 0;
+                
+                stageReadyAt = now + timeLeftSec;
+                
+                // Calculate total program time remaining using fermentation adjustments
+                programReadyAt = stageReadyAt;
+                for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
+                    unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
+                                                                              p->customStages[i].isFermentation);
+                    programReadyAt += adjustedDurationMs / 1000;
+                }
+            }
+        }
+        
+        response += "\"stage_ready_at\":" + String((unsigned long)stageReadyAt) + ",";
+        response += "\"program_ready_at\":" + String((unsigned long)programReadyAt) + ",";
+        
+        // Health section (comprehensive system information as expected by template)
+        response += "\"health\":{";
+        
+        // System info
+        response += "\"uptime_sec\":" + String(millis() / 1000) + ",";
+        response += "\"firmware_version\":\"ESP32-WebServer\",";
+        response += "\"build_date\":\"" + String(__DATE__) + " " + String(__TIME__) + "\",";
+        response += "\"reset_reason\":\"" + String(esp_reset_reason()) + "\",";
+        response += "\"chip_id\":\"" + String((uint32_t)ESP.getEfuseMac(), HEX) + "\",";
+        
+        // Performance metrics
+        response += "\"performance\":{";
+        response += "\"loop_count\":" + String(getLoopCount()) + ",";
+        response += "\"max_loop_time_us\":" + String(getMaxLoopTime()) + ",";
+        response += "\"avg_loop_time_us\":" + String(getAverageLoopTime()) + ",";
+        response += "\"wifi_reconnects\":" + String(getWifiReconnectCount());
+        response += "},";
+        
+        // Memory information with fragmentation
+        response += "\"memory\":{";
+        response += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
+        response += "\"max_free_block\":" + String(ESP.getMaxAllocHeap()) + ",";
+        response += "\"heap_size\":" + String(ESP.getHeapSize()) + ",";
+        response += "\"min_free_heap\":" + String(getMinFreeHeap()) + ",";
+        response += "\"fragmentation_pct\":" + String(getHeapFragmentation(), 1);
+        response += "},";
+        
+        // PID controller information
+        response += "\"pid\":{";
+        response += "\"kp\":" + String(pid.Kp, 6) + ",";
+        response += "\"ki\":" + String(pid.Ki, 6) + ",";
+        response += "\"kd\":" + String(pid.Kd, 6) + ",";
+        response += "\"output\":" + String(pid.Output, 2) + ",";
+        response += "\"input\":" + String(pid.Input, 2) + ",";
+        response += "\"setpoint\":" + String(pid.Setpoint, 2) + ",";
+        response += "\"sample_time_ms\":" + String(pid.sampleTime) + ",";
+        response += "\"active_profile\":\"" + pid.activeProfile + "\",";
+        response += "\"auto_switching\":" + String(pid.autoSwitching ? "true" : "false");
+        response += "},";
+        
+        // Flash information
+        response += "\"flash\":{";
+        response += "\"size\":" + String(ESP.getFlashChipSize()) + ",";
+        response += "\"speed\":" + String(ESP.getFlashChipSpeed()) + ",";
+        response += "\"mode\":" + String(ESP.getFlashChipMode());
+        response += "},";
+        
+        // WiFi information
+        response += "\"wifi\":{";
+        response += "\"connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
+        response += "\"ssid\":\"" + String(WiFi.SSID()) + "\",";
+        response += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+        response += "\"ip\":\"" + WiFi.localIP().toString() + "\"";
+        response += "}";
+        
+        response += "}"; // Close health section
+        response += "}"; // Close main object
+        
+        server.send(200, "application/json", response);
     });
 }
 
 void calibrationEndpoints(WebServer& server) {
     server.on("/api/calibration", HTTP_GET, [&](){
-        String response = "{\"points\":[]}";
+        // Get current raw ADC reading and temperature
+        int currentRaw = analogRead(PIN_RTD);
+        float currentTemp = readTemperature();
+        
+        String response = "{";
+        response += "\"raw\":" + String(currentRaw) + ",";
+        response += "\"temp\":" + String(currentTemp, 1) + ",";
+        response += "\"table\":[";
+        
+        for(size_t i = 0; i < rtdCalibTable.size(); i++) {
+            if(i > 0) response += ",";
+            response += "{\"raw\":" + String(rtdCalibTable[i].raw) + 
+                       ",\"temp\":" + String(rtdCalibTable[i].temp) + "}";
+        }
+        response += "]}";
         server.send(200, "application/json", response);
+    });
+    
+    // Add calibration point endpoint
+    server.on("/api/calibration/add", HTTP_POST, [&](){
+        if (server.hasArg("raw") && server.hasArg("temp")) {
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            // Add point to calibration table
+            CalibPoint newPoint = {raw, temp};
+            rtdCalibTable.push_back(newPoint);
+            
+            // Sort by raw value
+            std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                     [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+            
+            // Save to file
+            saveCalibration();
+            
+            server.send(200, "application/json", "{\"status\":\"ok\"}");
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        }
+    });
+    
+    // Update calibration point endpoint
+    server.on("/api/calibration/update", HTTP_POST, [&](){
+        if (server.hasArg("index") && server.hasArg("raw") && server.hasArg("temp")) {
+            int index = server.arg("index").toInt();
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                rtdCalibTable[index].raw = raw;
+                rtdCalibTable[index].temp = temp;
+                
+                // Sort by raw value after update
+                std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                         [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+                
+                // Save to file
+                saveCalibration();
+                
+                server.send(200, "application/json", "{\"status\":\"ok\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        }
+    });
+    
+    // Delete calibration point endpoint
+    server.on("/api/calibration/delete", HTTP_POST, [&](){
+        if (server.hasArg("index")) {
+            int index = server.arg("index").toInt();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                rtdCalibTable.erase(rtdCalibTable.begin() + index);
+                
+                // Save to file
+                saveCalibration();
+                
+                server.send(200, "application/json", "{\"status\":\"ok\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing index parameter\"}");
+        }
+    });
+    
+    // Clear all calibration points endpoint
+    server.on("/api/calibration", HTTP_DELETE, [&](){
+        rtdCalibTable.clear();
+        saveCalibration();
+        server.send(200, "application/json", "{\"status\":\"ok\"}");
     });
 }
 

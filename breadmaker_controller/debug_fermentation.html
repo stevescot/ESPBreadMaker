@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fermentation Debug</title>
+</head>
+<body>
+    <h1>Fermentation Calculation Debug</h1>
+    <div id="output"></div>
+    
+    <script>
+        async function debugFermentation() {
+            try {
+                // Get status
+                const statusResp = await fetch('/api/status');
+                const status = await statusResp.json();
+                
+                // Get programs
+                const programsResp = await fetch('/programs.json');
+                const programs = await programsResp.json();
+                
+                // Find current program
+                const currentProgram = programs.find(p => p.name === status.program);
+                
+                let output = `<h2>Status:</h2>`;
+                output += `<p>Program: ${status.program}</p>`;
+                output += `<p>Fermentation Factor: ${status.fermentationFactor}</p>`;
+                output += `<p>Running: ${status.running}</p>`;
+                
+                if (currentProgram) {
+                    output += `<h2>Program Stages:</h2>`;
+                    output += `<table border="1">`;
+                    output += `<tr><th>Label</th><th>Minutes</th><th>Is Fermentation</th><th>Adjusted Minutes</th></tr>`;
+                    
+                    currentProgram.customStages.forEach((stage, i) => {
+                        const isFermentation = !!stage.isFermentation;
+                        const adjustedMin = isFermentation ? stage.min * status.fermentationFactor : stage.min;
+                        
+                        output += `<tr>`;
+                        output += `<td>${stage.label}</td>`;
+                        output += `<td>${stage.min}</td>`;
+                        output += `<td>${isFermentation}</td>`;
+                        output += `<td>${adjustedMin.toFixed(1)}</td>`;
+                        output += `</tr>`;
+                    });
+                    
+                    output += `</table>`;
+                } else {
+                    output += `<p>Program not found!</p>`;
+                }
+                
+                document.getElementById('output').innerHTML = output;
+                
+            } catch (error) {
+                document.getElementById('output').innerHTML = `<p>Error: ${error.message}</p>`;
+            }
+        }
+        
+        // Run debug when page loads
+        debugFermentation();
+    </script>
+</body>
+</html>

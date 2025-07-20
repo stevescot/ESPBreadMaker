@@ -1,9 +1,11 @@
 #include "missing_stubs.h"
 #include "globals.h"
 #include "programs_manager.h"
+#include "calibration.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
+#include <cmath>
 
 #ifdef ESP32
 #include <esp_system.h>
@@ -63,8 +65,8 @@ void updateTemperatureSampling() {
   // Sample at the configured interval
   if (nowMs - tempAvg.lastTempSample >= tempAvg.tempSampleInterval) {
     tempAvg.lastTempSample = nowMs;
-    // Take a new temperature sample
-    float rawTemp = analogRead(PIN_RTD) * 3.3 / 4095.0 * 100.0; // Simple ADC conversion for stub
+    // Take a new temperature sample using the calibrated readTemperature function
+    float rawTemp = readTemperature(); // Use calibrated temperature reading
     tempAvg.tempSamples[tempAvg.tempSampleIndex] = rawTemp;
     tempAvg.tempSampleIndex = (tempAvg.tempSampleIndex + 1) % tempAvg.tempSampleCount;
     // Mark samples as ready once we've filled the array at least once
@@ -111,7 +113,7 @@ void updateTemperatureSampling() {
       }
       tempAvg.averagedTemperature = weightedSum / totalWeight;
     } else {
-      tempAvg.averagedTemperature = rawTemp;
+      tempAvg.averagedTemperature = rawTemp; // rawTemp is now the calibrated temperature
     }
   }
 }
@@ -140,6 +142,37 @@ void updatePerformanceMetrics() {
     wifiReconnectCount++;
   }
   lastWifiStatus = currentWifiStatus;
+}
+
+// Performance metrics getter functions
+unsigned long getMaxLoopTime() {
+  return maxLoopTime;
+}
+
+unsigned long getAverageLoopTime() {
+  return loopCount > 0 ? totalLoopTime / loopCount : 0;
+}
+
+unsigned long getLoopCount() {
+  return loopCount;
+}
+
+uint32_t getMinFreeHeap() {
+  return minFreeHeap == UINT32_MAX ? ESP.getFreeHeap() : minFreeHeap;
+}
+
+unsigned long getWifiReconnectCount() {
+  return wifiReconnectCount;
+}
+
+float getHeapFragmentation() {
+  // Calculate heap fragmentation percentage
+  uint32_t freeHeap = ESP.getFreeHeap();
+  uint32_t maxAlloc = ESP.getMaxAllocHeap();
+  if (freeHeap > 0) {
+    return ((float)(freeHeap - maxAlloc) / freeHeap) * 100.0;
+  }
+  return 0.0;
 }
 
 void checkAndSwitchPIDProfile() {
@@ -392,21 +425,28 @@ void streamStatusJson(Print& out) {
         out.printf("\"stageIdx\":%u,", (unsigned)programState.customStageIdx);
         out.printf("\"setpoint\":%.1f,", stage.temp);
         
-        // Calculate time left in current stage
+        // Calculate time left in current stage (fermentation-adjusted)
         unsigned long timeLeft = 0;
+        unsigned long adjustedTimeLeft = 0;
         if (programState.isRunning && programState.customStageStart > 0) {
           unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
-          unsigned long stageDuration = stage.min * 60;
-          timeLeft = (elapsed < stageDuration) ? (stageDuration - elapsed) : 0;
+          unsigned long baseStageDuration = stage.min * 60;
+          unsigned long adjustedStageDuration = getAdjustedStageTimeMs(baseStageDuration * 1000, stage.isFermentation) / 1000;
+          
+          // Original time left (non-adjusted)
+          timeLeft = (elapsed < baseStageDuration) ? (baseStageDuration - elapsed) : 0;
+          
+          // Fermentation-adjusted time left
+          adjustedTimeLeft = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
         }
-        out.printf("\"stage_time_left\":%lu,", timeLeft);
         out.printf("\"timeLeft\":%lu,", timeLeft);
+        out.printf("\"adjustedTimeLeft\":%lu,", adjustedTimeLeft);
         
-        // Stage ready time
-        if (programState.isRunning && timeLeft > 0) {
-          unsigned long readyAt = (time(nullptr) + timeLeft) * 1000; // Convert to ms
+        // Stage ready time (using adjusted duration)
+        if (programState.isRunning && adjustedTimeLeft > 0) {
+          unsigned long readyAt = (time(nullptr) + adjustedTimeLeft) * 1000; // Convert to ms
           out.printf("\"stage_ready_at\":%lu,", readyAt);
-          out.printf("\"stageReadyAt\":%lu,", readyAt / 1000);
+          out.printf("\"stageReadyAt\":%lu", readyAt / 1000);
         } else {
           out.print("\"stage_ready_at\":0,");
           out.print("\"stageReadyAt\":0");
@@ -416,8 +456,8 @@ void streamStatusJson(Print& out) {
         out.print("\"stage\":\"Idle\",");
         out.print("\"stageIdx\":0,");
         out.print("\"setpoint\":0,");
-        out.print("\"stage_time_left\":0,");
         out.print("\"timeLeft\":0,");
+        out.print("\"adjustedTimeLeft\":0,");
         out.print("\"stage_ready_at\":0,");
         out.print("\"stageReadyAt\":0,");
       }
@@ -427,8 +467,8 @@ void streamStatusJson(Print& out) {
       out.print("\"stage\":\"Idle\",");
       out.print("\"stageIdx\":0,");
       out.print("\"setpoint\":0,");
-      out.print("\"stage_time_left\":0,");
       out.print("\"timeLeft\":0,");
+      out.print("\"adjustedTimeLeft\":0,");
       out.print("\"stage_ready_at\":0,");
       out.print("\"stageReadyAt\":0,");
     }
@@ -438,8 +478,8 @@ void streamStatusJson(Print& out) {
     out.print("\"stage\":\"Idle\",");
     out.print("\"stageIdx\":0,");
     out.print("\"setpoint\":0,");
-    out.print("\"stage_time_left\":0,");
     out.print("\"timeLeft\":0,");
+    out.print("\"adjustedTimeLeft\":0,");
     out.print("\"stage_ready_at\":0,");
     out.print("\"stageReadyAt\":0,");
   }
@@ -505,6 +545,115 @@ void streamStatusJson(Print& out) {
   out.printf("\"fermentationFactor\":%.3f,", fermentState.fermentationFactor);
   out.printf("\"initialFermentTemp\":%.1f,", fermentState.initialFermentTemp);
   
+  // === Predicted Stage End Times (Fermentation-Adjusted) ===
+  out.print("\"predictedStageEndTimes\":[");
+  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+    Program* p = getActiveProgramMutable();
+    if (p && p->customStages.size() > 0) {
+      time_t currentTime = time(nullptr);
+      time_t runningTime = currentTime;
+      
+      if (programState.isRunning && programState.customStageStart > 0) {
+        // Running: calculate from current stage position
+        unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
+        CustomStage& currentStage = p->customStages[programState.customStageIdx];
+        unsigned long adjustedStageDuration = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation) / 1000;
+        unsigned long remaining = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
+        runningTime = currentTime + remaining;
+        
+        // Output times for stages already completed
+        for (size_t i = 0; i < programState.customStageIdx; i++) {
+          if (i > 0) out.print(",");
+          out.printf("%lu", (unsigned long)programState.actualStageStartTimes[i + 1]);
+        }
+        
+        // Output current stage end time
+        if (programState.customStageIdx > 0) out.print(",");
+        out.printf("%lu", (unsigned long)runningTime);
+        
+        // Calculate remaining stages
+        for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); i++) {
+          CustomStage& stage = p->customStages[i];
+          unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
+          runningTime += adjustedDuration;
+          out.print(",");
+          out.printf("%lu", (unsigned long)runningTime);
+        }
+      } else {
+        // Not running - calculate full program preview from now with fermentation adjustments
+        for (size_t i = 0; i < p->customStages.size(); i++) {
+          if (i > 0) out.print(",");
+          CustomStage& stage = p->customStages[i];
+          unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
+          runningTime += adjustedDuration;
+          out.printf("%lu", (unsigned long)runningTime);
+        }
+      }
+    }
+  }
+  out.print("],");
+  
+  // === Predicted Program End Time ===
+  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+    Program* p = getActiveProgramMutable();
+    if (p && p->customStages.size() > 0) {
+      time_t currentTime = time(nullptr);
+      time_t programEndTime = currentTime;
+      
+      if (programState.isRunning && programState.customStageStart > 0) {
+        // Calculate remaining time from current position
+        unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
+        CustomStage& currentStage = p->customStages[programState.customStageIdx];
+        unsigned long adjustedStageDuration = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation) / 1000;
+        unsigned long remaining = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
+        programEndTime = currentTime + remaining;
+        
+        // Add remaining stages
+        for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); i++) {
+          CustomStage& stage = p->customStages[i];
+          unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
+          programEndTime += adjustedDuration;
+        }
+      } else {
+        // Not running - calculate full program duration
+        for (size_t i = 0; i < p->customStages.size(); i++) {
+          CustomStage& stage = p->customStages[i];
+          unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
+          programEndTime += adjustedDuration;
+        }
+      }
+      
+      out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)programEndTime);
+      
+      // === Additional timing data for UI ===
+      if (programState.isRunning && programState.customStageStart > 0) {
+        // Calculate total program duration and elapsed/remaining for UI display
+        time_t programStart = time(nullptr) - ((millis() - programState.customStageStart) / 1000);
+        unsigned long totalProgramDuration = programEndTime - programStart;
+        unsigned long elapsedTime = time(nullptr) - programStart;
+        unsigned long remainingTime = (programEndTime > time(nullptr)) ? (programEndTime - time(nullptr)) : 0;
+        
+        out.printf("\"totalProgramDuration\":%lu,", totalProgramDuration);
+        out.printf("\"elapsedTime\":%lu,", elapsedTime);
+        out.printf("\"remainingTime\":%lu,", remainingTime);
+      } else {
+        out.print("\"totalProgramDuration\":0,");
+        out.print("\"elapsedTime\":0,");
+        out.print("\"remainingTime\":0,");
+      }
+    } else {
+      out.print("\"predictedProgramEnd\":0,");
+      out.print("\"totalProgramDuration\":0,");
+      out.print("\"elapsedTime\":0,");
+      out.print("\"remainingTime\":0,");
+    }
+  } else {
+    out.print("\"predictedProgramEnd\":0,");
+    out.print("\"totalProgramDuration\":0,");
+    out.print("\"elapsedTime\":0,");
+    out.print("\"remainingTime\":0,");
+  }
+  
   // === Stage Start Times Array ===
   out.print("\"actualStageStartTimes\":[");
   for (int i = 0; i < 20; i++) {
@@ -560,4 +709,50 @@ void streamStatusJson(Print& out) {
   
   // Close main JSON object
   out.print("}");
+}
+
+// === Fermentation Calculations ===
+
+float calculateFermentationFactor(float actualTemp) {
+  // Fermentation Q10 parameters
+  const float baselineTemp = 24.0; // 24°C baseline fermentation temperature
+  const float q10 = 1.9; // Fermentation rate doubles roughly every 10°C (typical for biological processes)
+  
+  // Handle invalid temperatures
+  if (actualTemp <= 0.0 || actualTemp > 100.0) {
+    // For invalid temperatures, assume much slower fermentation (cooler environment)
+    actualTemp = 10.0; // Assume cool environment
+  }
+  
+  // Calculate fermentation factor using Q10 temperature coefficient
+  // Factor = Q10^((baseline - actual) / 10)
+  // If temp is lower than baseline, factor > 1 (slower fermentation, takes longer)
+  // If temp is higher than baseline, factor < 1 (faster fermentation, takes less time)
+  float factor = pow(q10, (baselineTemp - actualTemp) / 10.0);
+  
+  // Clamp to reasonable bounds (0.1x to 20x)
+  if (factor < 0.1) factor = 0.1;
+  if (factor > 20.0) factor = 20.0;
+  
+  return factor;
+}
+
+void updateFermentationFactor() {
+  float currentTemp = getAveragedTemperature();
+  float newFactor = calculateFermentationFactor(currentTemp);
+  
+  // Update fermentation state
+  fermentState.fermentLastTemp = currentTemp;
+  fermentState.fermentLastFactor = fermentState.fermentationFactor;
+  fermentState.fermentationFactor = newFactor;
+  fermentState.fermentLastUpdateMs = millis();
+}
+
+unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentation) {
+  if (!hasFermentation) {
+    return baseTimeMs; // No fermentation adjustment
+  }
+  
+  // Apply current fermentation factor
+  return (unsigned long)(baseTimeMs * fermentState.fermentationFactor);
 }

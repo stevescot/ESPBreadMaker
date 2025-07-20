@@ -10,6 +10,14 @@ void updateTemperatureSampling();
 void updatePerformanceMetrics();
 void checkAndSwitchPIDProfile();
 
+// Performance metrics getter functions
+unsigned long getMaxLoopTime();
+unsigned long getAverageLoopTime();
+unsigned long getLoopCount();
+uint32_t getMinFreeHeap();
+unsigned long getWifiReconnectCount();
+float getHeapFragmentation();
+
 // Program and state management functions
 void updateActiveProgramVars();
 void stopBreadmaker();
@@ -28,3 +36,8 @@ void otaEndpoints(WebServer& server);
 
 // OTA display function
 void displayMessage(const String& message);
+
+// Fermentation calculation functions
+float calculateFermentationFactor(float actualTemp);
+void updateFermentationFactor();
+unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentation);
