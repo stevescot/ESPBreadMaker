@@ -113,7 +113,7 @@ void updateActiveProgramVars();
 void updateTimeProportionalHeater();
 void createDefaultPIDProfiles();
 bool ensureProgramLoaded(int programId);
-void setupOTA(); // OTA update support
+// setupOTA removed - OTA is handled by ota_manager.cpp
 
 // --- Forward declaration for cache invalidation ---
 extern void invalidateStatusCache();
