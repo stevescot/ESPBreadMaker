@@ -17,7 +17,7 @@ param(
     [switch]$BuildFirst,
     [switch]$UploadFiles,
     [switch]$UploadFirmware,
-    [int]$DelayBetweenFiles = 500,    # Milliseconds between file uploads
+    [int]$DelayBetweenFiles = 100,    # Milliseconds between file uploads
     [int]$MaxRetries = 3,            # Max retries per file
     [int]$RetryDelay = 2000,         # Milliseconds between retries
     [switch]$PreserveDirectories     # Keep directory structure when uploading

@@ -199,7 +199,7 @@ void initialState(){
       return;
     }
     String path = "/templates/" + filename;
-    if (!LittleFS.exists(path)) {
+    if (!FFat.exists(path)) {
       req->send(404, "text/plain", "File not found");
       return;
     }
@@ -456,7 +456,7 @@ void serializeResumeStateJson(Print& f) {
   f.print("}\n");
 }
 
-// Removes the saved resume state file from LittleFS.
+// Removes the saved resume state file from FFat.
 void clearResumeState() {
   FFat.remove(RESUME_FILE);
 }
@@ -1247,3 +1247,109 @@ void checkSerialWifiConfig() {
 // setupOTA function removed - OTA is now handled by ota_manager.cpp
 // This eliminates conflicts between multiple OTA implementations
 // OTA functionality is provided by otaManagerInit() and otaManagerLoop()
+
+// === Settings Management ===
+// Loads breadmaker settings (PID, temperature, program selection, etc.) from FFat.
+void loadSettings() {
+  Serial.println("[loadSettings] Loading settings...");
+  File f = FFat.open(SETTINGS_FILE, "r");
+  if (!f) {
+    Serial.println("[loadSettings] settings.json not found, using defaults.");
+    debugSerial = true;
+    return;
+  }
+  
+  DynamicJsonDocument doc(512);
+  DeserializationError err = deserializeJson(doc, f);
+  if (err) {
+    Serial.print("[loadSettings] Failed to parse settings.json: ");
+    Serial.println(err.c_str());
+    f.close();
+    debugSerial = true;
+    return;
+  }
+  
+  const char* mode = doc["outputMode"] | "digital";
+  outputMode = OUTPUT_DIGITAL; // Only digital mode supported
+  debugSerial = doc["debugSerial"] | true;
+  
+  // Load PID parameters - backward compatibility
+  if (doc.containsKey("pidKp")) {
+    pid.Kp = doc["pidKp"] | 2.0;
+    pid.Ki = doc["pidKi"] | 5.0;
+    pid.Kd = doc["pidKd"] | 1.0;
+    pid.sampleTime = doc["pidSampleTime"] | 1000;
+    windowSize = doc["pidWindowSize"] | 30000;
+    
+    // Apply loaded PID parameters
+    if (pid.controller) {
+      pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
+      pid.controller->SetSampleTime(pid.sampleTime);
+    }
+  }
+  
+  // Restore last selected program by ID if present, fallback to name for backward compatibility
+  if (doc.containsKey("lastProgramId")) {
+    int lastId = doc["lastProgramId"];
+    if (lastId >= 0 && lastId < (int)getProgramCount()) {
+      programState.activeProgramId = lastId;
+      Serial.print("[loadSettings] lastProgramId loaded: ");
+      Serial.println(lastId);
+    }
+  } else if (doc.containsKey("lastProgram")) {
+    // Deprecated: fallback to name for backward compatibility
+    String lastProg = doc["lastProgram"].as<String>();
+    for (size_t i = 0; i < getProgramCount(); ++i) {
+      if (getProgramName(i) == lastProg) {
+        programState.activeProgramId = i;
+        Serial.print("[loadSettings] lastProgram loaded (deprecated): ");
+        Serial.println(lastProg);
+        break;
+      }
+    }
+  }
+  
+  Serial.print("[loadSettings] outputMode loaded: ");
+  Serial.println(mode);
+  Serial.print("[loadSettings] debugSerial: ");
+  Serial.println(debugSerial ? "true" : "false");
+  f.close();
+  Serial.println("[loadSettings] Settings loaded.");
+}
+
+// Saves breadmaker settings (PID, temperature, program selection, etc.) to FFat.
+// Uses direct streaming to minimize memory usage under load.
+void saveSettings() {
+  if (debugSerial) Serial.println("[saveSettings] Saving settings...");
+  File f = FFat.open(SETTINGS_FILE, "w");
+  if (!f) {
+    if (debugSerial) Serial.println("[saveSettings] Failed to open settings.json for writing!");
+    return;
+  }
+  
+  // Stream JSON directly to file - much more memory efficient than building large strings
+  f.print("{\n");
+  f.print("  \"outputMode\":\"digital\",\n"); // Only digital mode supported
+  f.printf("  \"debugSerial\":%s,\n", debugSerial ? "true" : "false");
+  
+  if (getProgramCount() > 0) {
+    f.printf("  \"lastProgramId\":%d,\n", (int)programState.activeProgramId);
+    f.print("  \"lastProgram\":\"");
+    f.print(getProgramName(programState.activeProgramId));
+    f.print("\",\n");
+  } else {
+    f.print("  \"lastProgramId\":0,\n");
+    f.print("  \"lastProgram\":\"Unknown\",\n");
+  }
+  
+  // PID parameters for backward compatibility
+  f.printf("  \"pidKp\":%.6f,\n", pid.Kp);
+  f.printf("  \"pidKi\":%.6f,\n", pid.Ki);
+  f.printf("  \"pidKd\":%.6f,\n", pid.Kd);
+  f.printf("  \"pidSampleTime\":%lu,\n", pid.sampleTime);
+  f.printf("  \"pidWindowSize\":%lu\n", windowSize);
+  f.print("}\n");
+  
+  f.close();
+  if (debugSerial) Serial.println("[saveSettings] Settings saved.");
+}

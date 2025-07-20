@@ -1,6 +1,6 @@
 #include "calibration.h"
 #include "globals.h"  // For PIN_RTD definition
-#include <LittleFS.h>
+#include <FFat.h>
 #include <ArduinoJson.h>
 
 const char* CALIB_FILE = "/calibration.json";
@@ -15,13 +15,13 @@ void saveCalibration() {
     JsonObject o = arr.createNestedObject();
     o["raw"] = pt.raw; o["temp"] = pt.temp;
   }
-  File f = LittleFS.open(CALIB_FILE, "w");
+  File f = FFat.open(CALIB_FILE, "w");
   if (f) { serializeJson(doc, f); f.close(); }
 }
 
 void loadCalibration() {
   rtdCalibTable.clear();
-  File f = LittleFS.open(CALIB_FILE, "r");
+  File f = FFat.open(CALIB_FILE, "r");
   if (!f) return;
   DynamicJsonDocument doc(4096);
   if (!deserializeJson(doc, f)) {

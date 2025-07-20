@@ -59,10 +59,10 @@ Write-Host "  - File System: 9.9MB FATFS (web files, data, programs)" -Foregroun
 Write-Host "  - OTA Support: Enabled" -ForegroundColor Green
 Write-Host "  - Data Partition: PRESERVED (use -UploadData to overwrite)" -ForegroundColor Green
 
-# TFT_eSPI configuration note
-Write-Host "Note: Make sure TFT_eSPI is configured for TTGO T-Display" -ForegroundColor Yellow
-Write-Host "  - Copy TFT_eSPI_Setup.h to your TFT_eSPI library folder" -ForegroundColor Yellow
-Write-Host "  - Or configure User_Setup.h in the TFT_eSPI library" -ForegroundColor Yellow
+# Display library note
+Write-Host "Note: Project uses LovyanGFX for TTGO T-Display" -ForegroundColor Yellow
+Write-Host "  - LovyanGFX is configured automatically in display_manager.h" -ForegroundColor Yellow
+Write-Host "  - No additional display library setup required" -ForegroundColor Yellow
 
 # Compile
 Write-Host "Compiling..." -ForegroundColor Blue

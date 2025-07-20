@@ -71,6 +71,8 @@ extern unsigned long windowStartTime;
 extern size_t getProgramCount();
 extern bool isProgramValid(int programId);
 extern void shortBeep();
+extern bool ensureProgramLoaded(int programId);
+extern Program* getActiveProgramMutable();
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
@@ -937,6 +939,89 @@ void otaEndpoints(WebServer& server) {
             }
         }
     });
+    
+    // Missing /api/settings endpoint for debug serial configuration
+    server.on("/api/settings", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/settings GET requested"));
+        String json = "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + "}";
+        server.send(200, "application/json", json);
+    });
+    
+    server.on("/api/settings", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/settings POST requested"));
+        
+        if (server.hasArg("plain")) {
+            String body = server.arg("plain");
+            DynamicJsonDocument doc(512);
+            DeserializationError error = deserializeJson(doc, body);
+            
+            if (!error && doc.containsKey("debugSerial")) {
+                debugSerial = doc["debugSerial"].as<bool>();
+                saveSettings(); // Save the updated setting
+                String json = "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + "}";
+                server.send(200, "application/json", json);
+                if (debugSerial) Serial.printf("[DEBUG] Debug serial set to: %s\n", debugSerial ? "enabled" : "disabled");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid JSON or missing debugSerial field\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing request body\"}");
+        }
+    });
+    
+    // Missing /api/pid_profile endpoint for PID profile management
+    server.on("/api/pid_profile", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile GET requested"));
+        
+        // Return current PID profiles - for now, return a basic structure
+        String json = "{\"profiles\":[";
+        json += "{\"key\":\"default\",\"kp\":" + String(pid.Kp) + ",";
+        json += "\"ki\":" + String(pid.Ki) + ",";
+        json += "\"kd\":" + String(pid.Kd) + ",";
+        json += "\"windowMs\":" + String(pid.sampleTime) + "}";
+        json += "]}";
+        
+        server.send(200, "application/json", json);
+    });
+    
+    server.on("/api/pid_profile", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile POST requested"));
+        
+        if (server.hasArg("plain")) {
+            String body = server.arg("plain");
+            DynamicJsonDocument doc(1024);
+            DeserializationError error = deserializeJson(doc, body);
+            
+            if (!error && doc.containsKey("kp") && doc.containsKey("ki") && doc.containsKey("kd")) {
+                double kp = doc["kp"].as<double>();
+                double ki = doc["ki"].as<double>();
+                double kd = doc["kd"].as<double>();
+                
+                // Update PID parameters
+                pid.Kp = kp;
+                pid.Ki = ki;
+                pid.Kd = kd;
+                
+                // Update controller if it exists
+                if (pid.controller) {
+                    pid.controller->SetTunings(kp, ki, kd);
+                }
+                
+                // savePIDProfiles(); // TODO: Implement savePIDProfiles() function
+                
+                String json = "{\"status\":\"ok\",\"kp\":" + String(kp) + ",";
+                json += "\"ki\":" + String(ki) + ",";
+                json += "\"kd\":" + String(kd) + "}";
+                
+                server.send(200, "application/json", json);
+                if (debugSerial) Serial.printf("[DEBUG] PID parameters updated: Kp=%.3f, Ki=%.3f, Kd=%.3f\n", kp, ki, kd);
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid JSON or missing PID parameters\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing request body\"}");
+        }
+    });
 }
 
 // Main registration function
@@ -1001,8 +1086,12 @@ void registerWebEndpoints(WebServer& server) {
             // 3. Set programState.activeProgramId = programId
             programState.activeProgramId = programId;
             
-            // 4. Call updateActiveProgramVars() if it exists
-            // TODO: Add updateActiveProgramVars() call when function is available
+            // 4. Call updateActiveProgramVars() to refresh program state
+            updateActiveProgramVars();
+            
+            // 5. Invalidate status cache and save state
+            invalidateStatusCache();
+            saveResumeState();
             
             if (debugSerial) {
                 Serial.printf("[DEBUG] Successfully selected program ID %d: %s\n", 
@@ -1022,8 +1111,50 @@ void registerWebEndpoints(WebServer& server) {
             if (debugSerial) {
                 Serial.printf("[DEBUG] Start at stage: %d\n", stage);
             }
-            // TODO: Add actual start at stage logic here
-            // For now, return success
+            
+            if (programState.activeProgramId >= getProgramCount()) { 
+                stopBreadmaker();
+                server.send(400, "application/json", "{\"error\":\"No valid program selected\"}");
+                return; 
+            }
+            
+            Program *p = getActiveProgramMutable();
+            if (!p) {
+                Serial.printf_P(PSTR("[ERROR] /start_at_stage: Unable to get active program\n"));
+                stopBreadmaker();
+                server.send(400, "application/json", "{\"error\":\"Cannot access active program\"}");
+                return;
+            }
+            
+            size_t numStages = p->customStages.size();
+            if (numStages == 0) {
+                Serial.printf_P(PSTR("[ERROR] /start_at_stage: Program has zero stages\n"));
+                stopBreadmaker();
+                server.send(400, "application/json", "{\"error\":\"Program has no stages\"}");
+                return;
+            }
+            
+            if (stage < 0 || stage >= (int)numStages) {
+                server.send(400, "application/json", "{\"error\":\"Invalid stage number\"}");
+                return;
+            }
+            
+            // Set the starting stage
+            programState.customStageIdx = stage;
+            programState.customStageStart = millis();
+            programState.customMixStepStart = 0;
+            programState.isRunning = true;
+            if (stage == 0) {
+                programState.programStartTime = time(nullptr);
+            }
+            invalidateStatusCache();
+            
+            // Record actual start time of this stage
+            if (stage < (int)numStages && stage < MAX_PROGRAM_STAGES) {
+                programState.actualStageStartTimes[stage] = time(nullptr);
+            }
+            
+            saveResumeState();
             server.send(200, "application/json", "{\"status\":\"ok\",\"stage\":" + String(stage) + "}");
         } else {
             server.send(400, "application/json", "{\"error\":\"Missing stage parameter\"}");
@@ -1035,7 +1166,12 @@ void registerWebEndpoints(WebServer& server) {
         if (debugSerial) {
             Serial.println("[DEBUG] Pause requested");
         }
-        // TODO: Add actual pause logic here (set programState.isRunning = false)
+        programState.isRunning = false;
+        invalidateStatusCache();
+        setMotor(false);
+        setHeater(false);
+        setLight(false);
+        saveResumeState();
         server.send(200, "application/json", "{\"status\":\"paused\"}");
     });
     
@@ -1044,7 +1180,15 @@ void registerWebEndpoints(WebServer& server) {
         if (debugSerial) {
             Serial.println("[DEBUG] Resume requested");
         }
-        // TODO: Add actual resume logic here (set programState.isRunning = true)
+        programState.isRunning = true;
+        invalidateStatusCache();
+        // Do NOT reset actualStageStartTimes[customStageIdx] on resume if it was already set.
+        // Only set it if it was never set (i.e., just started this stage for the first time).
+        if (programState.customStageIdx < MAX_PROGRAM_STAGES && 
+            programState.actualStageStartTimes[programState.customStageIdx] == 0) {
+            programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
+        }
+        saveResumeState();
         server.send(200, "application/json", "{\"status\":\"running\"}");
     });
     
@@ -1053,8 +1197,53 @@ void registerWebEndpoints(WebServer& server) {
         if (debugSerial) {
             Serial.println("[DEBUG] Back/previous stage requested");
         }
-        // TODO: Add actual back logic here (decrement stage index)
-        server.send(200, "application/json", "{\"status\":\"ok\"}");
+        
+        if (programState.activeProgramId >= getProgramCount()) { 
+            stopBreadmaker();
+            server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"No valid program\"}");
+            return; 
+        }
+        
+        Program *p = getActiveProgramMutable();
+        if (!p) {
+            Serial.printf_P(PSTR("[ERROR] /back: Unable to get active program\n"));
+            stopBreadmaker();
+            server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"Cannot access active program\"}");
+            return;
+        }
+        
+        size_t numStages = p->customStages.size();
+        if (numStages == 0) {
+            Serial.printf_P(PSTR("[ERROR] /back: Program at id %u has zero stages\n"), 
+                           (unsigned)programState.activeProgramId);
+            stopBreadmaker();
+            server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"Program has no stages\"}");
+            return;
+        }
+        
+        // Go to previous stage (wrap to last stage if at beginning)
+        if (programState.customStageIdx > 0) {
+            programState.customStageIdx--;
+        } else {
+            programState.customStageIdx = numStages - 1;
+        }
+        
+        programState.customStageStart = millis();
+        programState.customMixStepStart = 0;
+        programState.isRunning = true;
+        if (programState.customStageIdx == 0) {
+            programState.programStartTime = time(nullptr);
+        }
+        invalidateStatusCache();
+        
+        // Record actual start time of this stage when going back
+        if (programState.customStageIdx < numStages && 
+            programState.customStageIdx < MAX_PROGRAM_STAGES) {
+            programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
+        }
+        
+        saveResumeState();
+        server.send(200, "application/json", "{\"status\":\"ok\",\"stage\":" + String(programState.customStageIdx) + "}");
     });
     
     server.on("/api/manual_mode", HTTP_GET, [&](){
@@ -1064,12 +1253,13 @@ void registerWebEndpoints(WebServer& server) {
             if (debugSerial) {
                 Serial.printf("[DEBUG] Manual mode: %s\n", manualMode ? "ON" : "OFF");
             }
-            // TODO: Add actual manual mode logic here (set programState.manualMode)
+            programState.manualMode = manualMode;
+            invalidateStatusCache();
+            saveSettings();
             server.send(200, "application/json", "{\"status\":\"ok\",\"manual_mode\":" + String(manualMode ? "true" : "false") + "}");
         } else {
             // Return current manual mode status
-            // TODO: Return actual manual mode state from programState.manualMode
-            server.send(200, "application/json", "{\"manual_mode\":false}");
+            server.send(200, "application/json", "{\"manual_mode\":" + String(programState.manualMode ? "true" : "false") + "}");
         }
     });
     
@@ -1080,12 +1270,14 @@ void registerWebEndpoints(WebServer& server) {
             if (debugSerial) {
                 Serial.printf("[DEBUG] Temperature setpoint: %.1f\n", setpoint);
             }
-            // TODO: Add actual temperature setpoint logic here (set PID setpoint)
+            // Set PID setpoint for manual temperature control
+            pid.Setpoint = setpoint;
+            invalidateStatusCache();
             server.send(200, "application/json", "{\"status\":\"ok\",\"setpoint\":" + String(setpoint) + "}");
         } else {
-            // Return current temperature - this should work with existing code
-            float currentTemp = readTemperature();
-            server.send(200, "application/json", "{\"temperature\":" + String(currentTemp) + "}");
+            // Return current temperature and setpoint
+            float currentTemp = getAveragedTemperature();
+            server.send(200, "application/json", "{\"temperature\":" + String(currentTemp) + ",\"setpoint\":" + String(pid.Setpoint) + "}");
         }
     });
     
@@ -1094,6 +1286,7 @@ void registerWebEndpoints(WebServer& server) {
         if (server.hasArg("on")) {
             bool on = server.arg("on") == "1";
             setHeater(on);
+            invalidateStatusCache();
             server.send(200, "application/json", "{\"heater\":" + String(on ? "true" : "false") + "}");
         } else {
             server.send(200, "application/json", "{\"heater\":" + String(outputStates.heater ? "true" : "false") + "}");
@@ -1104,6 +1297,7 @@ void registerWebEndpoints(WebServer& server) {
         if (server.hasArg("on")) {
             bool on = server.arg("on") == "1";
             setMotor(on);
+            invalidateStatusCache();
             server.send(200, "application/json", "{\"motor\":" + String(on ? "true" : "false") + "}");
         } else {
             server.send(200, "application/json", "{\"motor\":" + String(outputStates.motor ? "true" : "false") + "}");
@@ -1114,6 +1308,8 @@ void registerWebEndpoints(WebServer& server) {
         if (server.hasArg("on")) {
             bool on = server.arg("on") == "1";
             setLight(on);
+            if (on) lightOnTime = millis();
+            invalidateStatusCache();
             server.send(200, "application/json", "{\"light\":" + String(on ? "true" : "false") + "}");
         } else {
             server.send(200, "application/json", "{\"light\":" + String(outputStates.light ? "true" : "false") + "}");
@@ -1124,6 +1320,7 @@ void registerWebEndpoints(WebServer& server) {
         if (server.hasArg("on")) {
             bool on = server.arg("on") == "1";
             setBuzzer(on);
+            invalidateStatusCache();
             server.send(200, "application/json", "{\"buzzer\":" + String(on ? "true" : "false") + "}");
         } else {
             server.send(200, "application/json", "{\"buzzer\":" + String(outputStates.buzzer ? "true" : "false") + "}");

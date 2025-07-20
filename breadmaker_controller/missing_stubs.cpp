@@ -2,7 +2,6 @@
 #include "globals.h"
 #include "programs_manager.h"
 #include <Arduino.h>
-#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
 
@@ -328,139 +327,7 @@ void updateTimeProportionalHeater() {
   setHeater(heaterShouldBeOn);
 }
 
-// Settings functions
-void loadSettings() {
-    Serial.println("[loadSettings] Loading settings...");
-    File f = LittleFS.open("/settings.json", "r");
-    if (!f) {
-        Serial.println("[loadSettings] settings.json not found, using defaults.");
-        debugSerial = true;
-        return;
-    }
-    
-    DynamicJsonDocument doc(512);
-    DeserializationError err = deserializeJson(doc, f);
-    if (err) {
-        Serial.print("[loadSettings] Failed to parse settings.json: ");
-        Serial.println(err.c_str());
-        f.close();
-        debugSerial = true;
-        return;
-    }
-    
-    // Load basic settings
-    debugSerial = doc["debugSerial"] | true;
-    
-    // Load PID parameters for backward compatibility
-    if (doc.containsKey("pidKp")) {
-        pid.Kp = doc["pidKp"] | 2.0;
-        pid.Ki = doc["pidKi"] | 5.0;
-        pid.Kd = doc["pidKd"] | 1.0;
-        pid.sampleTime = doc["pidSampleTime"] | 1000;
-        windowSize = doc["pidWindowSize"] | 30000;
-        
-        // Apply loaded PID parameters
-        if (pid.controller) {
-            pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
-            pid.controller->SetSampleTime(pid.sampleTime);
-        }
-        Serial.printf("[loadSettings] Legacy PID parameters loaded: Kp=%.6f, Ki=%.6f, Kd=%.6f\n", pid.Kp, pid.Ki, pid.Kd);
-        Serial.printf("[loadSettings] Timing parameters loaded: SampleTime=%lums, WindowSize=%lums\n", pid.sampleTime, windowSize);
-    }
-    
-    // Load PID profile settings
-    if (doc.containsKey("activeProfile")) {
-        pid.activeProfile = doc["activeProfile"] | "Baking Heat";
-    }
-    if (doc.containsKey("autoSwitching")) {
-        pid.autoSwitching = doc["autoSwitching"] | true;
-    }
-    
-    // Load temperature averaging parameters
-    if (doc.containsKey("tempSampleCount")) {
-        tempAvg.tempSampleCount = doc["tempSampleCount"] | 10;
-        tempAvg.tempRejectCount = doc["tempRejectCount"] | 2;
-        tempAvg.tempSampleInterval = doc["tempSampleInterval"] | 500;
-        
-        // Validate parameters
-        if (tempAvg.tempSampleCount < 5) tempAvg.tempSampleCount = 5;
-        if (tempAvg.tempSampleCount > MAX_TEMP_SAMPLES) tempAvg.tempSampleCount = MAX_TEMP_SAMPLES;
-        if (tempAvg.tempRejectCount < 0) tempAvg.tempRejectCount = 0;
-        
-        // Ensure we have at least 3 samples after rejection
-        int effectiveSamples = tempAvg.tempSampleCount - (2 * tempAvg.tempRejectCount);
-        if (effectiveSamples < 3) {
-            tempAvg.tempRejectCount = (tempAvg.tempSampleCount - 3) / 2;
-        }
-        
-        // Reset sampling system when parameters change
-        tempAvg.tempSamplesReady = false;
-        tempAvg.tempSampleIndex = 0;
-        Serial.printf("[loadSettings] Temperature averaging loaded: Samples=%d, Reject=%d, Interval=%lums\n", 
-                     tempAvg.tempSampleCount, tempAvg.tempRejectCount, tempAvg.tempSampleInterval);
-    }
-    
-    // Restore last selected program by ID
-    if (doc.containsKey("lastProgramId")) {
-        int lastId = doc["lastProgramId"];
-        if (lastId >= 0 && lastId < (int)getProgramCount()) {
-            programState.activeProgramId = lastId;
-            Serial.print("[loadSettings] lastProgramId loaded: ");
-            Serial.println(lastId);
-        }
-    }
-    
-    f.close();
-    Serial.println("[loadSettings] Settings loaded.");
-}
-
-void saveSettings() {
-    if (debugSerial) Serial.println("[saveSettings] Saving settings...");
-    
-    File f = LittleFS.open("/settings.json", "w");
-    if (!f) {
-        if (debugSerial) Serial.println("[saveSettings] Failed to open settings.json for writing!");
-        return;
-    }
-    
-    // Stream JSON directly to file - memory efficient
-    f.print("{\n");
-    f.printf("  \"outputMode\":\"%s\",\n", "digital");  // Always digital mode
-    f.printf("  \"debugSerial\":%s,\n", debugSerial ? "true" : "false");
-    
-    if (getProgramCount() > 0) {
-        f.printf("  \"lastProgramId\":%d,\n", (int)programState.activeProgramId);
-        f.print("  \"lastProgram\":\"");
-        f.print(getProgramName(programState.activeProgramId));
-        f.print("\",\n");
-    } else {
-        f.print("  \"lastProgramId\":0,\n");
-        f.print("  \"lastProgram\":\"Unknown\",\n");
-    }
-    
-    // PID parameters for backward compatibility
-    f.printf("  \"pidKp\":%.6f,\n", pid.Kp);
-    f.printf("  \"pidKi\":%.6f,\n", pid.Ki);
-    f.printf("  \"pidKd\":%.6f,\n", pid.Kd);
-    f.printf("  \"pidSampleTime\":%lu,\n", pid.sampleTime);
-    f.printf("  \"pidWindowSize\":%lu,\n", windowSize);
-    
-    // PID profile settings
-    f.print("  \"activeProfile\":\"");
-    f.print(pid.activeProfile);
-    f.print("\",\n");
-    f.printf("  \"autoSwitching\":%s,\n", pid.autoSwitching ? "true" : "false");
-    
-    // Temperature averaging parameters
-    f.printf("  \"tempSampleCount\":%d,\n", tempAvg.tempSampleCount);
-    f.printf("  \"tempRejectCount\":%d,\n", tempAvg.tempRejectCount);
-    f.printf("  \"tempSampleInterval\":%lu\n", tempAvg.tempSampleInterval);
-    
-    f.print("}\n");
-    f.close();
-    
-    if (debugSerial) Serial.println("[saveSettings] Settings saved with direct streaming (low memory usage).");
-}
+// Settings functions - MOVED TO breadmaker_controller.ino
 
 void switchToProfile(const String& profileName) {
   for (const auto& profile : pid.profiles) {
