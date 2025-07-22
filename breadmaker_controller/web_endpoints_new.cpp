@@ -12,9 +12,22 @@
 #include <Update.h>  // For web-based firmware updates
 #include <algorithm>  // For std::sort
 #include "missing_stubs.h"  // For getAdjustedStageTimeMs and other functions
+#include "display_manager.h"  // For screensaver control
 
 // External OTA status for web integration
 extern OTAStatus otaStatus;
+
+// StringPrint helper class for streaming JSON to String buffers
+class StringPrint : public Print {
+  String& str;
+  public:
+    StringPrint(String& s) : str(s) {}
+    size_t write(uint8_t c) override { str += (char)c; return 1; }
+    size_t write(const uint8_t* buffer, size_t size) override {
+      for (size_t i = 0; i < size; i++) str += (char)buffer[i];
+      return size;
+    }
+};
 
 // Performance tracking variables
 static unsigned long loopCount = 0;
@@ -35,6 +48,11 @@ static const unsigned long HA_CACHE_MS = 3000;      // Cache HA for 3 seconds
 void invalidateStatusCache() {
   lastStatusUpdate = 0;
   lastHaUpdate = 0;
+}
+
+// Helper to track web activity for screensaver
+void trackWebActivity() {
+  updateActivityTime();
 }
 
 // Forward declarations for helpers and global variables used in endpoints
@@ -85,17 +103,6 @@ extern Program* getActiveProgramMutable();
 String getStatusJsonString() {
   String response;
   response.reserve(2048);
-  
-  class StringPrint : public Print {
-    String& str;
-    public:
-      StringPrint(String& s) : str(s) {}
-      size_t write(uint8_t c) override { str += (char)c; return 1; }
-      size_t write(const uint8_t* buffer, size_t size) override {
-        for (size_t i = 0; i < size; i++) str += (char)buffer[i];
-        return size;
-      }
-  };
   
   StringPrint stringPrint(response);
   streamStatusJson(stringPrint);
@@ -280,22 +287,30 @@ void coreEndpoints(WebServer& server) {
     });
     
     server.on("/status", HTTP_GET, [&](){
+        trackWebActivity(); // Track web activity for screensaver
         if (debugSerial) Serial.println(F("[DEBUG] /status requested"));
         
-        // Direct streaming to avoid StringPrint wrapper overhead
-        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-        server.send(200, "application/json", "");
-        streamStatusJson(server);
+        // Use String buffer for status JSON (status is frequently accessed, needs fast response)
+        String statusBuffer;
+        statusBuffer.reserve(1200); // Reserve buffer to avoid reallocation
+        StringPrint stringPrint(statusBuffer);
+        streamStatusJson(stringPrint);
+        
+        server.send(200, "application/json", statusBuffer);
     });
     
     // Add missing /api/status endpoint for frontend compatibility
     server.on("/api/status", HTTP_GET, [&](){
+        trackWebActivity(); // Track web activity for screensaver
         if (debugSerial) Serial.println(F("[DEBUG] /api/status requested"));
         
-        // Direct streaming to avoid StringPrint wrapper overhead
-        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-        server.send(200, "application/json", "");
-        streamStatusJson(server);
+        // Use String buffer for status JSON (status is frequently accessed, needs fast response)
+        String statusBuffer;
+        statusBuffer.reserve(1200); // Reserve buffer to avoid reallocation
+        StringPrint stringPrint(statusBuffer);
+        streamStatusJson(stringPrint);
+        
+        server.send(200, "application/json", statusBuffer);
     });
     
     server.on("/api/firmware_info", HTTP_GET, [&](){
@@ -348,44 +363,6 @@ void coreEndpoints(WebServer& server) {
         }
         
         server.send(200, "text/plain", response);
-    });
-    
-    // File upload endpoint for debugging
-    server.on("/debug/upload", HTTP_POST, [&](){
-        if (server.hasArg("filename") && server.hasArg("content")) {
-            String filename = server.arg("filename");
-            String content = server.arg("content");
-            String debugMsg;
-            // Ensure filename starts with /
-            if (!filename.startsWith("/")) {
-                filename = "/" + filename;
-            }
-            debugMsg += "[UPLOAD] Filename: " + filename + " (" + String(filename.length()) + ")\n";
-            debugMsg += "[UPLOAD] Content length: " + String(content.length()) + "\n";
-            File file = FFat.open(filename, "w");
-            if (file) {
-                size_t written = file.print(content);
-                file.close();
-                bool exists = FFat.exists(filename);
-                debugMsg += String("[UPLOAD] Written: ") + String(written) + ", Exists after write: " + (exists ? "YES" : "NO") + "\n";
-                server.send(200, "text/plain", "File uploaded: " + filename + "\n" + debugMsg);
-                if (debugSerial) {
-                    Serial.printf("%s", debugMsg.c_str());
-                }
-            } else {
-                debugMsg += String("[UPLOAD] Failed to create file: ") + filename + "\n";
-                server.send(500, "text/plain", "Failed to create file: " + filename + "\n" + debugMsg);
-                if (debugSerial) {
-                    Serial.printf("%s", debugMsg.c_str());
-                }
-            }
-        } else {
-            String debugMsg = "[UPLOAD] Missing filename or content parameters\n";
-            server.send(400, "text/plain", "Missing filename or content parameters\n" + debugMsg);
-            if (debugSerial) {
-                Serial.printf("%s", debugMsg.c_str());
-            }
-        }
     });
     
     // Simple file upload interface
@@ -446,13 +423,14 @@ void coreEndpoints(WebServer& server) {
             
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
-                const content = await file.text();
                 
                 try {
-                    const response = await fetch('/debug/upload', {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    const response = await fetch('/api/upload', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: 'filename=' + encodeURIComponent(file.name) + '&content=' + encodeURIComponent(content)
+                        body: formData
                     });
                     
                     const result = await response.text();
@@ -777,7 +755,7 @@ void homeAssistantEndpoint(WebServer& server) {
                     }
                     
                     server.sendContent("\"stage_time_left\":");
-                    server.sendContent(String(totalRemainingTime / 60)); // Convert to minutes
+                    server.sendContent(String(totalRemainingTime)); // Keep in seconds for consistency with status endpoint
                     server.sendContent(",");
                 } else if (!programState.isRunning) {
                     // Not running - calculate total program time if started now
@@ -790,7 +768,7 @@ void homeAssistantEndpoint(WebServer& server) {
                         totalProgramTime += adjustedDurationMs / 1000;
                     }
                     server.sendContent("\"stage_time_left\":");
-                    server.sendContent(String(totalProgramTime / 60)); // Convert to minutes
+                    server.sendContent(String(totalProgramTime)); // Keep in seconds for consistency with status endpoint
                     server.sendContent(",");
                 } else {
                     server.sendContent("\"stage\":\"Idle\",\"stage_time_left\":0,");
@@ -857,6 +835,8 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent(String(getMaxLoopTime()));
         server.sendContent(",\"avg_loop_time_us\":");
         server.sendContent(String(getAverageLoopTime()));
+        server.sendContent(",\"current_loop_time_us\":");
+        server.sendContent(String(safetySystem.totalLoopTime / max(1UL, (unsigned long)safetySystem.loopCount))); // Current average
         server.sendContent(",\"wifi_reconnects\":");
         server.sendContent(String(getWifiReconnectCount()));
         server.sendContent("},");
@@ -908,11 +888,11 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent("\"wifi\":{\"connected\":");
         server.sendContent(WiFi.status() == WL_CONNECTED ? "true" : "false");
         server.sendContent(",\"ssid\":\"");
-        server.sendContent(WiFi.SSID());
+        server.sendContent(wifiCache.getSSID());
         server.sendContent("\",\"rssi\":");
-        server.sendContent(String(WiFi.RSSI()));
+        server.sendContent(String(wifiCache.getRSSI()));
         server.sendContent(",\"ip\":\"");
-        server.sendContent(WiFi.localIP().toString());
+        server.sendContent(wifiCache.getIPString());
         server.sendContent("\"}");
         
         server.sendContent("}"); // Close health section
@@ -1186,7 +1166,7 @@ void otaEndpoints(WebServer& server) {
         server.send(200, "application/json", "");
         server.sendContent("{");
         server.sendContent("\"hostname\":\"" + String(WiFi.getHostname()) + "\",");
-        server.sendContent("\"ip\":\"" + WiFi.localIP().toString() + "\",");
+        server.sendContent("\"ip\":\"" + wifiCache.getIPString() + "\",");
         server.sendContent("\"version\":\"1.0.0\",");
         server.sendContent("\"freeSpace\":" + String(FFat.freeBytes()) + ",");
         server.sendContent("\"totalSpace\":" + String(FFat.totalBytes()));
@@ -1276,7 +1256,8 @@ void otaEndpoints(WebServer& server) {
     // Missing /api/settings endpoint for debug serial configuration
     server.on("/api/settings", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/settings GET requested"));
-        String json = "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + "}";
+        String json = "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + 
+                     ",\"safetyEnabled\":" + String(safetySystem.safetyEnabled ? "true" : "false") + "}";
         server.send(200, "application/json", json);
     });
     
@@ -1285,21 +1266,108 @@ void otaEndpoints(WebServer& server) {
         
         if (server.hasArg("plain")) {
             String body = server.arg("plain");
+            if (debugSerial) Serial.printf("[DEBUG] Settings POST body: %s\n", body.c_str());
+            
             DynamicJsonDocument doc(512);
             DeserializationError error = deserializeJson(doc, body);
             
-            if (!error && doc.containsKey("debugSerial")) {
-                debugSerial = doc["debugSerial"].as<bool>();
-                saveSettings(); // Save the updated setting
-                String json = "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + "}";
-                server.send(200, "application/json", json);
-                if (debugSerial) Serial.printf("[DEBUG] Debug serial set to: %s\n", debugSerial ? "enabled" : "disabled");
+            if (!error) {
+                bool updated = false;
+                
+                if (doc.containsKey("debugSerial")) {
+                    debugSerial = doc["debugSerial"].as<bool>();
+                    updated = true;
+                    if (debugSerial) Serial.printf("[DEBUG] Debug serial set to: %s\n", debugSerial ? "enabled" : "disabled");
+                }
+                
+                if (doc.containsKey("safetyEnabled")) {
+                    bool newSafetyState = doc["safetyEnabled"].as<bool>();
+                    safetySystem.safetyEnabled = newSafetyState;
+                    updated = true;
+                    Serial.printf("[SAFETY] Safety system set to: %s\n", safetySystem.safetyEnabled ? "enabled" : "DISABLED");
+                    
+                    // Clear emergency shutdown when safety is disabled
+                    if (!safetySystem.safetyEnabled) {
+                        safetySystem.emergencyShutdown = false;
+                        safetySystem.shutdownReason = "";
+                        Serial.println("[SAFETY] Emergency shutdown cleared (safety disabled)");
+                    }
+                }
+                
+                if (updated) {
+                    // Send response immediately
+                    String json = "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + 
+                                 ",\"safetyEnabled\":" + String(safetySystem.safetyEnabled ? "true" : "false") + "}";
+                    
+                    if (debugSerial) Serial.printf("[DEBUG] Sending response: %s\n", json.c_str());
+                    server.send(200, "application/json", json);
+                    
+                    // Schedule deferred save (handled in main loop)
+                    pendingSettingsSaveTime = millis() + 500; // Save in 0.5 seconds
+                    if (debugSerial) Serial.println("[DEBUG] Settings save scheduled");
+                    
+                } else {
+                    server.send(400, "application/json", "{\"error\":\"No valid settings provided\"}");
+                }
             } else {
-                server.send(400, "application/json", "{\"error\":\"Invalid JSON or missing debugSerial field\"}");
+                String errorMsg = "{\"error\":\"Invalid JSON: " + String(error.c_str()) + "\"}";
+                server.send(400, "application/json", errorMsg);
+                if (debugSerial) Serial.printf("[DEBUG] JSON parse error: %s\n", error.c_str());
             }
         } else {
             server.send(400, "application/json", "{\"error\":\"Missing request body\"}");
+            if (debugSerial) Serial.println("[DEBUG] Missing request body");
         }
+    });
+    
+    // Simple safety toggle endpoint
+    server.on("/api/safety/toggle", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/safety/toggle POST requested"));
+        
+        // Toggle safety state
+        safetySystem.safetyEnabled = !safetySystem.safetyEnabled;
+        
+        // Clear emergency shutdown when safety is disabled
+        if (!safetySystem.safetyEnabled) {
+            safetySystem.emergencyShutdown = false;
+            safetySystem.shutdownReason = "";
+            Serial.println("[SAFETY] Emergency shutdown cleared (safety disabled)");
+        }
+        
+        Serial.printf("[SAFETY] Safety system toggled to: %s\n", safetySystem.safetyEnabled ? "enabled" : "DISABLED");
+        
+        // Send response immediately
+        String json = "{\"safetyEnabled\":" + String(safetySystem.safetyEnabled ? "true" : "false") + "}";
+        server.send(200, "application/json", json);
+        
+        // Schedule deferred save
+        pendingSettingsSaveTime = millis() + 500;
+        if (debugSerial) Serial.println("[DEBUG] Settings save scheduled for safety toggle");
+    });
+    
+    // Display screensaver control endpoints
+    server.on("/api/display/screensaver/status", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/display/screensaver/status requested"));
+        String json = "{\"active\":" + String(isScreensaverActive() ? "true" : "false") + "}";
+        server.send(200, "application/json", json);
+    });
+    
+    server.on("/api/display/screensaver/enable", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/display/screensaver/enable requested"));
+        enableScreensaver();
+        server.send(200, "application/json", "{\"status\":\"screensaver_enabled\"}");
+    });
+    
+    server.on("/api/display/screensaver/disable", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/display/screensaver/disable requested"));
+        disableScreensaver();
+        server.send(200, "application/json", "{\"status\":\"screensaver_disabled\"}");
+    });
+    
+    server.on("/api/display/activity", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/display/activity requested"));
+        updateActivityTime();
+        server.send(200, "application/json", "{\"status\":\"activity_updated\"}");
     });
     
     // Missing /api/pid_profile endpoint for PID profile management

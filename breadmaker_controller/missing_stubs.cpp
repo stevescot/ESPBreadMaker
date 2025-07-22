@@ -54,6 +54,20 @@ static uint32_t minFreeHeap = UINT32_MAX;
 static unsigned long lastWifiStatus = 0;
 static unsigned long wifiReconnectCount = 0;
 
+// Fermentation calculation cache
+struct FermentationCache {
+  int cachedProgramId = -1;
+  unsigned int cachedStageIdx = UINT_MAX;
+  time_t cachedProgramEndTime = 0;
+  unsigned long cachedStageEndTimes[20] = {0};
+  unsigned long cachedTotalDuration = 0;
+  unsigned long cachedElapsedTime = 0;
+  unsigned long cachedRemainingTime = 0;
+  unsigned long lastCacheUpdate = 0;
+  bool isValid = false;
+};
+static FermentationCache fermentCache;
+
 // Temperature and performance functions
 float getAveragedTemperature() {
     return tempAvg.averagedTemperature;
@@ -392,6 +406,9 @@ void displayMessage(const String& message) {
 // Stream status JSON function - comprehensive implementation
 // This function streams JSON directly without creating large strings in memory
 void streamStatusJson(Print& out) {
+  // Update fermentation cache first (only recalculates when needed)
+  updateFermentationCache();
+  
   // Start main JSON object
   out.print("{");
   
@@ -506,10 +523,6 @@ void streamStatusJson(Print& out) {
   out.print(outputStates.buzzer ? "true" : "false");
   out.print(",");
   
-  out.print("\"manual_mode\":");
-  out.print(programState.manualMode ? "true" : "false");
-  out.print(",");
-  
   out.print("\"manualMode\":");
   out.print(programState.manualMode ? "true" : "false");
   out.print(",");
@@ -547,113 +560,24 @@ void streamStatusJson(Print& out) {
   
   // === Predicted Stage End Times (Fermentation-Adjusted) ===
   out.print("\"predictedStageEndTimes\":[");
-  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+  if (fermentCache.isValid && programState.activeProgramId >= 0) {
     Program* p = getActiveProgramMutable();
     if (p && p->customStages.size() > 0) {
-      time_t currentTime = time(nullptr);
-      time_t runningTime = currentTime;
-      
-      if (programState.isRunning && programState.customStageStart > 0) {
-        // Running: calculate from current stage position
-        unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
-        CustomStage& currentStage = p->customStages[programState.customStageIdx];
-        unsigned long adjustedStageDuration = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation) / 1000;
-        unsigned long remaining = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
-        runningTime = currentTime + remaining;
-        
-        // Output times for stages already completed
-        for (size_t i = 0; i < programState.customStageIdx; i++) {
-          if (i > 0) out.print(",");
-          out.printf("%lu", (unsigned long)programState.actualStageStartTimes[i + 1]);
-        }
-        
-        // Output current stage end time
-        if (programState.customStageIdx > 0) out.print(",");
-        out.printf("%lu", (unsigned long)runningTime);
-        
-        // Calculate remaining stages
-        for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); i++) {
-          CustomStage& stage = p->customStages[i];
-          unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
-          runningTime += adjustedDuration;
-          out.print(",");
-          out.printf("%lu", (unsigned long)runningTime);
-        }
-      } else {
-        // Not running - calculate full program preview from now with fermentation adjustments
-        for (size_t i = 0; i < p->customStages.size(); i++) {
-          if (i > 0) out.print(",");
-          CustomStage& stage = p->customStages[i];
-          unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
-          runningTime += adjustedDuration;
-          out.printf("%lu", (unsigned long)runningTime);
-        }
+      for (size_t i = 0; i < p->customStages.size() && i < 20; i++) {
+        if (i > 0) out.print(",");
+        out.printf("%lu", fermentCache.cachedStageEndTimes[i]);
       }
     }
   }
   out.print("],");
   
   // === Predicted Program End Time ===
-  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
-    Program* p = getActiveProgramMutable();
-    if (p && p->customStages.size() > 0) {
-      time_t currentTime = time(nullptr);
-      time_t programEndTime = currentTime;
-      
-      if (programState.isRunning && programState.customStageStart > 0) {
-        // Calculate remaining time from current position
-        unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
-        CustomStage& currentStage = p->customStages[programState.customStageIdx];
-        unsigned long adjustedStageDuration = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation) / 1000;
-        unsigned long remaining = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
-        programEndTime = currentTime + remaining;
-        
-        // Add remaining stages
-        for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); i++) {
-          CustomStage& stage = p->customStages[i];
-          unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
-          programEndTime += adjustedDuration;
-        }
-      } else {
-        // Not running - calculate full program duration
-        for (size_t i = 0; i < p->customStages.size(); i++) {
-          CustomStage& stage = p->customStages[i];
-          unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
-          programEndTime += adjustedDuration;
-        }
-      }
-      
-      out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)programEndTime);
-      
-      // === Additional timing data for UI ===
-      if (programState.isRunning && programState.actualStageStartTimes[0] > 0) {
-        // Calculate total program duration and elapsed/remaining for UI display
-        // Use the actual program start time (first stage start), not current stage start
-        time_t programStart = programState.actualStageStartTimes[0];
-        unsigned long totalProgramDuration = programEndTime - programStart;
-        unsigned long elapsedTime = time(nullptr) - programStart;
-        unsigned long remainingTime = (programEndTime > time(nullptr)) ? (programEndTime - time(nullptr)) : 0;
-        
-        out.printf("\"totalProgramDuration\":%lu,", totalProgramDuration);
-        out.printf("\"elapsedTime\":%lu,", elapsedTime);
-        out.printf("\"remainingTime\":%lu,", remainingTime);
-      } else {
-        out.print("\"totalProgramDuration\":0,");
-        out.print("\"elapsedTime\":0,");
-        out.print("\"remainingTime\":0,");
-      }
-    } else {
-      out.print("\"predictedProgramEnd\":0,");
-      out.print("\"totalProgramDuration\":0,");
-      out.print("\"elapsedTime\":0,");
-      out.print("\"remainingTime\":0,");
-    }
-  } else {
-    out.print("\"predictedProgramEnd\":0,");
-    out.print("\"totalProgramDuration\":0,");
-    out.print("\"elapsedTime\":0,");
-    out.print("\"remainingTime\":0,");
-  }
+  out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)fermentCache.cachedProgramEndTime);
+  
+  // === Additional timing data for UI (from cache) ===
+  out.printf("\"totalProgramDuration\":%lu,", fermentCache.cachedTotalDuration);
+  out.printf("\"elapsedTime\":%lu,", fermentCache.cachedElapsedTime);
+  out.printf("\"remainingTime\":%lu,", fermentCache.cachedRemainingTime);
   
   // === Stage Start Times Array ===
   out.print("\"actualStageStartTimes\":[");
@@ -675,23 +599,23 @@ void streamStatusJson(Print& out) {
   out.printf("\"free_heap\":%u,", ESP.getFreeHeap());
   
   out.print("\"connected\":");
-  out.print(WiFi.status() == WL_CONNECTED ? "true" : "false");
+  out.print(wifiCache.isConnected() ? "true" : "false");
   out.print(",");
   
   out.print("\"ip\":\"");
-  out.print(WiFi.localIP().toString());
+  out.print(wifiCache.getIPString());
   out.print("\",");
   
   // === WiFi Details ===
   out.print("\"wifi\":{");
-  if (WiFi.status() == WL_CONNECTED) {
+  if (wifiCache.isConnected()) {
     out.print("\"connected\":true,");
     out.print("\"ssid\":\"");
-    out.print(WiFi.SSID());
+    out.print(wifiCache.getSSID());
     out.print("\",");
-    out.printf("\"rssi\":%d,", WiFi.RSSI());
+    out.printf("\"rssi\":%d,", wifiCache.getRSSI());
     out.print("\"ip\":\"");
-    out.print(WiFi.localIP().toString());
+    out.print(wifiCache.getIPString());
     out.print("\"");
   } else {
     out.print("\"connected\":false");
@@ -705,8 +629,54 @@ void streamStatusJson(Print& out) {
   out.printf("\"pid_output\":%.3f,", pid.Output);
   out.printf("\"pid_input\":%.1f,", pid.Input);
   
+  // === Safety System Status ===
+  out.print("\"safety\":{");
+  out.print("\"emergencyShutdown\":");
+  out.print(safetySystem.emergencyShutdown ? "true" : "false");
+  out.print(",");
+  
+  if (safetySystem.emergencyShutdown) {
+    out.print("\"shutdownReason\":\"");
+    out.print(safetySystem.shutdownReason);
+    out.print("\",");
+    out.printf("\"shutdownTime\":%lu,", safetySystem.shutdownTime);
+  }
+  
+  out.print("\"temperatureValid\":");
+  out.print(safetySystem.temperatureValid ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"heatingEffective\":");
+  out.print(safetySystem.heatingEffective ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"pidSaturated\":");
+  out.print(safetySystem.pidSaturated ? "true" : "false");
+  out.print(",");
+  
+  out.printf("\"invalidTempCount\":%u,", safetySystem.invalidTempCount);
+  out.printf("\"zeroTempCount\":%u,", safetySystem.zeroTempCount);
+  
+  // Performance metrics
+  if (safetySystem.loopCount > 0) {
+    unsigned long avgLoopTime = safetySystem.totalLoopTime / safetySystem.loopCount;
+    out.printf("\"avgLoopTimeUs\":%lu,", avgLoopTime);
+    out.printf("\"maxLoopTimeUs\":%lu,", safetySystem.maxLoopTime);
+  } else {
+    out.print("\"avgLoopTimeUs\":0,");
+    out.print("\"maxLoopTimeUs\":0,");
+  }
+  
+  out.printf("\"maxSafeTemp\":%.1f,", SafetySystem::MAX_SAFE_TEMPERATURE);
+  out.printf("\"emergencyTemp\":%.1f", SafetySystem::EMERGENCY_TEMPERATURE);
+  out.print("},");
+  
   // === Status ===
-  out.print("\"status\":\"ok\"");
+  if (safetySystem.emergencyShutdown) {
+    out.print("\"status\":\"emergency_shutdown\"");
+  } else {
+    out.print("\"status\":\"ok\"");
+  }
   
   // Close main JSON object
   out.print("}");
@@ -715,9 +685,12 @@ void streamStatusJson(Print& out) {
 // === Fermentation Calculations ===
 
 float calculateFermentationFactor(float actualTemp) {
-  // Fermentation Q10 parameters
-  const float baselineTemp = 24.0; // 24°C baseline fermentation temperature
-  const float q10 = 1.9; // Fermentation rate doubles roughly every 10°C (typical for biological processes)
+  // Get current program to use its fermentation parameters
+  Program* p = getActiveProgramMutable();
+  
+  // Use program-specific fermentation parameters, with fallbacks
+  float baselineTemp = (p && p->fermentBaselineTemp > 0) ? p->fermentBaselineTemp : 20.0; 
+  float q10 = (p && p->fermentQ10 > 0) ? p->fermentQ10 : 2.0;
   
   // Handle invalid temperatures
   if (actualTemp <= 0.0 || actualTemp > 100.0) {
@@ -756,4 +729,156 @@ unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentat
   
   // Apply current fermentation factor
   return (unsigned long)(baseTimeMs * fermentState.fermentationFactor);
+}
+
+// Update fermentation cache - only recalculate when program or stage changes
+void updateFermentationCache() {
+  // Check if cache is still valid
+  bool cacheValid = fermentCache.isValid && 
+                   fermentCache.cachedProgramId == programState.activeProgramId &&
+                   fermentCache.cachedStageIdx == programState.customStageIdx &&
+                   (millis() - fermentCache.lastCacheUpdate) < 5000; // Refresh every 5 seconds max
+  
+  if (cacheValid) {
+    return; // Use existing cache
+  }
+  
+  // Reset cache
+  fermentCache.cachedProgramId = programState.activeProgramId;
+  fermentCache.cachedStageIdx = programState.customStageIdx;
+  fermentCache.lastCacheUpdate = millis();
+  fermentCache.isValid = false;
+  
+  // Clear arrays
+  for (int i = 0; i < 20; i++) {
+    fermentCache.cachedStageEndTimes[i] = 0;
+  }
+  
+  if (programState.activeProgramId < 0 || programState.activeProgramId >= getProgramCount()) {
+    fermentCache.cachedProgramEndTime = 0;
+    fermentCache.cachedTotalDuration = 0;
+    fermentCache.cachedElapsedTime = 0;
+    fermentCache.cachedRemainingTime = 0;
+    fermentCache.isValid = true;
+    return;
+  }
+  
+  Program* p = getActiveProgramMutable();
+  if (!p || p->customStages.size() == 0) {
+    fermentCache.cachedProgramEndTime = 0;
+    fermentCache.cachedTotalDuration = 0;
+    fermentCache.cachedElapsedTime = 0;
+    fermentCache.cachedRemainingTime = 0;
+    fermentCache.isValid = true;
+    return;
+  }
+  
+  // Calculate stage end times
+  time_t currentTime = time(nullptr);
+  time_t runningTime = currentTime;
+  
+  if (programState.isRunning && programState.customStageStart > 0) {
+    // Running: calculate from current stage position
+    unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
+    CustomStage& currentStage = p->customStages[programState.customStageIdx];
+    unsigned long adjustedStageDuration = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation) / 1000;
+    unsigned long remaining = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
+    runningTime = currentTime + remaining;
+    
+    // Cache times for stages already completed
+    for (size_t i = 0; i < programState.customStageIdx && i < 20; i++) {
+      fermentCache.cachedStageEndTimes[i] = programState.actualStageStartTimes[i + 1];
+    }
+    
+    // Cache current stage end time
+    if (programState.customStageIdx < 20) {
+      fermentCache.cachedStageEndTimes[programState.customStageIdx] = runningTime;
+    }
+    
+    // Calculate remaining stages
+    for (size_t i = programState.customStageIdx + 1; i < p->customStages.size() && i < 20; i++) {
+      CustomStage& stage = p->customStages[i];
+      unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
+      runningTime += adjustedDuration;
+      fermentCache.cachedStageEndTimes[i] = runningTime;
+    }
+    
+    fermentCache.cachedProgramEndTime = runningTime;
+    
+    // Calculate timing data for UI
+    if (programState.actualStageStartTimes[0] > 0) {
+      time_t programStart = programState.actualStageStartTimes[0];
+      fermentCache.cachedTotalDuration = fermentCache.cachedProgramEndTime - programStart;
+      fermentCache.cachedElapsedTime = time(nullptr) - programStart;
+      fermentCache.cachedRemainingTime = (fermentCache.cachedProgramEndTime > time(nullptr)) ? 
+                                        (fermentCache.cachedProgramEndTime - time(nullptr)) : 0;
+    } else {
+      fermentCache.cachedTotalDuration = 0;
+      fermentCache.cachedElapsedTime = 0;
+      fermentCache.cachedRemainingTime = 0;
+    }
+  } else {
+    // Not running - calculate full program preview from now
+    for (size_t i = 0; i < p->customStages.size() && i < 20; i++) {
+      CustomStage& stage = p->customStages[i];
+      unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
+      runningTime += adjustedDuration;
+      fermentCache.cachedStageEndTimes[i] = runningTime;
+    }
+    
+    fermentCache.cachedProgramEndTime = runningTime;
+    fermentCache.cachedTotalDuration = 0;
+    fermentCache.cachedElapsedTime = 0;
+    fermentCache.cachedRemainingTime = 0;
+  }
+  
+  fermentCache.isValid = true;
+}
+
+// === WiFi Cache Implementation ===
+
+// Update WiFi cache if needed (low-impact check)
+void WiFiCache::updateIfNeeded() {
+    unsigned long now = millis();
+    if (now - lastCacheUpdate >= CACHE_UPDATE_INTERVAL) {
+        lastCacheUpdate = now;
+        
+        // Cache WiFi status
+        cachedConnected = (WiFi.status() == WL_CONNECTED);
+        
+        if (cachedConnected) {
+            // Only call expensive toString() when actually connected and cache is stale
+            cachedIPString = WiFi.localIP().toString();
+            cachedSSID = WiFi.SSID();
+            cachedRSSI = WiFi.RSSI();
+        } else {
+            cachedIPString = "0.0.0.0";
+            cachedSSID = "";
+            cachedRSSI = 0;
+        }
+    }
+}
+
+// Get cached IP string (always fast)
+const String& WiFiCache::getIPString() {
+    updateIfNeeded();
+    return cachedIPString;
+}
+
+// Get cached connection status
+bool WiFiCache::isConnected() {
+    updateIfNeeded();
+    return cachedConnected;
+}
+
+// Get cached SSID
+const String& WiFiCache::getSSID() {
+    updateIfNeeded();
+    return cachedSSID;
+}
+
+// Get cached RSSI
+int WiFiCache::getRSSI() {
+    updateIfNeeded();
+    return cachedRSSI;
 }

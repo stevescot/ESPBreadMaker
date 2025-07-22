@@ -28,6 +28,7 @@ FEATURES:
 
 #include "globals.h"       // Must be included for global definitions
 #include "display_manager.h"  // LovyanGFX display management
+#include "outputs_manager.h"  // Output control functions
 #include "missing_stubs.h"    // Missing function implementations
 // #include "capacitive_buttons.h" // REMOVED: Capacitive touch buttons (GPIO conflicts)
 #include "calibration.h"
@@ -135,12 +136,15 @@ void deleteFolderRecursive(const String& path) {
   if (root && root.isDirectory()) {
     File file = root.openNextFile();
     while (file) {
-      String filePath = path + "/" + file.name();
+      // Use pre-allocated buffer to avoid String concatenation
+      char filePath[128];
+      snprintf(filePath, sizeof(filePath), "%s/%s", path.c_str(), file.name());
+      
       if (file.isDirectory()) {
-        deleteFolderRecursive(filePath);
+        deleteFolderRecursive(String(filePath));
       } else {
         if (!FFat.remove(filePath) && debugSerial) {
-          Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove file '%s'\n", filePath.c_str());
+          Serial.printf("[deleteFolderRecursive] ERROR: Failed to remove file '%s'\n", filePath);
         }
       }
       file = root.openNextFile();
@@ -153,8 +157,21 @@ void deleteFolderRecursive(const String& path) {
 
 // Helper function to send a JSON error response (WebServer compatible)
 // Sends a JSON-formatted error message to the client with a specified HTTP status code.
+// Optimized to use streaming to avoid String concatenation and reduce memory usage.
 void sendJsonError(WebServer& server, const String& error, const String& message, int code = 400) {
-  server.send(code, "application/json", "{\"error\":\"" + error + "\",\"message\":\"" + message + "\"}");
+  // Calculate approximate response size to minimize reallocations
+  size_t responseSize = 50 + error.length() + message.length();
+  String response;
+  response.reserve(responseSize);
+  
+  // Build JSON response with minimal String operations
+  response = F("{\"error\":\"");
+  response += error;
+  response += F("\",\"message\":\"");
+  response += message;
+  response += F("\"}");
+  
+  server.send(code, F("application/json"), response);
 }
 
 // Initializes all hardware, outputs, file systems, and loads configuration and calibration data.
@@ -301,7 +318,7 @@ void initializeWiFi() {
           Serial.println();
           
           if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("[wifi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("[wifi] Connected! IP: %s\n", wifiCache.getIPString().c_str());
             
             // Initialize OTA only after successful connection
             delay(500);
@@ -404,6 +421,10 @@ void setup() {
   Serial.println(F("PID controller initialized with relay-friendly time-proportional control"));
   Serial.println(F("Temperature averaging system initialized (10 samples, 0.5s interval, reject top/bottom 2)"));
   
+  // --- Initialize safety monitoring system ---
+  safetySystem.init();
+  Serial.println(F("Safety monitoring system initialized with oven limits (235°C max)"));
+  
   // Wait for time sync with timeout to avoid hanging forever
   unsigned long ntpStart = millis();
   const unsigned long ntpTimeout = 15000; // 15 seconds max wait
@@ -417,46 +438,75 @@ const char* RESUME_FILE = "/resume.json";
 unsigned long lastResumeSave = 0;
 
 // Saves the current breadmaker state (program, stage, timing, etc.) to FFat for resume after reboot.
-// Includes throttling to prevent excessive writes under load conditions.
+// Optimized for minimal memory usage and reduced performance impact during critical operations.
 void saveResumeState() {
   // Throttle saves: minimum 2 seconds between saves to reduce wear and memory pressure
   unsigned long now = millis();
   if (lastResumeSave > 0 && (now - lastResumeSave) < 2000) {
     return; // Skip this save to reduce load
   }
-  lastResumeSave = now;
   
-  File f = FFat.open(RESUME_FILE, "w");
-  if (!f) {
-    if (debugSerial) Serial.println("[saveResumeState] ERROR: Failed to open resume file for writing!");
+  // Skip saves during critical temperature control phases to avoid performance impact
+  if (programState.isRunning && pid.Setpoint > 0) {
+    static unsigned long lastCriticalSkip = 0;
+    if ((now - lastCriticalSkip) > 30000) { // Log skip once every 30 seconds
+      if (debugSerial) Serial.println(F("[saveResumeState] Skipping save during active temperature control"));
+      lastCriticalSkip = now;
+    }
     return;
   }
+  
+  lastResumeSave = now;
+  
+  // Open file with minimal error handling to reduce code size
+  File f = FFat.open(RESUME_FILE, "w");
+  if (!f) {
+    if (debugSerial) Serial.println(F("[saveResumeState] ERROR: Failed to open resume file"));
+    return;
+  }
+  
+  // Stream directly to file - no intermediate buffers
   serializeResumeStateJson(f);
   f.close();
+  
+  // Optional: Track save performance for debugging
+  if (debugSerial && ((now - lastResumeSave) > 100)) {
+    Serial.printf("[saveResumeState] Save took %lums\n", now - lastResumeSave);
+  }
 }
 
 // Helper to serialize resume state as JSON using memory-efficient streaming
+// Optimized to minimize memory allocation and reduce processing overhead
 void serializeResumeStateJson(Print& f) {
-  // Calculate elapsed times once to avoid multiple calculations
-  unsigned long stageSec = (programState.customStageStart > 0) ? (millis() - programState.customStageStart) / 1000UL : 0UL;
-  unsigned long mixSec = (programState.customMixStepStart > 0) ? (millis() - programState.customMixStepStart) / 1000UL : 0UL;
+  // Calculate elapsed times once to avoid multiple calculations during streaming
+  unsigned long nowMs = millis();
+  unsigned long stageSec = (programState.customStageStart > 0) ? (nowMs - programState.customStageStart) / 1000UL : 0UL;
+  unsigned long mixSec = (programState.customMixStepStart > 0) ? (nowMs - programState.customMixStepStart) / 1000UL : 0UL;
   
-  // Stream JSON directly to file - no large buffers needed
-  f.print("{\n");
-  f.printf("  \"programIdx\":%u,\n", (unsigned)programState.activeProgramId);
-  f.printf("  \"customStageIdx\":%u,\n", (unsigned)programState.customStageIdx);
-  f.printf("  \"customMixIdx\":%u,\n", (unsigned)programState.customMixIdx);
-  f.printf("  \"elapsedStageSec\":%lu,\n", stageSec);
-  f.printf("  \"elapsedMixSec\":%lu,\n", mixSec);
-  f.printf("  \"programStartTime\":%lu,\n", (unsigned long)programState.programStartTime);
-  f.printf("  \"isRunning\":%s,\n", programState.isRunning ? "true" : "false");
-  f.print("  \"actualStageStartTimes\":[");
+  // Stream JSON directly to file - completely avoids string buffers and heap allocation
+  // Use print() for static strings and printf() only when necessary for formatting
+  f.print(F("{\"programIdx\":"));
+  f.print((unsigned)programState.activeProgramId);
+  f.print(F(",\"customStageIdx\":"));
+  f.print((unsigned)programState.customStageIdx);
+  f.print(F(",\"customMixIdx\":"));
+  f.print((unsigned)programState.customMixIdx);
+  f.print(F(",\"elapsedStageSec\":"));
+  f.print(stageSec);
+  f.print(F(",\"elapsedMixSec\":"));
+  f.print(mixSec);
+  f.print(F(",\"programStartTime\":"));
+  f.print((unsigned long)programState.programStartTime);
+  f.print(F(",\"isRunning\":"));
+  f.print(programState.isRunning ? F("true") : F("false"));
+  f.print(F(",\"actualStageStartTimes\":["));
+  
+  // Stream array elements directly without intermediate formatting
   for (int i = 0; i < 20; i++) {
-    if (i > 0) f.print(",");
-    f.printf("%lu", (unsigned long)programState.actualStageStartTimes[i]);
+    if (i > 0) f.print(',');
+    f.print((unsigned long)programState.actualStageStartTimes[i]);
   }
-  f.print("]\n");
-  f.print("}\n");
+  f.print(F("]}\n"));
 }
 
 // Removes the saved resume state file from FFat.
@@ -662,9 +712,184 @@ void handleScheduledStart(bool &scheduledStartTriggered);
 // Handles the main custom stage logic for the breadmaker program.
 void handleCustomStages(bool &stageJustAdvanced);
 
+// Low-impact safety monitoring with emergency shutdown capabilities
+void performSafetyChecks() {
+  unsigned long now = millis();
+  
+  // Only check every second to minimize loop impact
+  if (now - safetySystem.lastSafetyCheck < SafetySystem::SAFETY_CHECK_INTERVAL) {
+    return;
+  }
+  safetySystem.lastSafetyCheck = now;
+  
+  // If safety system is disabled, skip all checks (for testing without heater)
+  if (!safetySystem.safetyEnabled) {
+    if (debugSerial && (now - safetySystem.lastSafetyCheck) > 30000) { // Log once every 30 seconds
+      Serial.println(F("[SAFETY] Safety system DISABLED - no temperature or heating checks"));
+    }
+    return;
+  }
+  
+  // If already in emergency shutdown, don't do further checks
+  if (safetySystem.emergencyShutdown) {
+    return;
+  }
+  
+  float currentTemp = getAveragedTemperature();
+  
+  // --- Critical Temperature Checks ---
+  
+  // Emergency temperature shutdown (immediate)
+  if (safetySystem.isEmergencyShutdownNeeded(currentTemp)) {
+    triggerEmergencyShutdown(F("Emergency: Temperature exceeds 240°C"));
+    return;
+  }
+  
+  // Temperature sensor validation
+  if (!safetySystem.isTemperatureValid(currentTemp)) {
+    safetySystem.invalidTempCount++;
+    if (currentTemp == 0.0) {
+      safetySystem.zeroTempCount++;
+    }
+    
+    // Multiple consecutive invalid readings trigger shutdown
+    if (safetySystem.invalidTempCount >= SafetySystem::MAX_INVALID_TEMP || 
+        safetySystem.zeroTempCount >= SafetySystem::MAX_ZERO_TEMP) {
+      triggerEmergencyShutdown(F("Shutdown: Temperature sensor fault detected"));
+      return;
+    }
+  } else {
+    // Valid temperature - reset counters and update tracking
+    safetySystem.invalidTempCount = 0;
+    safetySystem.zeroTempCount = 0;
+    safetySystem.lastValidTempTime = now;
+    safetySystem.lastValidTemperature = currentTemp;
+    safetySystem.temperatureValid = true;
+  }
+  
+  // Temperature timeout check (no valid readings for too long)
+  if (now - safetySystem.lastValidTempTime > SafetySystem::TEMP_TIMEOUT_MS) {
+    triggerEmergencyShutdown(F("Shutdown: Temperature sensor timeout"));
+    return;
+  }
+  
+  // Safe operating temperature check
+  if (!safetySystem.isTemperatureSafe(currentTemp)) {
+    triggerEmergencyShutdown(F("Shutdown: Temperature exceeds 235°C limit"));
+    return;
+  }
+  
+  // --- Heating Effectiveness Monitoring ---
+  
+  // Check if heater is running
+  bool heaterActive = outputStates.heater || (pid.Output > 0.5); // 50% threshold
+  
+  if (heaterActive) {
+    if (safetySystem.heatingStartTime == 0) {
+      // Start tracking heating effectiveness
+      safetySystem.heatingStartTime = now;
+      safetySystem.heatingStartTemp = currentTemp;
+      safetySystem.lastTempRiseTime = now;
+    } else {
+      // Check if heating is effective
+      unsigned long heatingDuration = now - safetySystem.heatingStartTime;
+      float tempRise = currentTemp - safetySystem.heatingStartTemp;
+      unsigned long sinceLastRise = now - safetySystem.lastTempRiseTime;
+      
+      // Update last rise time if temperature increased
+      if (tempRise >= SafetySystem::MIN_TEMP_RISE) {
+        safetySystem.lastTempRiseTime = now;
+        safetySystem.heatingEffective = true;
+      }
+      
+      // Check for heating timeout (heater on too long without effect)
+      if (heatingDuration > SafetySystem::MAX_HEATING_TIME && tempRise < SafetySystem::MIN_TEMP_RISE) {
+        triggerEmergencyShutdown(F("Shutdown: Heater ineffective (5min no rise)"));
+        return;
+      }
+      
+      // Check for no temperature rise in 30 seconds during heating
+      if (sinceLastRise > SafetySystem::HEATING_CHECK_INTERVAL && tempRise < SafetySystem::MIN_TEMP_RISE) {
+        safetySystem.heatingEffective = false;
+        // Don't shutdown immediately - could be normal during some phases
+      }
+    }
+  } else {
+    // Reset heating tracking when heater is off
+    safetySystem.heatingStartTime = 0;
+    safetySystem.heatingEffective = true;
+  }
+  
+  // --- PID Saturation Monitoring ---
+  
+  // Check if PID is saturated (normal during heat-up)
+  if (pid.Output >= 0.95) { // 95% considered saturated
+    if (safetySystem.pidSaturationStart == 0) {
+      safetySystem.pidSaturationStart = now;
+    }
+    safetySystem.pidSaturated = true;
+    
+    // Extended saturation could indicate problems
+    if (now - safetySystem.pidSaturationStart > SafetySystem::MAX_PID_SATURATION) {
+      // Don't shutdown for PID saturation alone - just log it
+      if (debugSerial) {
+        Serial.println(F("[SAFETY] PID saturated >10min - possible issue"));
+      }
+    }
+  } else {
+    safetySystem.pidSaturated = false;
+    safetySystem.pidSaturationStart = 0;
+  }
+}
+
+// Emergency shutdown function with display notification
+void triggerEmergencyShutdown(const String& reason) {
+  safetySystem.emergencyShutdown = true;
+  safetySystem.shutdownReason = reason;
+  safetySystem.shutdownTime = millis();
+  
+  // Immediately disable all outputs
+  outputStates.heater = false;
+  outputStates.motor = false;
+  outputStates.buzzer = true; // Sound alarm
+  
+  // Stop any running program
+  if (programState.isRunning) {
+    stopBreadmaker();
+  }
+  
+  // Reset PID to prevent any heating
+  pid.Setpoint = 0;
+  pid.Output = 0;
+  
+  // Log the emergency shutdown
+  Serial.print(F("[EMERGENCY SHUTDOWN] "));
+  Serial.println(reason);
+  
+  // Update display to show shutdown reason
+  displayError(reason);
+  
+  // Force immediate output update
+  setHeater(outputStates.heater);
+  setMotor(outputStates.motor);
+  setLight(outputStates.light);
+  setBuzzer(outputStates.buzzer);
+}
+
 // Arduino main loop. Handles temperature sampling, fermentation, manual mode, scheduled start,
 // and custom stage logic for breadmaker operation.
 void loop() {
+  // --- Handle deferred settings save ---
+  if (pendingSettingsSaveTime > 0 && millis() >= pendingSettingsSaveTime) {
+    pendingSettingsSaveTime = 0;
+    saveSettings();
+    if (debugSerial) Serial.println("[DEBUG] Deferred settings save completed");
+  }
+  
+  // --- Safety monitoring (low-impact, every 1 second) ---
+  safetySystem.loopStartTime = micros();
+  performSafetyChecks();
+  
   updatePerformanceMetrics(); // Track performance for Home Assistant endpoint
   updateTemperatureSampling();
   updateFermentationFactor(); // Update fermentation calculations based on current temperature
@@ -722,6 +947,24 @@ void loop() {
   }
   handleCustomStages(stageJustAdvanced);
   temp = getAveragedTemperature();
+  
+  // --- Track loop performance (low-impact) ---
+  if (safetySystem.loopStartTime > 0) {
+    unsigned long loopTime = micros() - safetySystem.loopStartTime;
+    safetySystem.totalLoopTime += loopTime;
+    safetySystem.loopCount++;
+    if (loopTime > safetySystem.maxLoopTime) {
+      safetySystem.maxLoopTime = loopTime;
+    }
+    
+    // Warn about critical loop times (but don't shutdown)
+    if (loopTime > SafetySystem::CRITICAL_LOOP_TIME * 1000) { // Convert to microseconds
+      if (debugSerial) {
+        Serial.printf("[SAFETY] Critical loop time: %lu μs\n", loopTime);
+      }
+    }
+  }
+  
   yield();
   delay(100);  // Increased delay to reduce CPU load significantly
 }
@@ -771,7 +1014,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           }
           
           double previousWeightedSec = fermentState.fermentWeightedSec;
-          double incrementalWeightedSec = elapsedSec * fermentState.fermentLastFactor;
+          double incrementalWeightedSec = elapsedSec / fermentState.fermentLastFactor; // DIVISION: cooler temp = factor > 1 = slower fermentation
           fermentState.fermentWeightedSec += incrementalWeightedSec;
           fermentState.fermentLastTemp = actualTemp;
           fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
@@ -961,22 +1204,25 @@ void handleCustomStages(bool &stageJustAdvanced) {
             float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
             float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
             float temp = fermentState.fermentLastTemp;
-            float factor = pow(q10, (baseline - temp) / 10.0); // Q10: factor < 1 means faster at higher temp
-            cumulativePredictedSec += plannedStageSec * factor; // Multiply: higher temp = less time
+            float factor = pow(q10, (baseline - temp) / 10.0); // Q10: factor > 1 means slower at cooler temp
+            cumulativePredictedSec += plannedStageSec * factor; // Multiply: cooler temp = longer real time needed
           } else if (i == programState.customStageIdx) {
-            double elapsedSec = fermentState.fermentWeightedSec;
+            // Current fermentation stage: weighted elapsed + predicted remaining
+            double elapsedWeightedSec = fermentState.fermentWeightedSec;
             double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
-            elapsedSec += realElapsedSec * fermentState.fermentLastFactor;
-            // For current fermentation stage, estimate remaining time:
-            // elapsedSec is already weighted (i.e., elapsed * factor), so to get the equivalent real elapsed time at the current temperature,
-            // we divide by the factor. This is the only place division is correct: it "unweights" the elapsed time so we can subtract from planned.
-            // All future/remaining time is then multiplied by the factor for Q10 logic.
-            double remainSec = plannedStageSec - (elapsedSec / fermentState.fermentLastFactor); // Division: unweight elapsed, then multiply remaining by factor
-            if (remainSec < 0) remainSec = 0;
-            // Add elapsed (weighted) plus remaining (multiply by factor for Q10 logic)
-            cumulativePredictedSec += elapsedSec + remainSec * fermentState.fermentLastFactor; // Multiply: remaining time is shorter at higher temp
+            elapsedWeightedSec += realElapsedSec / fermentState.fermentLastFactor; // DIVISION: convert real time to weighted time
+            
+            // Remaining weighted time needed
+            double remainingWeightedSec = plannedStageSec - elapsedWeightedSec;
+            if (remainingWeightedSec < 0) remainingWeightedSec = 0;
+            
+            // Convert elapsed and remaining weighted time back to real time at current temperature
+            double elapsedRealSec = elapsedWeightedSec * fermentState.fermentLastFactor; // Multiply: convert weighted back to real
+            double remainingRealSec = remainingWeightedSec * fermentState.fermentLastFactor; // Multiply: cooler temp = more real time
+            cumulativePredictedSec += elapsedRealSec + remainingRealSec;
           } else {
-            cumulativePredictedSec += plannedStageSec * fermentState.fermentLastFactor; // Multiply: higher temp = less time
+            // Future fermentation stages: predict using current temperature
+            cumulativePredictedSec += plannedStageSec * fermentState.fermentLastFactor; // Multiply: cooler temp = longer real time
           }
         } else {
           cumulativePredictedSec += plannedStageSec;
@@ -1253,10 +1499,10 @@ void checkSerialWifiConfig() {
       Serial.println(F("[WIFI CONFIG] wifi:reset - Reset WiFi configuration"));
       Serial.println(F("[WIFI CONFIG] wifi:help - Show this help"));
     } else if (cmd == "wifi:status") {
-      Serial.printf("[WIFI CONFIG] WiFi Status: %s\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("[WIFI CONFIG] IP: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("[WIFI CONFIG] SSID: %s\n", WiFi.SSID().c_str());
+      Serial.printf("[WIFI CONFIG] WiFi Status: %s\n", wifiCache.isConnected() ? "Connected" : "Disconnected");
+      if (wifiCache.isConnected()) {
+        Serial.printf("[WIFI CONFIG] IP: %s\n", wifiCache.getIPString().c_str());
+        Serial.printf("[WIFI CONFIG] SSID: %s\n", wifiCache.getSSID().c_str());
       } else if (WiFi.getMode() == WIFI_AP) {
         Serial.printf("[WIFI CONFIG] AP Mode IP: %s\n", WiFi.softAPIP().toString().c_str());
       }
@@ -1301,6 +1547,9 @@ void loadSettings() {
   const char* mode = doc["outputMode"] | "digital";
   outputMode = OUTPUT_DIGITAL; // Only digital mode supported
   debugSerial = doc["debugSerial"] | true;
+  
+  // Load safety system settings (default to disabled for testing)
+  safetySystem.safetyEnabled = doc["safetyEnabled"] | false;
   
   // Load PID parameters - backward compatibility
   if (doc.containsKey("pidKp")) {
@@ -1360,6 +1609,7 @@ void saveSettings() {
   f.print("{\n");
   f.print("  \"outputMode\":\"digital\",\n"); // Only digital mode supported
   f.printf("  \"debugSerial\":%s,\n", debugSerial ? "true" : "false");
+  f.printf("  \"safetyEnabled\":%s,\n", safetySystem.safetyEnabled ? "true" : "false");
   
   if (getProgramCount() > 0) {
     f.printf("  \"lastProgramId\":%d,\n", (int)programState.activeProgramId);

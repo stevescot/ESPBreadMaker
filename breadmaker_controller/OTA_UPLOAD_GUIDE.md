@@ -32,12 +32,10 @@ The ESP32 breadmaker controller supports Over-The-Air (OTA) firmware updates via
 ### Method 2: Manual OTA Upload
 ```powershell
 # Build and upload via OTA
-.\build_esp32.ps1 -OTA 192.168.250.125
-
-# Build and upload with password
-.\build_esp32.ps1 -OTA 192.168.250.125 -OTAPassword "yourpassword"
+.\unified_build.ps1 -Build -WebOTA
 
 # Build, upload firmware, and upload data files
+.\unified_build.ps1 -Build -WebOTA -UploadData
 .\build_esp32.ps1 -OTA 192.168.250.125 -UploadData
 ```
 

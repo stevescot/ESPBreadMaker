@@ -89,6 +89,7 @@ ButtonAction checkButtonPress() {
     if (isButtonPressed(touchPins[i])) {
       if (currentTime - lastButtonPress[i] > DEBOUNCE_MS) {
         lastButtonPress[i] = currentTime;
+        updateActivityTime(); // Update display activity time
         return buttonActions[i];
       }
     }

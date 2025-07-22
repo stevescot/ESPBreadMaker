@@ -17,6 +17,11 @@ static DisplayState lastState = DISPLAY_STATUS;
 static unsigned long lastDisplayUpdate = 0;
 static const unsigned long DISPLAY_UPDATE_INTERVAL = 1000; // Update every 1000ms (reduced frequency)
 
+// Screensaver variables
+static unsigned long lastActivityTime = 0;
+static bool screensaverActive = false;
+static const unsigned long SCREENSAVER_TIMEOUT = 3600000; // 1 hour in milliseconds (3600 * 1000)
+
 // Cached values to detect changes
 static float lastTemperature = -999.0;
 static bool lastHeaterState = false;
@@ -47,6 +52,10 @@ void displayManagerInit() {
   pinMode(BUTTON_1, INPUT_PULLUP);
   pinMode(BUTTON_2, INPUT_PULLUP);
   
+  // Initialize screensaver
+  lastActivityTime = millis();
+  screensaverActive = false;
+  
   // Show boot screen
   displayBootScreen();
   
@@ -55,6 +64,15 @@ void displayManagerInit() {
 
 void updateDisplay() {
   unsigned long now = millis();
+  
+  // Check screensaver status
+  checkScreensaver();
+  
+  // If screensaver is active, don't update display content
+  if (screensaverActive) {
+    handleButtons(); // Still handle buttons to wake up
+    return;
+  }
   
   // Update display at regular intervals
   if (now - lastDisplayUpdate >= DISPLAY_UPDATE_INTERVAL) {
@@ -260,11 +278,11 @@ void displayWiFiSetup() {
     
     display.setTextSize(1);
     display.setCursor(10, 40);
-    if (WiFi.status() == WL_CONNECTED) {
+    if (wifiCache.isConnected()) {
       display.setTextColor(COLOR_GREEN);
       display.println("Connected");
       display.setCursor(10, 55);
-      display.printf("IP: %s", WiFi.localIP().toString().c_str());
+      display.printf("IP: %s", wifiCache.getIPString().c_str());
     } else {
       display.setTextColor(COLOR_RED);
       display.println("Disconnected");
@@ -325,6 +343,13 @@ void handleButtons() {
   if (btn1 && !button1Pressed) {
     button1Pressed = true;
     lastButtonPress = now;
+    updateActivityTime(); // Update activity time on button press
+    
+    // If screensaver is active, just wake up and don't process the button action
+    if (screensaverActive) {
+      disableScreensaver();
+      return;
+    }
     
     switch (currentState) {
       case DISPLAY_STATUS:
@@ -349,6 +374,13 @@ void handleButtons() {
   if (btn2 && !button2Pressed) {
     button2Pressed = true;
     lastButtonPress = now;
+    updateActivityTime(); // Update activity time on button press
+    
+    // If screensaver is active, just wake up and don't process the button action
+    if (screensaverActive) {
+      disableScreensaver();
+      return;
+    }
     
     if (currentState != DISPLAY_STATUS) {
       setDisplayState(DISPLAY_STATUS);
@@ -430,4 +462,68 @@ void drawOutputStates(int x, int y, bool heater, bool motor, bool light, bool bu
   display.setTextColor(buzzer ? COLOR_GREEN : COLOR_GRAY);
   display.setCursor(x + 60, y);
   display.print("B");
+}
+
+// Screensaver implementation
+void updateActivityTime() {
+  lastActivityTime = millis();
+  if (screensaverActive) {
+    Serial.println("[Display] Activity detected, waking up from screensaver");
+  }
+}
+
+bool isScreensaverActive() {
+  return screensaverActive;
+}
+
+void enableScreensaver() {
+  if (!screensaverActive) {
+    Serial.println("[Display] Enabling screensaver - turning off display and backlight");
+    screensaverActive = true;
+    
+    // Turn off backlight using LovyanGFX brightness control
+    display.setBrightness(0);
+    
+    // Clear display to save power
+    display.fillScreen(COLOR_BLACK);
+    
+    // Optionally turn off the display completely (if supported)
+    display.sleep();
+  }
+}
+
+void disableScreensaver() {
+  if (screensaverActive) {
+    Serial.println("[Display] Disabling screensaver - turning on display and backlight");
+    screensaverActive = false;
+    
+    // Wake up display
+    display.wakeup();
+    
+    // Restore backlight to full brightness
+    display.setBrightness(255);
+    
+    // Force a full redraw
+    forceFullRedraw = true;
+    lastDisplayUpdate = 0; // Force immediate update
+    
+    // Clear the screen for clean redraw
+    display.fillScreen(COLOR_BLACK);
+  }
+}
+
+void checkScreensaver() {
+  unsigned long now = millis();
+  
+  // Handle millis() overflow (occurs every ~50 days)
+  if (now < lastActivityTime) {
+    lastActivityTime = now;
+    return;
+  }
+  
+  // Check if screensaver timeout has been reached
+  if (!screensaverActive && (now - lastActivityTime) >= SCREENSAVER_TIMEOUT) {
+    Serial.printf("[Display] No activity for %lu minutes, activating screensaver\n", SCREENSAVER_TIMEOUT / 60000);
+    enableScreensaver();
+  }
 }

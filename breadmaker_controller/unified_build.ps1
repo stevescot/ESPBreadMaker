@@ -6,6 +6,7 @@
 #   .\unified_build.ps1 -Build -WebOTA                   # Build and upload via web OTA (recommended)
 #   .\unified_build.ps1 -Build -Serial COM3              # Build and upload via serial
 #   .\unified_build.ps1 -UploadData                      # Upload data files only
+#   .\unified_build.ps1 -UploadData -Files "index.html","config.html"  # Upload specific files only
 #   .\unified_build.ps1 -Build -WebOTA -UploadData       # Build firmware and upload everything
 #   .\unified_build.ps1 -Clean                           # Clean build artifacts
 #   .\unified_build.ps1 -Test                            # Run API tests without building
@@ -16,6 +17,7 @@ param(
     [switch]$WebOTA,          # Upload firmware via web OTA (preferred)
     [string]$Serial = "",     # Upload firmware via serial port (e.g., "COM3")
     [switch]$UploadData,      # Upload data files (web UI, programs, etc.)
+    [string[]]$Files = @(),   # Specific files to upload (optional, used with -UploadData)
     [switch]$Clean,           # Clean build artifacts
     [switch]$Test,            # Run basic API tests
     [switch]$Help,            # Show help
@@ -27,7 +29,6 @@ Add-Type -AssemblyName System.Web
 
 # Configuration
 $DEVICE_IP = $IP
-$BUILD_SCRIPT = ".\build_esp32.ps1"
 $WEB_OTA_ENDPOINT = "http://$DEVICE_IP/api/update"
 $FIRMWARE_FILE = "build\breadmaker_controller.ino.bin"
 
@@ -46,6 +47,7 @@ BASIC OPERATIONS:
   -WebOTA                   Upload firmware via web endpoint (recommended)
   -Serial COM3              Upload firmware via serial port
   -UploadData               Upload data files (HTML, JS, programs)
+  -Files file1,file2        Upload specific files only (with -UploadData)
   -Clean                    Remove build artifacts
   -Test                     Run API connectivity tests
 
@@ -58,6 +60,9 @@ COMMON COMBINATIONS:
 
   .\unified_build.ps1 -UploadData
   # Upload only web files and data
+
+  .\unified_build.ps1 -UploadData -Files "index.html","config.html"
+  # Upload only specific files
 
   .\unified_build.ps1 -Build -WebOTA -UploadData
   # Full deployment: build firmware and upload everything
@@ -114,13 +119,22 @@ function Test-DeviceConnectivity {
 function Build-Firmware {
     Write-Info "Building ESP32 firmware..."
     
-    if (-not (Test-Path $BUILD_SCRIPT)) {
-        Write-Error "Build script not found: $BUILD_SCRIPT"
-        return $false
-    }
+    # Arduino CLI compilation command
+    $ARDUINO_CLI = "arduino-cli"
+    $BOARD = "esp32:esp32:esp32"
+    $BUILD_PATH = "build"
+    $SKETCH = "breadmaker_controller.ino"
     
     try {
-        & $BUILD_SCRIPT
+        # Create build directory
+        if (-not (Test-Path $BUILD_PATH)) {
+            New-Item -ItemType Directory -Path $BUILD_PATH | Out-Null
+        }
+        
+        # Compile with Arduino CLI
+        Write-Info "Compiling with Arduino CLI..."
+        & $ARDUINO_CLI compile --fqbn $BOARD --build-path $BUILD_PATH $SKETCH
+        
         if ($LASTEXITCODE -eq 0) {
             Write-Success "Firmware compiled successfully"
             if (Test-Path $FIRMWARE_FILE) {
@@ -212,48 +226,87 @@ function Upload-FirmwareSerial {
 }
 
 function Upload-DataFiles {
+    param([string[]]$SpecificFiles = @())
+    
     Write-Info "Uploading data files..."
     
     if (-not (Test-DeviceConnectivity)) {
         return $false
     }
     
-    # Upload critical data files
-    $dataFiles = @(
+    # Default data files to upload when no specific files are provided
+    $defaultDataFiles = @(
         "data\programs_index.json",
         "data\index.html",
+        "data\config.html",
         "data\script.js",
         "data\programs.html",
         "data\programs.js",
-        "data\style.css"
+        "data\style.css",
+        "data\common.js",
+        "data\debug_serial.js",
+        "data\calibration.html",
+        "data\pid-tune.html",
+        "data\home_assistant.html"
     )
+    
+    # Use specific files if provided, otherwise use default list
+    if ($SpecificFiles.Count -gt 0) {
+        Write-Info "Uploading specific files: $($SpecificFiles -join ', ')"
+        $dataFiles = @()
+        foreach ($file in $SpecificFiles) {
+            # Add data\ prefix if not already present and file doesn't contain path separator
+            if (-not $file.Contains('\') -and -not $file.Contains('/')) {
+                $dataFiles += "data\$file"
+            } else {
+                $dataFiles += $file
+            }
+        }
+    } else {
+        Write-Info "Uploading all default data files..."
+        $dataFiles = $defaultDataFiles
+    }
     
     $uploadCount = 0
     $totalFiles = $dataFiles.Count
     
     foreach ($file in $dataFiles) {
-        if (Test-Path $file) {
+        $fullPath = Resolve-Path $file -ErrorAction SilentlyContinue
+        if ($fullPath -and (Test-Path $fullPath)) {
             $filename = Split-Path $file -Leaf
             Write-Info "Uploading $filename..."
             
             try {
-                $content = Get-Content $file -Raw -Encoding UTF8
-                $encodedContent = [System.Web.HttpUtility]::UrlEncode($content)
+                # Create multipart form data like the test script
+                $boundary = [System.Guid]::NewGuid().ToString()
+                $LF = "`r`n"
                 
-                $result = curl -s -X POST -H "Content-Type: application/x-www-form-urlencoded" `
-                    -d "filename=$filename&content=$encodedContent" `
-                    "http://$DEVICE_IP/debug/upload" 2>$null
+                $fileBytes = [System.IO.File]::ReadAllBytes($fullPath)
                 
-                if ($result -match "uploaded") {
-                    Write-Success "✓ $filename uploaded"
+                $bodyLines = @(
+                    "--$boundary",
+                    "Content-Disposition: form-data; name=`"file`"; filename=`"$filename`"",
+                    "Content-Type: text/html",
+                    "",
+                    [System.Text.Encoding]::UTF8.GetString($fileBytes),
+                    "--$boundary--"
+                )
+                
+                $body = $bodyLines -join $LF
+                $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                
+                $response = Invoke-WebRequest -Uri "http://$DEVICE_IP/api/upload" -Method POST -Body $bodyBytes -ContentType "multipart/form-data; boundary=$boundary" -TimeoutSec 30
+                
+                if ($response.StatusCode -eq 200) {
+                    Write-Success "✓ $filename uploaded successfully"
                     $uploadCount++
                 }
                 else {
-                    Write-Warning "✗ $filename upload may have failed"
+                    Write-Warning "✗ $filename upload failed with status: $($response.StatusCode)"
                 }
             }
             catch {
-                Write-Warning "✗ Failed to upload $filename"
+                Write-Warning "✗ Failed to upload $filename`: $($_.Exception.Message)"
             }
         }
         else {
@@ -327,7 +380,7 @@ if ($Serial -and $success) {
 }
 
 if ($UploadData -and $success) {
-    if (-not (Upload-DataFiles)) {
+    if (-not (Upload-DataFiles -SpecificFiles $Files)) {
         $success = $false
     }
 }

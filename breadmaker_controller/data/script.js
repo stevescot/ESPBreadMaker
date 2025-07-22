@@ -764,7 +764,15 @@ function showPlanSummary(s) {
   }
   
   if (!prog) {
-    planSummary.innerHTML = '<i>Program details not available.</i>';
+    // If we have a program name but no details, show the name
+    if (s.program && s.program.trim() !== '') {
+      planSummary.innerHTML = `<div style="padding:15px; background:#1e1e1e; border:1px solid #444; border-radius:8px; margin:10px 0;">
+        <h4 style="color:#66bb6a; margin:0 0 8px 0; font-size:1.1em;">${s.program}</h4>
+        <p style="color:#bbb; margin:0; font-style:italic;">Program details loading...</p>
+      </div>`;
+    } else {
+      planSummary.innerHTML = '<i>Program details not available.</i>';
+    }
     return;
   }
   // --- Custom Stages Support ---

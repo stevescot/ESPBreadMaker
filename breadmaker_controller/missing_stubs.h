@@ -40,4 +40,8 @@ void displayMessage(const String& message);
 // Fermentation calculation functions
 float calculateFermentationFactor(float actualTemp);
 void updateFermentationFactor();
+void updateFermentationCache();
 unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentation);
+
+// JSON streaming functions  
+void streamStatusJson(Print& out);

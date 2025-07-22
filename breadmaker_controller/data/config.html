@@ -69,9 +69,43 @@
       <button class="config-link-btn" onclick="location.href='/programs.html'">&#9998; Edit Programs</button>
       <button class="config-link-btn" onclick="location.href='/calibration.html'">&#127777; Calibrate Temperature</button>
       <button class="config-link-btn" onclick="location.href='/pid-tune.html'">&#128293; PID Controller Tuning</button>
-      <button class="config-link-btn" onclick="location.href='/update.html'">&#8593; Firmware Update</button>
+      <button class="config-link-btn" onclick="toggleFirmwareUpload()">&#8593; Firmware Update</button>
       <button class="config-link-btn" onclick="toggleFileManager()">&#128193; File Manager</button>
       <button class="config-link-btn" onclick="location.href='/home_assistant.html'" style="background:#ffb366; color:#232323;">🏠 Home Assistant Config Guide</button>
+    </div>
+    
+    <!-- Firmware Upload Section -->
+    <div id="firmwareUpload" style="display:none; margin-top:2em; padding:1.5em; border:1px solid #d32f2f; border-radius:8px; background:#2a1a1a;">
+      <h3 style="margin-top:0; color:#ff6666;">⚠️ Firmware Update</h3>
+      <div style="color:#ffcc99; font-size:0.9em; margin-bottom:1.5em; padding:1em; background:#3a2a1a; border-radius:6px; border-left:4px solid #ff6666;">
+        <strong>Warning:</strong> Uploading incorrect firmware can brick your device. Only upload .bin files specifically compiled for this ESP32 breadmaker controller.
+      </div>
+      
+      <div style="margin-bottom:1.5em;">
+        <h4 style="color:#fff;">Select Firmware File (.bin)</h4>
+        <input type="file" id="firmwareInput" accept=".bin" style="margin:0.5em 0; padding:0.5em; border-radius:4px; background:#444; color:#fff; border:1px solid #666; width:100%;">
+        <button onclick="uploadFirmware()" style="margin-top:1em; padding:0.7em 2em; border-radius:6px; background:#d32f2f; color:#fff; border:none; cursor:pointer; font-size:1.1em; width:100%;">Upload Firmware</button>
+      </div>
+      
+      <div id="firmwareProgress" style="display:none; margin:1em 0;">
+        <div style="color:#ffd600; margin-bottom:0.5em;">Upload Progress:</div>
+        <div style="width:100%; height:20px; background:#333; border-radius:10px; overflow:hidden;">
+          <div id="firmwareProgressBar" style="height:100%; background:#4CAF50; width:0%; transition:width 0.3s;"></div>
+        </div>
+        <div id="firmwareProgressText" style="text-align:center; margin-top:0.5em; color:#fff;">0%</div>
+      </div>
+      
+      <div id="firmwareStatus" style="margin-top:1em; padding:1em; border-radius:6px; background:#333; color:#fff; display:none;"></div>
+      
+      <div style="margin-top:1.5em; font-size:0.9em; color:#aaa;">
+        <h4 style="color:#fff;">How to compile firmware:</h4>
+        <ol style="line-height:1.6;">
+          <li>Open breadmaker_controller.ino in Arduino IDE</li>
+          <li>Configure board: ESP32 Dev Module, 16MB Flash</li>
+          <li>Go to Sketch → Export compiled Binary</li>
+          <li>Upload the generated .bin file here</li>
+        </ol>
+      </div>
     </div>
     
     <!-- File Manager Section -->
@@ -117,6 +151,13 @@
         <input type="checkbox" id="debugSerialCheckbox" style="transform:scale(1.3);margin-left:0.7em;vertical-align:middle;">
       </label>
       <span id="debugSerialStatus" style="margin-left:1em; color:#ffd600;"></span>
+    </div>
+    <div style="margin:1.5em 0 1em 0; text-align:center;">
+      <label style="font-size:1.1em;">
+        Safety System Enabled:
+        <input type="checkbox" id="safetyEnabledCheckbox" style="transform:scale(1.3);margin-left:0.7em;vertical-align:middle;">
+      </label>
+      <span id="safetyEnabledStatus" style="margin-left:1em; color:#ff6666;"></span>
     </div>
     <button class="config-link-btn" id="restartBtn" style="background:#d32f2f; color:#fff; margin-bottom:1.5em;">&#x21bb; Restart Device</button>
     <button class="back-btn" onclick="location.href='/'">Back</button>
@@ -374,6 +415,114 @@
       .catch(error => {
         alert(`Error creating folder: ${error.message}`);
       });
+    }
+    
+    // Firmware Upload functionality
+    function toggleFirmwareUpload() {
+      const firmwareUpload = document.getElementById('firmwareUpload');
+      if (firmwareUpload.style.display === 'none') {
+        firmwareUpload.style.display = 'block';
+        // Hide file manager if open
+        document.getElementById('fileManager').style.display = 'none';
+      } else {
+        firmwareUpload.style.display = 'none';
+      }
+    }
+    
+    async function uploadFirmware() {
+      const fileInput = document.getElementById('firmwareInput');
+      const progressDiv = document.getElementById('firmwareProgress');
+      const progressBar = document.getElementById('firmwareProgressBar');
+      const progressText = document.getElementById('firmwareProgressText');
+      const statusDiv = document.getElementById('firmwareStatus');
+      
+      if (!fileInput.files[0]) {
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = '#d32f2f';
+        statusDiv.innerHTML = '❌ Please select a firmware file (.bin)';
+        return;
+      }
+      
+      const file = fileInput.files[0];
+      if (!file.name.toLowerCase().endsWith('.bin')) {
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = '#d32f2f';
+        statusDiv.innerHTML = '❌ Please select a valid .bin firmware file';
+        return;
+      }
+      
+      if (!confirm(`⚠️ WARNING: You are about to upload firmware "${file.name}". This will restart the device and may brick it if the firmware is incorrect. Continue?`)) {
+        return;
+      }
+      
+      const formData = new FormData();
+      formData.append('firmware', file);
+      
+      progressDiv.style.display = 'block';
+      statusDiv.style.display = 'block';
+      statusDiv.style.background = '#333';
+      statusDiv.innerHTML = '🔄 Uploading firmware... DO NOT POWER OFF THE DEVICE!';
+      
+      try {
+        const response = await fetch('/api/update', {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (response.ok) {
+          progressBar.style.width = '100%';
+          progressText.textContent = '100%';
+          statusDiv.style.background = '#4CAF50';
+          statusDiv.innerHTML = '✅ Firmware uploaded successfully! Device is restarting...';
+          
+          // Wait for device to restart and check if it's back online
+          setTimeout(() => {
+            statusDiv.innerHTML = '🔄 Waiting for device to restart...';
+            checkDeviceOnline();
+          }, 3000);
+          
+        } else {
+          const errorText = await response.text();
+          statusDiv.style.background = '#d32f2f';
+          statusDiv.innerHTML = `❌ Upload failed: ${errorText}`;
+        }
+      } catch (error) {
+        statusDiv.style.background = '#d32f2f';
+        statusDiv.innerHTML = `❌ Upload error: ${error.message}`;
+      }
+    }
+    
+    function checkDeviceOnline() {
+      const statusDiv = document.getElementById('firmwareStatus');
+      let attempts = 0;
+      const maxAttempts = 30; // 30 seconds
+      
+      function ping() {
+        attempts++;
+        fetch('/api/firmware_info', { method: 'GET' })
+          .then(response => {
+            if (response.ok) {
+              statusDiv.style.background = '#4CAF50';
+              statusDiv.innerHTML = '✅ Device is back online! Firmware update completed successfully.';
+              setTimeout(() => {
+                location.reload(); // Refresh the page to show new firmware
+              }, 2000);
+            } else {
+              throw new Error('Not ready');
+            }
+          })
+          .catch(() => {
+            if (attempts < maxAttempts) {
+              statusDiv.innerHTML = `🔄 Waiting for device to restart... (${attempts}/${maxAttempts})`;
+              setTimeout(ping, 1000);
+            } else {
+              statusDiv.style.background = '#ff9800';
+              statusDiv.innerHTML = '⚠️ Device restart taking longer than expected. Please check device manually.';
+            }
+          });
+      }
+      
+      ping();
     }
   </script>
 </body>
