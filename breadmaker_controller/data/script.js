@@ -905,8 +905,17 @@ function showPlanSummary(s) {
           durationCell = '--';
         }
       } else if (rowClass === 'active' && typeof s.timeLeft === 'number' && i === currentStageIdx && s.running) {
-        // Show actual time left for the active stage
-        durationCell = `<span title="Time left in this stage">${formatDuration(s.timeLeft)}</span>`;
+        // Show actual time left for the active stage - use adjustedTimeLeft for fermentation stages
+        const isCurrentStageFermentation = typeof s.stageIdx === 'number' && 
+          prog && prog.customStages && 
+          prog.customStages[s.stageIdx] && 
+          prog.customStages[s.stageIdx].isFermentation;
+        
+        const timeToShow = isCurrentStageFermentation && typeof s.adjustedTimeLeft === 'number' 
+          ? s.adjustedTimeLeft 
+          : s.timeLeft;
+        
+        durationCell = `<span title="Time left in this stage">${formatDuration(timeToShow)}</span>`;
       } else if (typeof predictedDurationMin === 'number' && !isNaN(predictedDurationMin)) {
         // Use firmware-provided predicted duration (already fermentation-adjusted)
         durationCell = `<span title="Predicted by firmware (fermentation-adjusted)">${formatDuration(predictedDurationMin * 60)}<br><small>(${predictedDurationMin.toFixed(1)} min)</small></span>`;
