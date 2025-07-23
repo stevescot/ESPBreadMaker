@@ -278,10 +278,17 @@ function updateStageProgress(currentStage, statusData) {
     // Add elapsed time for this stage if available
     if (actualStarts[i] && (i === activeIdx || i < activeIdx)) {
       if (i === activeIdx && typeof statusData.timeLeft === 'number' && statusData.running) {
-        // Show time left for the active stage
+        // Show time left for the active stage - use adjustedTimeLeft for fermentation stages
         const span = document.createElement('span');
         span.className = 'stage-timeleft';
-        span.textContent = ' (' + formatDuration(statusData.timeLeft) + ' left)';
+        
+        // For fermentation stages, show the real clock time (adjustedTimeLeft)
+        const isCurrentStageFermentation = customStages[i] && customStages[i].isFermentation;
+        const timeToShow = isCurrentStageFermentation && typeof statusData.adjustedTimeLeft === 'number' 
+                          ? statusData.adjustedTimeLeft 
+                          : statusData.timeLeft;
+        
+        span.textContent = ' (' + formatDuration(timeToShow) + ' left)';
         div.appendChild(span);
       } else {
         let elapsed = 0;
@@ -677,9 +684,18 @@ function updateCountdownDisplay() {
   if (stageReadyAt > 0) {
     timeLeft = Math.max(0, Math.round(stageReadyAt - (now / 1000)));
   } else if (typeof s.timeLeft === 'number') {
-    // fallback if stageReadyAt missing
+    // fallback if stageReadyAt missing - use adjustedTimeLeft for fermentation stages
     let elapsed = Math.floor((now - lastStatusTime) / 1000);
-    timeLeft = Math.max(0, s.timeLeft - elapsed);
+    
+    // For fermentation stages, use adjustedTimeLeft (real clock time)
+    const isCurrentStageFermentation = s.stage && customStages && 
+          customStages.find(stage => stage.label === s.stage && stage.isFermentation);
+    
+    if (isCurrentStageFermentation && typeof s.adjustedTimeLeft === 'number') {
+      timeLeft = Math.max(0, s.adjustedTimeLeft - elapsed);
+    } else {
+      timeLeft = Math.max(0, s.timeLeft - elapsed);
+    }
   }
 
   // UI logic fix: Only show "stage ready at" if current stage is active and stageReadyAt is valid (future or present)
