@@ -804,7 +804,7 @@ function showPlanSummary(s) {
       } else if (Array.isArray(s.stageStartTimes) && s.stageStartTimes[i]) {
         // Stage hasn't started yet - use estimated time
         stStart = new Date(s.stageStartTimes[i] * 1000);
-      } else if (!s.running && fermentationFactor > 0) {
+      } else if (!s.running && s.fermentationFactor > 0) {
         // Preview: use now or previous stage end time from firmware predictions
         if (i === 0) {
           stStart = new Date();

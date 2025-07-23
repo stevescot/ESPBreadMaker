@@ -326,7 +326,10 @@ void coreEndpoints(WebServer& server) {
     
     // Debug endpoint to check filesystem
     server.on("/debug/fs", HTTP_GET, [&](){
-        String response = "FATFS Debug:\n\n";
+        String response = "=== DEBUG TEST ===\n";
+        response += "This is a test line\n\n";
+        
+        response += "FATFS Debug:\n\n";
         
         // Check if FATFS is mounted
         if (!FFat.begin()) {

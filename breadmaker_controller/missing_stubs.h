@@ -39,7 +39,7 @@ void displayMessage(const String& message);
 
 // Fermentation calculation functions
 float calculateFermentationFactor(float actualTemp);
-void updateFermentationFactor();
+// REMOVED: updateFermentationFactor() - redundant function, fermentation handled in updateFermentationTiming()
 void updateFermentationCache();
 unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentation);
 

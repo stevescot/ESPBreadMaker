@@ -685,24 +685,32 @@ void streamStatusJson(Print& out) {
 // === Fermentation Calculations ===
 
 float calculateFermentationFactor(float actualTemp) {
-  // Get current program to use its fermentation parameters
-  Program* p = getActiveProgramMutable();
+  // Get program parameters from active program instead of hardcoded values
+  float baselineTemp = 20.0;  // Default fallback
+  float q10 = 2.0;            // Default fallback
   
-  // Use program-specific fermentation parameters, with fallbacks
-  float baselineTemp = (p && p->fermentBaselineTemp > 0) ? p->fermentBaselineTemp : 20.0; 
-  float q10 = (p && p->fermentQ10 > 0) ? p->fermentQ10 : 2.0;
-  
-  // Handle invalid temperatures
-  if (actualTemp <= 0.0 || actualTemp > 100.0) {
-    // For invalid temperatures, assume much slower fermentation (cooler environment)
-    actualTemp = 10.0; // Assume cool environment
+  // Get actual program parameters if available
+  if (getProgramCount() > 0 && programState.activeProgramId < getProgramCount()) {
+    Program *p = getActiveProgramMutable();
+    if (p) {
+      baselineTemp = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
+      q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
+    }
   }
+  
+  Serial.printf("[FERMENT-CALC] Using program values: baseline=%.1f, Q10=%.1f\n", baselineTemp, q10);
   
   // Calculate fermentation factor using Q10 temperature coefficient
   // Factor = Q10^((baseline - actual) / 10)
   // If temp is lower than baseline, factor > 1 (slower fermentation, takes longer)
   // If temp is higher than baseline, factor < 1 (faster fermentation, takes less time)
-  float factor = pow(q10, (baselineTemp - actualTemp) / 10.0);
+  float tempDiff = baselineTemp - actualTemp;
+  float exponent = tempDiff / 10.0;
+  float factor = pow(q10, exponent);
+  
+  // Debug output - ALWAYS show for debugging
+  Serial.printf("[FERMENT] Calculation: actualTemp=%.1f, baseline=%.1f, Q10=%.1f\n", actualTemp, baselineTemp, q10);
+  Serial.printf("[FERMENT] TempDiff=%.1f, Exponent=%.2f, Factor=%.3f\n", tempDiff, exponent, factor);
   
   // Clamp to reasonable bounds (0.1x to 20x)
   if (factor < 0.1) factor = 0.1;
@@ -711,16 +719,8 @@ float calculateFermentationFactor(float actualTemp) {
   return factor;
 }
 
-void updateFermentationFactor() {
-  float currentTemp = getAveragedTemperature();
-  float newFactor = calculateFermentationFactor(currentTemp);
-  
-  // Update fermentation state
-  fermentState.fermentLastTemp = currentTemp;
-  fermentState.fermentLastFactor = fermentState.fermentationFactor;
-  fermentState.fermentationFactor = newFactor;
-  fermentState.fermentLastUpdateMs = millis();
-}
+// REMOVED: updateFermentationFactor() - redundant function that conflicted with main fermentation logic
+// Main fermentation calculations are now handled in updateFermentationTiming() in breadmaker_controller.ino
 
 unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentation) {
   if (!hasFermentation) {

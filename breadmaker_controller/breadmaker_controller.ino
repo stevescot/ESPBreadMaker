@@ -246,7 +246,14 @@ void initialState(){
   loadCalibration();
   Serial.println(F("[setup] Calibration loaded."));
   
-  // Initialize fermentation tracking
+  // Take some initial temperature samples before fermentation tracking
+  Serial.println(F("[setup] Taking initial temperature samples..."));
+  for (int i = 0; i < 5; i++) {
+    updateTemperatureSampling();
+    delay(100); // Small delay between samples
+  }
+  
+  // Initialize fermentation tracking with actual temperature
   float initialTemp = getAveragedTemperature();
   resetFermentationTracking(initialTemp);
   Serial.printf("[setup] Fermentation tracking initialized: temp=%.1f°C, factor=%.3fx\n", 
@@ -892,7 +899,7 @@ void loop() {
   
   updatePerformanceMetrics(); // Track performance for Home Assistant endpoint
   updateTemperatureSampling();
-  updateFermentationFactor(); // Update fermentation calculations based on current temperature
+  // REMOVED: updateFermentationFactor(); // Redundant - fermentation handled in updateFermentationTiming()
   updateBuzzerTone();
   updateDisplay(); // Update TFT display
   otaManagerLoop(); // Handle OTA updates via OTA manager
@@ -981,6 +988,11 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
         float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
         float actualTemp = getAveragedTemperature();
+        
+        // Debug output to see actual values being used
+        Serial.printf("[FERMENT-TIMING] Program: %s, baseline=%.1f (raw=%.1f), Q10=%.1f (raw=%.1f), actualTemp=%.1f\n", 
+                     p->name.c_str(), baseline, p->fermentBaselineTemp, q10, p->fermentQ10, actualTemp);
+        
         unsigned long nowMs = millis();
         
         // Rate limiting for fermentation updates to prevent excessive processing
@@ -993,6 +1005,8 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         if (fermentState.fermentLastUpdateMs == 0) {
           fermentState.fermentLastTemp = actualTemp;
           fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0); // Q10: factor < 1 means faster at higher temp
+          Serial.printf("[FERMENT-TIMING-CALC] Calculation: pow(%.1f, (%.1f - %.1f) / 10.0) = pow(%.1f, %.1f) = %.3f\n", 
+                       q10, baseline, actualTemp, q10, (baseline - actualTemp) / 10.0, fermentState.fermentLastFactor);
           fermentState.fermentLastUpdateMs = nowMs;
           fermentState.fermentWeightedSec = 0.0;
           if (debugSerial) Serial.printf("[FERMENT] Stage %d (%s) initialized: temp=%.1f, baseline=%.1f, q10=%.1f, factor=%.3f, planned=%.1fs (%.1f hours)\n", 
@@ -1018,6 +1032,8 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           fermentState.fermentWeightedSec += incrementalWeightedSec;
           fermentState.fermentLastTemp = actualTemp;
           fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
+          Serial.printf("[FERMENT-TIMING-UPDATE] Calculation: pow(%.1f, (%.1f - %.1f) / 10.0) = pow(%.1f, %.1f) = %.3f\n", 
+                       q10, baseline, actualTemp, q10, (baseline - actualTemp) / 10.0, fermentState.fermentLastFactor);
           fermentState.fermentLastUpdateMs = nowMs;
           
           // Enhanced debug output with detailed accumulation info

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fermentation Debug - ESP32 Breadmaker</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f5f5f5; 
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+        }
+        .debug-section { 
+            margin: 20px 0; 
+            padding: 15px; 
+            border: 1px solid #ddd; 
+            border-radius: 5px; 
+            background: #f9f9f9; 
+        }
+        .debug-section h3 { 
+            margin-top: 0; 
+            color: #333; 
+            border-bottom: 2px solid #007bff; 
+            padding-bottom: 5px; 
+        }
+        .param-row { 
+            display: flex; 
+            justify-content: space-between; 
+            margin: 8px 0; 
+            padding: 5px; 
+            background: white; 
+            border-radius: 3px; 
+        }
+        .param-label { 
+            font-weight: bold; 
+            color: #555; 
+        }
+        .param-value { 
+            font-family: monospace; 
+            color: #007bff; 
+        }
+        .error { 
+            color: #dc3545; 
+            font-weight: bold; 
+        }
+        .success { 
+            color: #28a745; 
+            font-weight: bold; 
+        }
+        .formula { 
+            background: #e9ecef; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-left: 4px solid #007bff; 
+            font-family: monospace; 
+        }
+        button { 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            padding: 10px 20px; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            margin: 5px; 
+        }
+        button:hover { 
+            background: #0056b3; 
+        }
+        .refresh-controls { 
+            text-align: center; 
+            margin: 20px 0; 
+        }
+        .highlight-issue { 
+            background: #fff3cd !important; 
+            border-left: 4px solid #ffc107 !important; 
+        }
+        .calculation-steps { 
+            background: #d1ecf1; 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 5px; 
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔬 Fermentation Factor Debug Interface</h1>
+        <p>This interface helps debug why the fermentation factor shows 2.0 instead of the expected 4.0</p>
+        
+        <div class="refresh-controls">
+            <button onclick="refreshDebugInfo()">🔄 Refresh Debug Info</button>
+            <button onclick="forceRecalculation()">⚡ Force Recalculation</button>
+            <button onclick="toggleAutoRefresh()">⏱️ <span id="auto-refresh-text">Start Auto Refresh</span></button>
+        </div>
+
+        <div id="debug-content">
+            <p>Loading debug information...</p>
+        </div>
+    </div>
+
+    <script>
+        let autoRefreshInterval = null;
+        let isAutoRefreshing = false;
+
+        function refreshDebugInfo() {
+            document.getElementById('debug-content').innerHTML = '<p>Loading debug information...</p>';
+            
+            fetch('/api/debug/fermentation')
+                .then(response => response.json())
+                .then(data => displayDebugInfo(data))
+                .catch(error => {
+                    document.getElementById('debug-content').innerHTML = 
+                        `<div class="error">Error loading debug info: ${error.message}</div>`;
+                });
+        }
+
+        function displayDebugInfo(data) {
+            const debug = data.debug_info;
+            let html = '';
+
+            // Temperature Information
+            html += `
+                <div class="debug-section">
+                    <h3>🌡️ Temperature Readings</h3>
+                    <div class="param-row">
+                        <span class="param-label">Averaged Temperature:</span>
+                        <span class="param-value">${debug.temperature.averaged}°C</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Raw Sensor Reading:</span>
+                        <span class="param-value">${debug.temperature.raw_sensor}°C</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">TempAvg State:</span>
+                        <span class="param-value">${debug.temperature.temp_avg_state}°C</span>
+                    </div>
+                </div>
+            `;
+
+            // Program Information
+            html += `
+                <div class="debug-section">
+                    <h3>📋 Program Parameters</h3>
+            `;
+            
+            if (debug.program.error) {
+                html += `<div class="error">Error: ${debug.program.error}</div>`;
+            } else {
+                html += `
+                    <div class="param-row">
+                        <span class="param-label">Program ID:</span>
+                        <span class="param-value">${debug.program.id}</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Program Name:</span>
+                        <span class="param-value">${debug.program.name}</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Baseline Temperature:</span>
+                        <span class="param-value">${debug.program.baseline_temp}°C</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Q10 Factor:</span>
+                        <span class="param-value">${debug.program.q10}</span>
+                    </div>
+                    <div class="param-row ${debug.program.calculated_factor != debug.fermentation_state.factor ? 'highlight-issue' : ''}">
+                        <span class="param-label">Expected Factor:</span>
+                        <span class="param-value">${debug.program.calculated_factor}</span>
+                    </div>
+                `;
+            }
+            html += `</div>`;
+
+            // Current Fermentation State
+            html += `
+                <div class="debug-section">
+                    <h3>🧬 Current Fermentation State</h3>
+                    <div class="param-row ${debug.fermentation_state.factor == 2.0 ? 'highlight-issue' : ''}">
+                        <span class="param-label">Current Factor:</span>
+                        <span class="param-value">${debug.fermentation_state.factor}</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Last Factor:</span>
+                        <span class="param-value">${debug.fermentation_state.last_factor}</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Initial Ferment Temp:</span>
+                        <span class="param-value">${debug.fermentation_state.initial_temp}°C</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Weighted Seconds:</span>
+                        <span class="param-value">${debug.fermentation_state.weighted_sec}</span>
+                    </div>
+                </div>
+            `;
+
+            // Manual Calculation Test
+            html += `
+                <div class="debug-section">
+                    <h3>🧮 Manual Calculation Verification</h3>
+                    <div class="formula">
+                        Formula: factor = pow(Q10, (baseline - temperature) / 10)
+                    </div>
+                    <div class="calculation-steps">
+                        <div class="param-row">
+                            <span class="param-label">Test Temperature:</span>
+                            <span class="param-value">${debug.manual_calculation.test_temp}°C</span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-label">Test Baseline:</span>
+                            <span class="param-value">${debug.manual_calculation.test_baseline}°C</span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-label">Test Q10:</span>
+                            <span class="param-value">${debug.manual_calculation.test_q10}</span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-label">Temperature Difference:</span>
+                            <span class="param-value">${debug.manual_calculation.temp_diff}°C</span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-label">Exponent:</span>
+                            <span class="param-value">${debug.manual_calculation.exponent}</span>
+                        </div>
+                        <div class="param-row ${Math.abs(debug.manual_calculation.manual_result - debug.fermentation_state.factor) > 0.1 ? 'highlight-issue' : 'success'}">
+                            <span class="param-label">Manual Result:</span>
+                            <span class="param-value">${debug.manual_calculation.manual_result}</span>
+                        </div>
+                        <div class="param-row">
+                            <span class="param-label">pow(2.0, 2.0) Test:</span>
+                            <span class="param-value">${debug.manual_calculation.pow_test_2_2}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // System Information
+            html += `
+                <div class="debug-section">
+                    <h3>⚙️ System Information</h3>
+                    <div class="param-row">
+                        <span class="param-label">Uptime:</span>
+                        <span class="param-value">${Math.floor(debug.system.uptime_ms / 1000)} seconds</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Free Heap:</span>
+                        <span class="param-value">${debug.system.free_heap} bytes</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Program Running:</span>
+                        <span class="param-value">${debug.system.program_running}</span>
+                    </div>
+                    <div class="param-row">
+                        <span class="param-label">Current Stage Index:</span>
+                        <span class="param-value">${debug.system.stage_idx}</span>
+                    </div>
+                </div>
+            `;
+
+            // Analysis
+            html += `
+                <div class="debug-section">
+                    <h3>🔍 Analysis</h3>
+            `;
+            
+            if (!debug.program.error) {
+                const expectedFactor = parseFloat(debug.program.calculated_factor);
+                const actualFactor = parseFloat(debug.fermentation_state.factor);
+                const manualFactor = parseFloat(debug.manual_calculation.manual_result);
+                
+                if (Math.abs(actualFactor - 2.0) < 0.001) {
+                    html += `<div class="error">🚨 Issue Confirmed: Factor is 2.0 instead of expected ${expectedFactor.toFixed(3)}</div>`;
+                }
+                
+                if (Math.abs(manualFactor - expectedFactor) < 0.1) {
+                    html += `<div class="success">✅ Manual calculation matches expected result</div>`;
+                } else {
+                    html += `<div class="error">❌ Manual calculation doesn't match expected result</div>`;
+                }
+                
+                if (Math.abs(actualFactor - manualFactor) > 0.1) {
+                    html += `<div class="error">🔧 System calculation differs from manual calculation - likely source of bug</div>`;
+                }
+            }
+            
+            html += `</div>`;
+
+            document.getElementById('debug-content').innerHTML = html;
+
+            // Update timestamp
+            const now = new Date().toLocaleTimeString();
+            document.title = `Fermentation Debug - Updated ${now}`;
+        }
+
+        function forceRecalculation() {
+            fetch('/api/debug/recalculate', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert(`Recalculation complete! New factor: ${data.new_factor}`);
+                        refreshDebugInfo();
+                    } else {
+                        alert(`Error: ${data.error}`);
+                    }
+                })
+                .catch(error => {
+                    alert(`Recalculation failed: ${error.message}`);
+                });
+        }
+
+        function toggleAutoRefresh() {
+            const button = document.getElementById('auto-refresh-text');
+            
+            if (isAutoRefreshing) {
+                clearInterval(autoRefreshInterval);
+                button.textContent = 'Start Auto Refresh';
+                isAutoRefreshing = false;
+            } else {
+                autoRefreshInterval = setInterval(refreshDebugInfo, 5000);
+                button.textContent = 'Stop Auto Refresh';
+                isAutoRefreshing = true;
+                refreshDebugInfo(); // Immediate refresh
+            }
+        }
+
+        // Load initial debug info
+        refreshDebugInfo();
+    </script>
+</body>
+</html>
