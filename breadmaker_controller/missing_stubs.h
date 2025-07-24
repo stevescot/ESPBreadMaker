@@ -25,6 +25,7 @@ bool isStartupDelayComplete();
 
 // PID and control functions
 void updateTimeProportionalHeater();
+void updatePIDTerms();
 
 // Settings functions
 void loadSettings();

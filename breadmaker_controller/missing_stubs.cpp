@@ -398,6 +398,33 @@ void switchToProfile(const String& profileName) {
   Serial.printf("[switchToProfile] Profile '%s' not found!\n", profileName.c_str());
 }
 
+// Calculate individual PID terms for monitoring
+void updatePIDTerms() {
+  static unsigned long lastSampleTime = 0;
+  unsigned long now = millis();
+  
+  if (now - lastSampleTime >= pid.sampleTime) {
+    double error = pid.Setpoint - pid.Input;
+    double dInput = pid.Input - pid.lastInput;
+    
+    // Calculate P term
+    pid.pidP = pid.Kp * error;
+    
+    // Calculate I term (accumulated integral)
+    pid.lastITerm += (pid.Ki * error);
+    if (pid.lastITerm > 1.0) pid.lastITerm = 1.0;  // Windup protection
+    else if (pid.lastITerm < 0.0) pid.lastITerm = 0.0;
+    pid.pidI = pid.lastITerm;
+    
+    // Calculate D term
+    pid.pidD = -pid.Kd * dInput;  // Negative because we use derivative on input
+    
+    // Store for next calculation
+    pid.lastInput = pid.Input;
+    lastSampleTime = now;
+  }
+}
+
 // Display message function used by OTA manager
 void displayMessage(const String& message) {
   Serial.println("Display: " + message);

@@ -758,7 +758,7 @@ void homeAssistantEndpoint(WebServer& server) {
                     }
                     
                     server.sendContent("\"stage_time_left\":");
-                    server.sendContent(String(totalRemainingTime)); // Keep in seconds for consistency with status endpoint
+                    server.sendContent(String(totalRemainingTime / 60)); // Convert to minutes for Home Assistant
                     server.sendContent(",");
                 } else if (!programState.isRunning) {
                     // Not running - calculate total program time if started now
@@ -771,7 +771,7 @@ void homeAssistantEndpoint(WebServer& server) {
                         totalProgramTime += adjustedDurationMs / 1000;
                     }
                     server.sendContent("\"stage_time_left\":");
-                    server.sendContent(String(totalProgramTime)); // Keep in seconds for consistency with status endpoint
+                    server.sendContent(String(totalProgramTime / 60)); // Convert to minutes for Home Assistant
                     server.sendContent(",");
                 } else {
                     server.sendContent("\"stage\":\"Idle\",\"stage_time_left\":0,");
@@ -840,6 +840,11 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent(String(getAverageLoopTime()));
         server.sendContent(",\"current_loop_time_us\":");
         server.sendContent(String(safetySystem.totalLoopTime / max(1UL, (unsigned long)safetySystem.loopCount))); // Current average
+        server.sendContent(",\"cpu_usage\":");
+        // Calculate approximate CPU usage based on loop timing
+        unsigned long avgLoopTime = getAverageLoopTime();
+        float cpuUsage = avgLoopTime > 0 ? min(100.0f, (avgLoopTime / 100000.0f) * 100.0f) : 0.0f; // Rough estimate
+        server.sendContent(String(cpuUsage, 1));
         server.sendContent(",\"wifi_reconnects\":");
         server.sendContent(String(getWifiReconnectCount()));
         server.sendContent("},");
@@ -853,7 +858,7 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent(String(ESP.getHeapSize()));
         server.sendContent(",\"min_free_heap\":");
         server.sendContent(String(getMinFreeHeap()));
-        server.sendContent(",\"fragmentation_pct\":");
+        server.sendContent(",\"fragmentation\":");
         server.sendContent(String(getHeapFragmentation(), 1));
         server.sendContent("},");
         
@@ -887,8 +892,69 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent(String(ESP.getFlashChipMode()));
         server.sendContent("},");
         
-        // WiFi information
-        server.sendContent("\"wifi\":{\"connected\":");
+        // File System information
+        server.sendContent("\"filesystem\":{\"usedBytes\":");
+        server.sendContent(String(FFat.usedBytes()));
+        server.sendContent(",\"totalBytes\":");
+        server.sendContent(String(FFat.totalBytes()));
+        server.sendContent(",\"freeBytes\":");
+        server.sendContent(String(FFat.totalBytes() - FFat.usedBytes()));
+        float utilization = FFat.totalBytes() > 0 ? ((float)FFat.usedBytes() / FFat.totalBytes()) * 100.0 : 0.0;
+        server.sendContent(",\"utilization\":");
+        server.sendContent(String(utilization, 1));
+        server.sendContent("},");
+        
+        // Error monitoring (placeholder values - implement actual error tracking if needed)
+        server.sendContent("\"error_counts\":[0,0,0,0,0,0],");
+        
+        // Watchdog monitoring (placeholder values - implement actual watchdog if needed)
+        server.sendContent("\"watchdog_enabled\":false,");
+        server.sendContent("\"startup_complete\":true,");
+        server.sendContent("\"watchdog_last_feed\":0,");
+        server.sendContent("\"watchdog_timeout_ms\":0,");
+        
+        // Temperature control system detailed information
+        server.sendContent("\"temperature_control\":{");
+        server.sendContent("\"input\":");
+        server.sendContent(String(getAveragedTemperature(), 1));
+        server.sendContent(",\"pid_input\":");
+        server.sendContent(String(pid.Input, 1));
+        server.sendContent(",\"output\":");
+        server.sendContent(String(pid.Output, 2));
+        server.sendContent(",\"pid_output\":");
+        server.sendContent(String(pid.Output, 2));
+        server.sendContent(",\"kp\":");
+        server.sendContent(String(pid.Kp, 6));
+        server.sendContent(",\"ki\":");
+        server.sendContent(String(pid.Ki, 6));
+        server.sendContent(",\"kd\":");
+        server.sendContent(String(pid.Kd, 6));
+        server.sendContent(",\"pid_p\":");
+        server.sendContent(String(pid.pidP, 3));
+        server.sendContent(",\"pid_i\":");
+        server.sendContent(String(pid.pidI, 3));
+        server.sendContent(",\"pid_d\":");
+        server.sendContent(String(pid.pidD, 3));
+        server.sendContent(",\"sample_time_ms\":");
+        server.sendContent(String(pid.sampleTime));
+        server.sendContent(",\"raw_temp\":");
+        server.sendContent(String(readTemperature(), 1));
+        server.sendContent(",\"thermal_runaway\":");
+        server.sendContent(thermalRunawayDetected ? "true" : "false");
+        server.sendContent(",\"sensor_fault\":");
+        server.sendContent(sensorFaultDetected ? "true" : "false");
+        server.sendContent(",\"window_elapsed_ms\":");
+        server.sendContent(String((millis() - windowStartTime) % windowSize));
+        server.sendContent(",\"window_size_ms\":");
+        server.sendContent(String(windowSize));
+        server.sendContent(",\"on_time_ms\":");
+        server.sendContent(String(onTime));
+        server.sendContent(",\"duty_cycle_percent\":");
+        server.sendContent(String(windowSize > 0 ? (onTime * 100.0) / windowSize : 0.0, 1));
+        server.sendContent("},");
+        
+        // Network information
+        server.sendContent("\"network\":{\"connected\":");
         server.sendContent(WiFi.status() == WL_CONNECTED ? "true" : "false");
         server.sendContent(",\"ssid\":\"");
         server.sendContent(wifiCache.getSSID());
@@ -896,7 +962,9 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent(String(wifiCache.getRSSI()));
         server.sendContent(",\"ip\":\"");
         server.sendContent(wifiCache.getIPString());
-        server.sendContent("\"}");
+        server.sendContent("\",\"reconnect_count\":");
+        server.sendContent(String(getWifiReconnectCount()));
+        server.sendContent("}");
         
         server.sendContent("}"); // Close health section
         server.sendContent("}"); // Close main object

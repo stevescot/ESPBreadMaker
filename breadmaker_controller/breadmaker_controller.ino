@@ -1123,6 +1123,7 @@ void handleManualMode() {
       if (pid.Output < 0) pid.Output = 0;
       if (pid.Output > 1) pid.Output = 1;
       if (pid.controller) pid.controller->Compute();
+      updatePIDTerms(); // Update individual PID terms for monitoring
     }
     
     // Always update heater control (this can run more frequently than PID)
