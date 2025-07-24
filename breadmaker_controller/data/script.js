@@ -1070,7 +1070,9 @@ function renderProgramProgressBar(s) {
   // Priority 1: Use firmware-provided timing data (most accurate)
   if (s.running && typeof s.totalProgramDuration === 'number' && typeof s.elapsedTime === 'number' && typeof s.remainingTime === 'number') {
     totalSec = s.totalProgramDuration;
-    elapsed = s.elapsedTime;
+    // For fermentation programs, calculate real elapsed time from total - remaining
+    // This ensures elapsed time matches the fermentation-adjusted total duration
+    elapsed = s.totalProgramDuration - s.remainingTime;
     remain = s.remainingTime;
   }
   // Priority 2: Use firmware predictedProgramEnd (fermentation-adjusted)
