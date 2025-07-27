@@ -390,12 +390,14 @@ void switchToProfile(const String& profileName) {
         pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
       }
       
-      Serial.printf("[switchToProfile] Switched to '%s': Kp=%.6f, Ki=%.6f, Kd=%.6f\n",
-                    profileName.c_str(), pid.Kp, pid.Ki, pid.Kd);
+      if (debugSerial) {
+        Serial.printf("[switchToProfile] Switched to '%s': Kp=%.6f, Ki=%.6f, Kd=%.6f\n",
+                      profileName.c_str(), pid.Kp, pid.Ki, pid.Kd);
+      }
       return;
     }
   }
-  Serial.printf("[switchToProfile] Profile '%s' not found!\n", profileName.c_str());
+  if (debugSerial) Serial.printf("[switchToProfile] Profile '%s' not found!\n", profileName.c_str());
 }
 
 // Calculate individual PID terms for monitoring
@@ -427,7 +429,7 @@ void updatePIDTerms() {
 
 // Display message function used by OTA manager
 void displayMessage(const String& message) {
-  Serial.println("Display: " + message);
+  if (debugSerial) Serial.println("Display: " + message);
 }
 
 // Stream status JSON function - comprehensive implementation
@@ -725,7 +727,7 @@ float calculateFermentationFactor(float actualTemp) {
     }
   }
   
-  Serial.printf("[FERMENT-CALC] Using program values: baseline=%.1f, Q10=%.1f\n", baselineTemp, q10);
+  if (debugSerial) Serial.printf("[FERMENT-CALC] Using program values: baseline=%.1f, Q10=%.1f\n", baselineTemp, q10);
   
   // Calculate fermentation factor using Q10 temperature coefficient
   // Factor = Q10^((baseline - actual) / 10)
@@ -735,9 +737,11 @@ float calculateFermentationFactor(float actualTemp) {
   float exponent = tempDiff / 10.0;
   float factor = pow(q10, exponent);
   
-  // Debug output - ALWAYS show for debugging
-  Serial.printf("[FERMENT] Calculation: actualTemp=%.1f, baseline=%.1f, Q10=%.1f\n", actualTemp, baselineTemp, q10);
-  Serial.printf("[FERMENT] TempDiff=%.1f, Exponent=%.2f, Factor=%.3f\n", tempDiff, exponent, factor);
+  // Debug output - only when debug enabled
+  if (debugSerial) {
+    Serial.printf("[FERMENT] Calculation: actualTemp=%.1f, baseline=%.1f, Q10=%.1f\n", actualTemp, baselineTemp, q10);
+    Serial.printf("[FERMENT] TempDiff=%.1f, Exponent=%.2f, Factor=%.3f\n", tempDiff, exponent, factor);
+  }
   
   // Clamp to reasonable bounds (0.1x to 20x)
   if (factor < 0.1) factor = 0.1;

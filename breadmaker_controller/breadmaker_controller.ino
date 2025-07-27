@@ -889,8 +889,21 @@ void loop() {
   // --- Handle deferred settings save ---
   if (pendingSettingsSaveTime > 0 && millis() >= pendingSettingsSaveTime) {
     pendingSettingsSaveTime = 0;
-    saveSettings();
-    if (debugSerial) Serial.println("[DEBUG] Deferred settings save completed");
+    if (debugSerial) Serial.println("[DEBUG] Executing deferred settings save...");
+    
+    // Use try/catch equivalent for ESP32
+    bool saveSuccess = false;
+    try {
+      saveSettings();
+      saveSuccess = true;
+      if (debugSerial) Serial.println("[DEBUG] Deferred settings save completed successfully");
+    } catch (...) {
+      if (debugSerial) Serial.println("[ERROR] Settings save failed with exception");
+    }
+    
+    if (!saveSuccess) {
+      if (debugSerial) Serial.println("[ERROR] Settings save failed");
+    }
   }
   
   // --- Safety monitoring (low-impact, every 1 second) ---
@@ -1543,10 +1556,10 @@ void checkSerialWifiConfig() {
 // === Settings Management ===
 // Loads breadmaker settings (PID, temperature, program selection, etc.) from FFat.
 void loadSettings() {
-  Serial.println("[loadSettings] Loading settings...");
+  if (debugSerial) Serial.println("[loadSettings] Loading settings...");
   File f = FFat.open(SETTINGS_FILE, "r");
   if (!f) {
-    Serial.println("[loadSettings] settings.json not found, using defaults.");
+    if (debugSerial) Serial.println("[loadSettings] settings.json not found, using defaults.");
     debugSerial = true;
     return;
   }
@@ -1554,15 +1567,16 @@ void loadSettings() {
   DynamicJsonDocument doc(512);
   DeserializationError err = deserializeJson(doc, f);
   if (err) {
-    Serial.print("[loadSettings] Failed to parse settings.json: ");
-    Serial.println(err.c_str());
+    if (debugSerial) {
+      Serial.print("[loadSettings] Failed to parse settings.json: ");
+      Serial.println(err.c_str());
+    }
     f.close();
     debugSerial = true;
     return;
   }
   
-  const char* mode = doc["outputMode"] | "digital";
-  outputMode = OUTPUT_DIGITAL; // Only digital mode supported
+  // outputMode removed - system is always digital
   debugSerial = doc["debugSerial"] | true;
   
   // Load safety system settings (default to disabled for testing)
@@ -1588,8 +1602,10 @@ void loadSettings() {
     int lastId = doc["lastProgramId"];
     if (lastId >= 0 && lastId < (int)getProgramCount()) {
       programState.activeProgramId = lastId;
-      Serial.print("[loadSettings] lastProgramId loaded: ");
-      Serial.println(lastId);
+      if (debugSerial) {
+        Serial.print("[loadSettings] lastProgramId loaded: ");
+        Serial.println(lastId);
+      }
     }
   } else if (doc.containsKey("lastProgram")) {
     // Deprecated: fallback to name for backward compatibility
@@ -1597,53 +1613,85 @@ void loadSettings() {
     for (size_t i = 0; i < getProgramCount(); ++i) {
       if (getProgramName(i) == lastProg) {
         programState.activeProgramId = i;
-        Serial.print("[loadSettings] lastProgram loaded (deprecated): ");
-        Serial.println(lastProg);
+        if (debugSerial) {
+          Serial.print("[loadSettings] lastProgram loaded (deprecated): ");
+          Serial.println(lastProg);
+        }
         break;
       }
     }
   }
   
-  Serial.print("[loadSettings] outputMode loaded: ");
-  Serial.println(mode);
-  Serial.print("[loadSettings] debugSerial: ");
-  Serial.println(debugSerial ? "true" : "false");
+  if (debugSerial) {
+    Serial.print("[loadSettings] debugSerial: ");
+    Serial.println(debugSerial ? "true" : "false");
+  }
   f.close();
-  Serial.println("[loadSettings] Settings loaded.");
+  if (debugSerial) Serial.println("[loadSettings] Settings loaded.");
 }
 
 // Saves breadmaker settings (PID, temperature, program selection, etc.) to FFat.
 // Uses direct streaming to minimize memory usage under load.
 void saveSettings() {
   if (debugSerial) Serial.println("[saveSettings] Saving settings...");
+  
+  // Check if file system is available
+  if (!FFat.begin()) {
+    if (debugSerial) Serial.println("[saveSettings] FFat not available!");
+    return;
+  }
+  
   File f = FFat.open(SETTINGS_FILE, "w");
   if (!f) {
     if (debugSerial) Serial.println("[saveSettings] Failed to open settings.json for writing!");
     return;
   }
   
-  // Stream JSON directly to file - much more memory efficient than building large strings
+  // Use simple JSON construction to avoid memory issues
   f.print("{\n");
-  f.print("  \"outputMode\":\"digital\",\n"); // Only digital mode supported
-  f.printf("  \"debugSerial\":%s,\n", debugSerial ? "true" : "false");
-  f.printf("  \"safetyEnabled\":%s,\n", safetySystem.safetyEnabled ? "true" : "false");
+  f.print("  \"outputMode\":\"digital\",\n");
+  f.print("  \"debugSerial\":");
+  f.print(debugSerial ? "true" : "false");
+  f.print(",\n");
+  f.print("  \"safetyEnabled\":");
+  f.print(safetySystem.safetyEnabled ? "true" : "false");
+  f.print(",\n");
   
-  if (getProgramCount() > 0) {
-    f.printf("  \"lastProgramId\":%d,\n", (int)programState.activeProgramId);
-    f.print("  \"lastProgram\":\"");
-    f.print(getProgramName(programState.activeProgramId));
-    f.print("\",\n");
-  } else {
-    f.print("  \"lastProgramId\":0,\n");
-    f.print("  \"lastProgram\":\"Unknown\",\n");
+  // Program information with safety checks
+  int programId = 0;
+  String programName = "Unknown";
+  
+  if (getProgramCount() > 0 && programState.activeProgramId >= 0 && programState.activeProgramId < (int)getProgramCount()) {
+    programId = programState.activeProgramId;
+    String progName = getProgramName(programState.activeProgramId);
+    if (progName.length() > 0) {
+      programName = progName;
+    }
   }
   
-  // PID parameters for backward compatibility
-  f.printf("  \"pidKp\":%.6f,\n", pid.Kp);
-  f.printf("  \"pidKi\":%.6f,\n", pid.Ki);
-  f.printf("  \"pidKd\":%.6f,\n", pid.Kd);
-  f.printf("  \"pidSampleTime\":%lu,\n", pid.sampleTime);
-  f.printf("  \"pidWindowSize\":%lu\n", windowSize);
+  f.print("  \"lastProgramId\":");
+  f.print(programId);
+  f.print(",\n");
+  f.print("  \"lastProgram\":\"");
+  f.print(programName);
+  f.print("\",\n");
+  
+  // PID parameters
+  f.print("  \"pidKp\":");
+  f.print(pid.Kp, 6);
+  f.print(",\n");
+  f.print("  \"pidKi\":");
+  f.print(pid.Ki, 6);
+  f.print(",\n");
+  f.print("  \"pidKd\":");
+  f.print(pid.Kd, 6);
+  f.print(",\n");
+  f.print("  \"pidSampleTime\":");
+  f.print(pid.sampleTime);
+  f.print(",\n");
+  f.print("  \"pidWindowSize\":");
+  f.print(windowSize);
+  f.print("\n");
   f.print("}\n");
   
   f.close();

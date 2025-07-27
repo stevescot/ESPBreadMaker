@@ -167,7 +167,7 @@
     // Restart button logic
     document.getElementById('restartBtn').onclick = function() {
       if (confirm('Are you sure you want to restart the device?')) {
-        fetch('/api/restart', {method: 'POST'})
+        fetch('/api/restart-get', {method: 'GET'})
           .then(r => r.json())
           .then(d => {
             alert('Device is restarting...');
@@ -188,14 +188,16 @@
         });
     }
     outputModeSelect.onchange = function() {
-      fetch('/api/output_mode', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({mode: outputModeSelect.value})
+      fetch('/api/output_mode/set?mode=' + encodeURIComponent(outputModeSelect.value), {
+        method: 'GET'
       })
       .then(r => r.json())
       .then(d => {
         outputModeStatus.textContent = d.mode === 'digital' ? 'Digital (ON/OFF)' : 'Analog (PWM)';
+      })
+      .catch(err => {
+        console.error('Output mode change failed:', err);
+        alert('Failed to change output mode: ' + err.message);
       });
     };
     fetchOutputMode();

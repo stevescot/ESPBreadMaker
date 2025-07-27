@@ -31,10 +31,10 @@ function Show-Help {
     Write-Host ""
     Write-Host "BASIC OPERATIONS:" -ForegroundColor Yellow
     Write-Host "  -Build                    Compile firmware only"
-    Write-Host "  -WebOTA                   Upload firmware via web endpoint recommended"
-    Write-Host "  -Serial COM3              Upload firmware via serial port if connected"
-    Write-Host "  -UploadData               Upload data files HTML, JS, programs"
-    Write-Host "  -Files file1,file2        Upload specific files only with -UploadData"
+    Write-Host "  -WebOTA                   Upload firmware via web endpoint (recommended)"
+    Write-Host "  -Serial COM3              Upload firmware via serial port"
+    Write-Host "  -UploadData               Upload data files (HTML, JS, programs)"
+    Write-Host "  -Files file1,file2        Upload specific files only (with -UploadData)"
     Write-Host "  -Clean                    Remove build artifacts"
     Write-Host "  -Test                     Run API connectivity tests"
     Write-Host ""
@@ -282,11 +282,7 @@ try {
     
     if ($Test) {
         $deviceOnline = Test-DeviceConnectivity
-        if ($deviceOnline) {
-            exit 0
-        } else {
-            exit 1
-        }
+        exit ($deviceOnline ? 0 : 1)
     }
     
     # Build firmware if requested

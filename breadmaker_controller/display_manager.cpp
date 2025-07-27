@@ -9,6 +9,9 @@
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 #endif
 
+// External variables
+extern bool debugSerial;
+
 LGFX display;
 
 // Display state variables
@@ -59,7 +62,7 @@ void displayManagerInit() {
   // Show boot screen
   displayBootScreen();
   
-  Serial.println("[Display] Display manager initialized");
+  if (debugSerial) Serial.println("[Display] Display manager initialized");
 }
 
 void updateDisplay() {
@@ -468,7 +471,7 @@ void drawOutputStates(int x, int y, bool heater, bool motor, bool light, bool bu
 void updateActivityTime() {
   lastActivityTime = millis();
   if (screensaverActive) {
-    Serial.println("[Display] Activity detected, waking up from screensaver");
+    if (debugSerial) Serial.println("[Display] Activity detected, waking up from screensaver");
   }
 }
 
@@ -478,7 +481,7 @@ bool isScreensaverActive() {
 
 void enableScreensaver() {
   if (!screensaverActive) {
-    Serial.println("[Display] Enabling screensaver - turning off display and backlight");
+    if (debugSerial) Serial.println("[Display] Enabling screensaver - turning off display and backlight");
     screensaverActive = true;
     
     // Turn off backlight using LovyanGFX brightness control
@@ -494,7 +497,7 @@ void enableScreensaver() {
 
 void disableScreensaver() {
   if (screensaverActive) {
-    Serial.println("[Display] Disabling screensaver - turning on display and backlight");
+    if (debugSerial) Serial.println("[Display] Disabling screensaver - turning on display and backlight");
     screensaverActive = false;
     
     // Wake up display

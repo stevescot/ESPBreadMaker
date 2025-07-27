@@ -1,0 +1,21 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "ESP32 Build",
+			"type": "shell",
+			"command": "arduino-cli",
+			"args": [
+				"compile",
+				"--fqbn",
+				"esp32:esp32:esp32",
+				"--build-path",
+				"build",
+				"breadmaker_controller.ino"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": []
+		}
+	]
+}

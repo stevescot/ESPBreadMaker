@@ -3,6 +3,9 @@
 #include "display_manager.h"
 #include "missing_stubs.h"
 
+// External variables
+extern bool debugSerial;
+
 // Button state tracking
 static unsigned long lastButtonPress[6] = {0};
 static bool buttonStates[6] = {false};
@@ -28,7 +31,7 @@ static const ButtonAction buttonActions[6] = {
 };
 
 void capacitiveButtonsInit() {
-  Serial.println("Initializing buttons...");
+  if (debugSerial) Serial.println("Initializing buttons...");
   
   // Set up digital input pins with pull-up resistors
   pinMode(TOUCH_LIGHT, INPUT_PULLUP);  // GPIO22 - digital input
@@ -42,13 +45,15 @@ void capacitiveButtonsInit() {
     buttonStates[i] = false;
   }
   
-  Serial.println("Buttons initialized:");
-  Serial.printf("  Start/Pause: GPIO%d (T2 - capacitive)\n", TOUCH_START_PAUSE);
-  Serial.printf("  Stop: GPIO%d (T5 - capacitive)\n", TOUCH_STOP);
-  Serial.printf("  Select: GPIO%d (T4 - capacitive)\n", TOUCH_SELECT);
-  Serial.printf("  Advance: GPIO%d (T3 - capacitive)\n", TOUCH_ADVANCE);
-  Serial.printf("  Back: GPIO%d (T7 - capacitive)\n", TOUCH_BACK);
-  Serial.printf("  Light: GPIO%d (digital input)\n", TOUCH_LIGHT);
+  if (debugSerial) {
+    Serial.println("Buttons initialized:");
+    Serial.printf("  Start/Pause: GPIO%d (T2 - capacitive)\n", TOUCH_START_PAUSE);
+    Serial.printf("  Stop: GPIO%d (T5 - capacitive)\n", TOUCH_STOP);
+    Serial.printf("  Select: GPIO%d (T4 - capacitive)\n", TOUCH_SELECT);
+    Serial.printf("  Advance: GPIO%d (T3 - capacitive)\n", TOUCH_ADVANCE);
+    Serial.printf("  Back: GPIO%d (T7 - capacitive)\n", TOUCH_BACK);
+    Serial.printf("  Light: GPIO%d (digital input)\n", TOUCH_LIGHT);
+  }
   Serial.printf("  Touch threshold: %d\n", TOUCH_THRESHOLD);
 }
 
@@ -101,50 +106,50 @@ ButtonAction checkButtonPress() {
 void handleButtonAction(ButtonAction action) {
   switch (action) {
     case ButtonAction::START_PAUSE:
-      Serial.println("Action: Start/Pause breadmaker");
+      if (debugSerial) Serial.println("Action: Start/Pause breadmaker");
       // Trigger start/pause endpoint logic
       if (programState.isRunning) {
         // Pause logic - this would normally be handled by the pause endpoint
-        Serial.println("  -> Pausing breadmaker (would call /api/pause)");
+        if (debugSerial) Serial.println("  -> Pausing breadmaker (would call /api/pause)");
         displayMessage("Paused");
       } else {
         // Start logic - this would normally be handled by the start endpoint  
-        Serial.println("  -> Starting breadmaker (would call /api/start)");
+        if (debugSerial) Serial.println("  -> Starting breadmaker (would call /api/start)");
         displayMessage("Starting...");
       }
       break;
       
     case ButtonAction::STOP:
-      Serial.println("Action: Stop breadmaker");
+      if (debugSerial) Serial.println("Action: Stop breadmaker");
       // Call the actual stop function
-      Serial.println("  -> Calling stopBreadmaker() function");
+      if (debugSerial) Serial.println("  -> Calling stopBreadmaker() function");
       stopBreadmaker();
       displayMessage("Stopped");
       break;
       
     case ButtonAction::SELECT:
-      Serial.println("Action: Select/Enter");
+      if (debugSerial) Serial.println("Action: Select/Enter");
       // Navigate into menu or confirm selection
       displayMessage("Select");
       break;
       
     case ButtonAction::ADVANCE:
-      Serial.println("Action: Advance/Next");
+      if (debugSerial) Serial.println("Action: Advance/Next");
       // Navigate to next option or advance program
       displayMessage("Next");
       break;
       
     case ButtonAction::BACK:
-      Serial.println("Action: Back/Previous");
+      if (debugSerial) Serial.println("Action: Back/Previous");
       // Navigate back or previous option
       displayMessage("Back");
       break;
       
     case ButtonAction::LIGHT:
-      Serial.println("Action: Toggle light");
+      if (debugSerial) Serial.println("Action: Toggle light");
       // Toggle breadmaker light state (same as /api/light endpoint)
       outputStates.light = !outputStates.light;
-      Serial.printf("  -> Light is now %s\n", outputStates.light ? "ON" : "OFF");
+      if (debugSerial) Serial.printf("  -> Light is now %s\n", outputStates.light ? "ON" : "OFF");
       displayMessage(outputStates.light ? "Light ON" : "Light OFF");
       break;
       

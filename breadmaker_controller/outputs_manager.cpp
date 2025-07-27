@@ -15,7 +15,6 @@ const int PIN_BUZZER = 26;     // Buzzer (digital ON/OFF)
 // Output pins (should be defined in main or here if needed)
 extern bool debugSerial;
 
-OutputMode outputMode = OUTPUT_DIGITAL;  // Default to digital-only mode
 bool heaterState = false;
 bool motorState = false;
 bool lightState = false;
@@ -65,6 +64,18 @@ void outputsManagerInit() {
   pinMode(PIN_MOTOR, OUTPUT);
   pinMode(PIN_LIGHT, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
+  
+  // Set lowest drive strength (~5mA) for ESP8266-like behavior
+  // This helps with motor starting issues and reduces power consumption
+  gpio_set_drive_capability((gpio_num_t)PIN_HEATER, GPIO_DRIVE_CAP_0);  // ~5mA
+  gpio_set_drive_capability((gpio_num_t)PIN_MOTOR, GPIO_DRIVE_CAP_0);   // ~5mA  
+  gpio_set_drive_capability((gpio_num_t)PIN_LIGHT, GPIO_DRIVE_CAP_0);   // ~5mA
+  gpio_set_drive_capability((gpio_num_t)PIN_BUZZER, GPIO_DRIVE_CAP_0);  // ~5mA
+  
+  if (debugSerial) {
+    Serial.println(F("[outputs] All outputs configured with minimum drive strength (~5mA)"));
+    Serial.println(F("[outputs] This provides ESP8266-like behavior for better motor compatibility"));
+  }
   
   // Initialize all outputs to off state
   setHeater(false);

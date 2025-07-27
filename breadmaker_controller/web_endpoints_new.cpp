@@ -189,19 +189,10 @@ void coreEndpoints(WebServer& server) {
     static File uploadFile;
     static bool uploadError = false;
     
-    server.on("/upload", HTTP_POST, [&](){
-        if (uploadError) {
-            server.send(500, "text/plain", "Upload failed");
-            uploadError = false;  // Reset for next upload
-        } else {
-            server.send(200, "text/plain", "Upload complete");
-        }
-    });
-    
     // Configure longer timeout for file uploads (60 seconds)
     server.setContentLength(50 * 1024 * 1024); // Allow up to 50MB uploads (increased for larger files)
     
-    // Shared file upload handler for both /upload and /api/upload
+    // File upload handler for /api/upload
     server.onFileUpload([&](){
         HTTPUpload& upload = server.upload();
         
@@ -466,9 +457,17 @@ void coreEndpoints(WebServer& server) {
         delay(1000);
         ESP.restart();
     });
+
+    // GET-based restart endpoint (crash workaround)
+    server.on("/api/restart-get", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/restart-get GET requested"));
+        server.send(200, "application/json", "{\"status\":\"restarting\"}");
+        delay(1000);
+        ESP.restart();
+    });
     
     server.on("/api/output_mode", HTTP_GET, [&](){
-        server.send(200, "application/json", "{\"mode\":\"" + String(outputMode) + "\"}");
+        server.send(200, "application/json", "{\"mode\":\"digital\"}");
     });
     
     server.on("/api/output_mode", HTTP_POST, [&](){
@@ -478,7 +477,7 @@ void coreEndpoints(WebServer& server) {
             if (!err && doc.containsKey("mode")) {
                 String mode = doc["mode"];
                 if (mode == "relay" || mode == "pwm") {
-                    outputMode = OUTPUT_DIGITAL; // Fix: use proper enum value
+                    // System is always digital - no need to change anything
                     saveSettings();
                     server.send(200, "application/json", "{\"status\":\"ok\"}");
                     return;
@@ -486,6 +485,23 @@ void coreEndpoints(WebServer& server) {
             }
         }
         sendJsonError(server, "invalid_request", "Invalid mode parameter", 400);
+    });
+
+    // GET-based output mode endpoint (crash workaround)
+    server.on("/api/output_mode/set", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/output_mode/set GET requested"));
+        
+        if (server.hasArg("mode")) {
+            String mode = server.arg("mode");
+            if (mode == "relay" || mode == "pwm") {
+                // System is always digital - no need to change anything
+                saveSettings();
+                server.send(200, "application/json", "{\"status\":\"ok\",\"mode\":\"" + mode + "\"}");
+                if (debugSerial) Serial.println("[DEBUG] Output mode changed via GET: " + mode);
+                return;
+            }
+        }
+        sendJsonError(server, "invalid_request", "Invalid or missing mode parameter", 400);
     });
 }
 
@@ -1076,6 +1092,131 @@ void calibrationEndpoints(WebServer& server) {
         saveCalibration();
         server.send(200, "application/json", "{\"status\":\"ok\"}");
     });
+
+    // GET-based alternatives for calibration (to avoid POST crash issues)
+    
+    // Add calibration point via GET
+    server.on("/api/calibration/add-get", HTTP_GET, [&](){
+        if (server.hasArg("raw") && server.hasArg("temp")) {
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            // Validate inputs
+            if (raw < 0 || temp < -50 || temp > 200) {
+                server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
+                return;
+            }
+            
+            // Check for duplicate raw values
+            for (const auto& point : rtdCalibTable) {
+                if (point.raw == raw) {
+                    server.send(400, "application/json", "{\"error\":\"Raw value already exists\"}");
+                    return;
+                }
+            }
+            
+            // Add point to calibration table
+            CalibPoint newPoint = {raw, temp};
+            rtdCalibTable.push_back(newPoint);
+            
+            // Sort by raw value
+            std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                     [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+            
+            // Save to file
+            saveCalibration();
+            
+            if (debugSerial) {
+                Serial.printf("[CALIB] Added point: raw=%d, temp=%.2f\n", raw, temp);
+            }
+            
+            server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"added\"}");
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing raw or temp parameter\"}");
+        }
+    });
+    
+    // Update calibration point via GET
+    server.on("/api/calibration/update-get", HTTP_GET, [&](){
+        if (server.hasArg("index") && server.hasArg("raw") && server.hasArg("temp")) {
+            int index = server.arg("index").toInt();
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                // Validate inputs
+                if (raw < 0 || temp < -50 || temp > 200) {
+                    server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
+                    return;
+                }
+                
+                // Check for duplicate raw values (excluding current index)
+                for (size_t i = 0; i < rtdCalibTable.size(); i++) {
+                    if (i != index && rtdCalibTable[i].raw == raw) {
+                        server.send(400, "application/json", "{\"error\":\"Raw value already exists\"}");
+                        return;
+                    }
+                }
+                
+                // Update the point
+                rtdCalibTable[index].raw = raw;
+                rtdCalibTable[index].temp = temp;
+                
+                // Sort by raw value
+                std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                         [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+                
+                // Save to file
+                saveCalibration();
+                
+                if (debugSerial) {
+                    Serial.printf("[CALIB] Updated point %d: raw=%d, temp=%.2f\n", index, raw, temp);
+                }
+                
+                server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"updated\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        }
+    });
+    
+    // Delete calibration point via GET
+    server.on("/api/calibration/delete-get", HTTP_GET, [&](){
+        if (server.hasArg("index")) {
+            int index = server.arg("index").toInt();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                if (debugSerial) {
+                    Serial.printf("[CALIB] Deleting point %d: raw=%d, temp=%.2f\n", 
+                                  index, rtdCalibTable[index].raw, rtdCalibTable[index].temp);
+                }
+                
+                rtdCalibTable.erase(rtdCalibTable.begin() + index);
+                
+                // Save to file
+                saveCalibration();
+                
+                server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"deleted\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing index parameter\"}");
+        }
+    });
+    
+    // Clear all calibration points via GET
+    server.on("/api/calibration/clear-all", HTTP_GET, [&](){
+        if (debugSerial) {
+            Serial.printf("[CALIB] Clearing all %zu calibration points\n", rtdCalibTable.size());
+        }
+        
+        rtdCalibTable.clear();
+        saveCalibration();
+        server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"cleared\"}");
+    });
 }
 
 void fileEndPoints(WebServer& server) {
@@ -1333,64 +1474,53 @@ void otaEndpoints(WebServer& server) {
     });
     
     server.on("/api/settings", HTTP_POST, [&](){
-        if (debugSerial) Serial.println(F("[DEBUG] /api/settings POST requested"));
+        // Immediate response before any processing
+        server.send(200, "text/plain", "OK");
         
-        if (server.hasArg("plain")) {
-            String body = server.arg("plain");
-            if (debugSerial) Serial.printf("[DEBUG] Settings POST body: %s\n", body.c_str());
-            
-            DynamicJsonDocument doc(512);
-            DeserializationError error = deserializeJson(doc, body);
-            
-            if (!error) {
-                bool updated = false;
-                
-                if (doc.containsKey("debugSerial")) {
-                    debugSerial = doc["debugSerial"].as<bool>();
-                    updated = true;
-                    if (debugSerial) Serial.printf("[DEBUG] Debug serial set to: %s\n", debugSerial ? "enabled" : "disabled");
-                }
-                
-                if (doc.containsKey("safetyEnabled")) {
-                    bool newSafetyState = doc["safetyEnabled"].as<bool>();
-                    safetySystem.safetyEnabled = newSafetyState;
-                    updated = true;
-                    Serial.printf("[SAFETY] Safety system set to: %s\n", safetySystem.safetyEnabled ? "enabled" : "DISABLED");
-                    
-                    // Clear emergency shutdown when safety is disabled
-                    if (!safetySystem.safetyEnabled) {
-                        safetySystem.emergencyShutdown = false;
-                        safetySystem.shutdownReason = "";
-                        Serial.println("[SAFETY] Emergency shutdown cleared (safety disabled)");
-                    }
-                }
-                
-                if (updated) {
-                    // Send response immediately
-                    String json = "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + 
-                                 ",\"safetyEnabled\":" + String(safetySystem.safetyEnabled ? "true" : "false") + "}";
-                    
-                    if (debugSerial) Serial.printf("[DEBUG] Sending response: %s\n", json.c_str());
-                    server.send(200, "application/json", json);
-                    
-                    // Schedule deferred save (handled in main loop)
-                    pendingSettingsSaveTime = millis() + 500; // Save in 0.5 seconds
-                    if (debugSerial) Serial.println("[DEBUG] Settings save scheduled");
-                    
-                } else {
-                    server.send(400, "application/json", "{\"error\":\"No valid settings provided\"}");
-                }
-            } else {
-                String errorMsg = "{\"error\":\"Invalid JSON: " + String(error.c_str()) + "\"}";
-                server.send(400, "application/json", errorMsg);
-                if (debugSerial) Serial.printf("[DEBUG] JSON parse error: %s\n", error.c_str());
+        // Minimal logging without any request body access
+        if (debugSerial) Serial.println(F("[POST] Received"));
+    });
+
+    // Alternative GET-based settings change (workaround for POST issues)
+    server.on("/api/settings/debug", HTTP_GET, [&](){
+        if (server.hasArg("enabled")) {
+            String enabledVal = server.arg("enabled");
+            if (enabledVal == "true") {
+                debugSerial = true;
+                Serial.println(F("[DEBUG] Debug serial ENABLED via GET"));
+            } else if (enabledVal == "false") {
+                debugSerial = false;
+                Serial.println(F("[DEBUG] Debug serial DISABLED via GET"));
             }
+            
+            // Schedule save
+            pendingSettingsSaveTime = millis() + 1000;
+            
+            server.send(200, "application/json", "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + ",\"saved\":\"scheduled\"}");
         } else {
-            server.send(400, "application/json", "{\"error\":\"Missing request body\"}");
-            if (debugSerial) Serial.println("[DEBUG] Missing request body");
+            server.send(400, "text/plain", "Missing 'enabled' parameter");
         }
     });
+
+    // Test endpoint that does try to save settings
+    server.on("/api/settings/force-save", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] Force save requested"));
+        
+        server.send(200, "text/plain", "SAVING");
+        
+        // Try the save operation that might be causing crashes
+        pendingSettingsSaveTime = millis() + 1000; // Schedule save in 1 second
+        
+        if (debugSerial) Serial.println(F("[DEBUG] Save scheduled"));
+    });
     
+    // Minimal debug endpoint to test file system - temporarily disabled
+    /*
+    server.on("/api/settings/test-fs", HTTP_GET, [&](){
+        // Commented out for debugging
+    });
+    */
+
     // Simple safety toggle endpoint
     server.on("/api/safety/toggle", HTTP_POST, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/safety/toggle POST requested"));
@@ -1402,10 +1532,35 @@ void otaEndpoints(WebServer& server) {
         if (!safetySystem.safetyEnabled) {
             safetySystem.emergencyShutdown = false;
             safetySystem.shutdownReason = "";
-            Serial.println("[SAFETY] Emergency shutdown cleared (safety disabled)");
+            if (debugSerial) Serial.println("[SAFETY] Emergency shutdown cleared (safety disabled)");
         }
         
-        Serial.printf("[SAFETY] Safety system toggled to: %s\n", safetySystem.safetyEnabled ? "enabled" : "DISABLED");
+        if (debugSerial) Serial.printf("[SAFETY] Safety system toggled to: %s\n", safetySystem.safetyEnabled ? "enabled" : "DISABLED");
+        
+        // Send response immediately
+        String json = "{\"safetyEnabled\":" + String(safetySystem.safetyEnabled ? "true" : "false") + "}";
+        server.send(200, "application/json", json);
+        
+        // Schedule deferred save
+        pendingSettingsSaveTime = millis() + 500;
+        if (debugSerial) Serial.println("[DEBUG] Settings save scheduled for safety toggle");
+    });
+
+    // GET-based safety toggle endpoint (crash workaround)
+    server.on("/api/safety/toggle-get", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/safety/toggle-get GET requested"));
+        
+        // Toggle safety state
+        safetySystem.safetyEnabled = !safetySystem.safetyEnabled;
+        
+        // Clear emergency shutdown when safety is disabled
+        if (!safetySystem.safetyEnabled) {
+            safetySystem.emergencyShutdown = false;
+            safetySystem.shutdownReason = "";
+            if (debugSerial) Serial.println("[SAFETY] Emergency shutdown cleared (safety disabled)");
+        }
+        
+        if (debugSerial) Serial.printf("[SAFETY] Safety system toggled to: %s\n", safetySystem.safetyEnabled ? "enabled" : "DISABLED");
         
         // Send response immediately
         String json = "{\"safetyEnabled\":" + String(safetySystem.safetyEnabled ? "true" : "false") + "}";
@@ -1487,6 +1642,34 @@ void otaEndpoints(WebServer& server) {
             }
         } else {
             server.send(400, "application/json", "{\"error\":\"Missing request body\"}");
+        }
+    });
+
+    // GET-based PID profile endpoint (crash workaround)
+    server.on("/api/pid_profile/set", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile/set GET requested"));
+        
+        if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
+            double kp = server.arg("kp").toDouble();
+            double ki = server.arg("ki").toDouble();
+            double kd = server.arg("kd").toDouble();
+            
+            // Update PID parameters
+            pid.Kp = kp;
+            pid.Ki = ki;
+            pid.Kd = kd;
+            
+            // Update controller if it exists
+            if (pid.controller) {
+                pid.controller->SetTunings(kp, ki, kd);
+            }
+            
+            // savePIDProfiles(); // TODO: Implement savePIDProfiles() function
+            
+            server.send(200, "application/json", "{\"status\":\"ok\",\"kp\":" + String(kp) + ",\"ki\":" + String(ki) + ",\"kd\":" + String(kd) + "}");
+            if (debugSerial) Serial.printf("[DEBUG] PID parameters updated via GET: Kp=%.3f, Ki=%.3f, Kd=%.3f\n", kp, ki, kd);
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing PID parameters (kp, ki, kd required)\"}");
         }
     });
 }

@@ -1,10 +1,6 @@
 #pragma once
 #include <Arduino.h>
 
-// Output mode setting (digital only now)
-enum OutputMode { OUTPUT_DIGITAL };
-extern OutputMode outputMode;
-
 extern bool heaterState;
 extern bool motorState;
 extern bool lightState;
