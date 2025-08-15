@@ -22,13 +22,14 @@ void loadProgramMetadata() {
   size_t fileSize = f.size();
   Serial.printf("[INFO] Loading program metadata from index, file size: %zu bytes\n", fileSize);
   
-  // Much smaller buffer needed for index file
-  DynamicJsonDocument doc(4096);  // 4KB buffer should be plenty for index
+  // MEMORY OPTIMIZATION: Use much smaller buffer and streaming parser
+  // Reduced from 4096 to 1024 bytes (75% reduction)
+  DynamicJsonDocument doc(1024);  
   DeserializationError err = deserializeJson(doc, f);
   f.close();
   
   if (err) {
-    Serial.printf("[ERROR] Failed to parse programs_index.json: %s\n", err.c_str());
+    Serial.printf("[ERROR] Failed to parse programs_index.json: %s (try reducing file size)\n", err.c_str());
     return;
   }
   
@@ -80,13 +81,15 @@ bool loadSpecificProgram(int programId) {
   
   Serial.printf("[INFO] Loading program from %s (Free heap: %u bytes)\n", programFileName.c_str(), ESP.getFreeHeap());
   
-  // Much smaller buffer needed for individual program file (max ~2.5KB)
-  DynamicJsonDocument doc(3072);  // 3KB buffer - plenty for individual program
+  // MEMORY OPTIMIZATION: Reduced from 3072 to 1536 bytes (50% reduction)
+  // Individual program files should be smaller than the full index
+  DynamicJsonDocument doc(1536);  
   DeserializationError err = deserializeJson(doc, f);
   f.close();
   
   if (err) {
     Serial.printf("[ERROR] Failed to parse %s: %s (Free heap: %u bytes)\n", programFileName.c_str(), err.c_str(), ESP.getFreeHeap());
+    Serial.println("[INFO] Consider simplifying program file or reducing stages/data");
     return false;
   }
   

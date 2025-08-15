@@ -9,21 +9,31 @@ float calibrationSlope = 1.0f;
 float calibrationOffset = 0.0f;
 
 void saveCalibration() {
-  DynamicJsonDocument doc(1024 + 128 * rtdCalibTable.size());
-  JsonArray arr = doc.createNestedArray("table");
-  for(auto& pt : rtdCalibTable) {
-    JsonObject o = arr.createNestedObject();
-    o["raw"] = pt.raw; o["temp"] = pt.temp;
-  }
+  // MEMORY OPTIMIZATION: Use streaming to avoid large DynamicJsonDocument allocation
   File f = FFat.open(CALIB_FILE, "w");
-  if (f) { serializeJson(doc, f); f.close(); }
+  if (!f) return;
+  
+  // Stream JSON directly to file instead of building in memory
+  f.print("{\"table\":[");
+  for(size_t i = 0; i < rtdCalibTable.size(); i++) {
+    if (i > 0) f.print(',');
+    f.print("{\"raw\":");
+    f.print(rtdCalibTable[i].raw);
+    f.print(",\"temp\":");
+    f.print(rtdCalibTable[i].temp, 2);
+    f.print('}');
+  }
+  f.print("]}");
+  f.close();
 }
 
 void loadCalibration() {
   rtdCalibTable.clear();
   File f = FFat.open(CALIB_FILE, "r");
   if (!f) return;
-  DynamicJsonDocument doc(4096);
+  
+  // MEMORY OPTIMIZATION: Reduced from 4096 to 1024 bytes (75% reduction)
+  DynamicJsonDocument doc(1024);
   if (!deserializeJson(doc, f)) {
     for(JsonObject o : doc["table"].as<JsonArray>()) {
       CalibPoint pt = { o["raw"], o["temp"] };

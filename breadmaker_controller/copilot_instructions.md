@@ -135,7 +135,7 @@ void setup() {
 ## Hardware Pinout (ESP32)
 - **Heater**: GPIO Pin (PWM controlled)
 - **Motor**: GPIO Pin (PWM controlled)  
-- **RTD (Temperature Sensor)**: GPIO34 (analog input)
+- **RTD (Temperature Sensor)**: GPIO36 (analog input)
 - **Light**: GPIO Pin (PWM controlled)
 - **Buzzer**: GPIO Pin (PWM controlled)
 - **Display**: TTGO T-Display (ST7789 TFT via LovyanGFX - NOT TFT_eSPI)

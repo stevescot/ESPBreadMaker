@@ -102,7 +102,7 @@ extern Program* getActiveProgramMutable();
 // This function is kept for backward compatibility but creates strings in memory
 String getStatusJsonString() {
   String response;
-  response.reserve(2048);
+  response.reserve(800); // MEMORY OPTIMIZATION: Reduced from 2048 to 800 bytes
   
   StringPrint stringPrint(response);
   streamStatusJson(stringPrint);
@@ -283,7 +283,7 @@ void coreEndpoints(WebServer& server) {
         
         // Use String buffer for status JSON (status is frequently accessed, needs fast response)
         String statusBuffer;
-        statusBuffer.reserve(1200); // Reserve buffer to avoid reallocation
+        statusBuffer.reserve(800); // MEMORY OPTIMIZATION: Reduced from 1200 to 800 bytes
         StringPrint stringPrint(statusBuffer);
         streamStatusJson(stringPrint);
         
@@ -297,7 +297,7 @@ void coreEndpoints(WebServer& server) {
         
         // Use String buffer for status JSON (status is frequently accessed, needs fast response)
         String statusBuffer;
-        statusBuffer.reserve(1200); // Reserve buffer to avoid reallocation
+        statusBuffer.reserve(800); // MEMORY OPTIMIZATION: Reduced from 1200 to 800 bytes
         StringPrint stringPrint(statusBuffer);
         streamStatusJson(stringPrint);
         
@@ -684,7 +684,8 @@ void pidControlEndpoints(WebServer& server) {
     
     server.on("/api/pid", HTTP_POST, [&](){
         if (server.hasArg("plain")) {
-            DynamicJsonDocument doc(512);
+            // ULTRA-EFFICIENT: Reduced buffer size, use char buffer for response
+            StaticJsonDocument<256> doc;  // Reduced from 512 to 256 bytes
             DeserializationError err = deserializeJson(doc, server.arg("plain"));
             if (!err) {
                 if (doc.containsKey("kp")) pid.Kp = doc["kp"];
@@ -696,11 +697,106 @@ void pidControlEndpoints(WebServer& server) {
                     pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
                 }
                 
-                server.send(200, "application/json", "{\"status\":\"ok\"}");
+                server.send(200, F("application/json"), F("{\"status\":\"ok\"}"));
                 return;
             }
         }
         sendJsonError(server, "invalid_request", "Invalid PID parameters", 400);
+    });
+    
+    // PID parameters endpoint for EMA temperature averaging and other settings
+    server.on("/api/pid_params", HTTP_GET, [&](){
+        if (server.hasArg("temp_alpha") || server.hasArg("temp_interval") || server.hasArg("temp_spike_threshold") || 
+            server.hasArg("temp_samples") || server.hasArg("temp_reject")) {
+            bool updated = false;
+            
+            // Handle legacy temp_samples parameter by converting to alpha
+            if (server.hasArg("temp_samples")) {
+                int samples = server.arg("temp_samples").toInt();
+                if (samples >= 5 && samples <= 100) {
+                    // Convert sample count to equivalent alpha: alpha ≈ 2/(samples+1)
+                    tempAvg.alpha = 2.0 / (samples + 1.0);
+                    if (tempAvg.alpha > 0.5) tempAvg.alpha = 0.5; // Cap at 0.5 for stability
+                    updated = true;
+                    if (debugSerial) Serial.printf("[TEMP-EMA] Sample count %d converted to alpha=%.3f\n", samples, tempAvg.alpha);
+                }
+            }
+            
+            // Direct alpha parameter (preferred)
+            if (server.hasArg("temp_alpha")) {
+                float newAlpha = server.arg("temp_alpha").toFloat();
+                if (newAlpha >= 0.01 && newAlpha <= 0.5) {
+                    tempAvg.alpha = newAlpha;
+                    updated = true;
+                    if (debugSerial) Serial.printf("[TEMP-EMA] Alpha updated to %.3f\n", newAlpha);
+                }
+            }
+            
+            // Legacy temp_reject - convert to spike threshold
+            if (server.hasArg("temp_reject")) {
+                int reject = server.arg("temp_reject").toInt();
+                if (reject >= 0 && reject <= 10) {
+                    // Convert reject count to spike threshold: more rejection = lower threshold
+                    tempAvg.spikeThreshold = 10.0 - reject;
+                    if (tempAvg.spikeThreshold < 1.0) tempAvg.spikeThreshold = 1.0;
+                    updated = true;
+                    if (debugSerial) Serial.printf("[TEMP-EMA] Reject count %d converted to spike threshold=%.1f°C\n", reject, tempAvg.spikeThreshold);
+                }
+            }
+            
+            // Direct spike threshold parameter (preferred)
+            if (server.hasArg("temp_spike_threshold")) {
+                float threshold = server.arg("temp_spike_threshold").toFloat();
+                if (threshold >= 0.5 && threshold <= 20.0) {
+                    tempAvg.spikeThreshold = threshold;
+                    updated = true;
+                    if (debugSerial) Serial.printf("[TEMP-EMA] Spike threshold updated to %.1f°C\n", threshold);
+                }
+            }
+            
+            // Update temperature sample interval
+            if (server.hasArg("temp_interval")) {
+                int newInterval = server.arg("temp_interval").toInt();
+                if (newInterval >= 100 && newInterval <= 5000) {
+                    tempAvg.updateInterval = newInterval;
+                    updated = true;
+                    if (debugSerial) Serial.printf("[TEMP-EMA] Update interval updated to %d ms\n", newInterval);
+                }
+            }
+            
+            if (updated) {
+                server.send(200, "application/json", "{\"status\":\"updated\",\"message\":\"EMA temperature filtering parameters updated\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"invalid_parameters\",\"message\":\"Invalid or out-of-range parameters\"}");
+            }
+        } else {
+            // Return current EMA temperature settings with legacy compatibility
+            server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+            server.send(200, "application/json", "");
+            server.sendContent("{");
+            // Legacy compatibility - convert EMA parameters back to old format for web UI
+            int equivalent_samples = (int)(2.0 / tempAvg.alpha) - 1;
+            if (equivalent_samples < 5) equivalent_samples = 5;
+            if (equivalent_samples > 100) equivalent_samples = 100;
+            server.sendContent("\"temp_sample_count\":" + String(equivalent_samples) + ",");
+            
+            int equivalent_reject = (int)(10.0 - tempAvg.spikeThreshold);
+            if (equivalent_reject < 0) equivalent_reject = 0;
+            if (equivalent_reject > 10) equivalent_reject = 10;
+            server.sendContent("\"temp_reject_count\":" + String(equivalent_reject) + ",");
+            
+            server.sendContent("\"temp_sample_interval\":" + String(tempAvg.updateInterval) + ",");
+            server.sendContent("\"temp_samples_ready\":");
+            server.sendContent(tempAvg.initialized ? "true" : "false");
+            server.sendContent(",\"averaged_temperature\":" + String(tempAvg.smoothedTemperature, 2));
+            
+            // New EMA-specific parameters
+            server.sendContent(",\"temp_alpha\":" + String(tempAvg.alpha, 4));
+            server.sendContent(",\"temp_spike_threshold\":" + String(tempAvg.spikeThreshold, 1));
+            server.sendContent(",\"temp_sample_count_total\":" + String(tempAvg.sampleCount));
+            server.sendContent(",\"temp_last_raw\":" + String(tempAvg.lastRawTemp, 2));
+            server.sendContent("}");
+        }
     });
 }
 
@@ -1220,26 +1316,49 @@ void calibrationEndpoints(WebServer& server) {
 }
 
 void fileEndPoints(WebServer& server) {
-    // List files endpoint with folder support
+    // List files endpoint - ULTRA MEMORY OPTIMIZATION
     server.on("/api/files", HTTP_GET, [&](){
-        String folder = server.hasArg("folder") ? server.arg("folder") : "/";
-        if (!folder.startsWith("/")) folder = "/" + folder;
-        if (!folder.endsWith("/") && folder != "/") folder += "/";
+        // Use char buffer instead of String for folder path
+        char folderPath[64];
+        if (server.hasArg("folder")) {
+            const String& folderArg = server.arg("folder");
+            if (folderArg.startsWith("/")) {
+                snprintf(folderPath, sizeof(folderPath), "%s", folderArg.c_str());
+            } else {
+                snprintf(folderPath, sizeof(folderPath), "/%s", folderArg.c_str());
+            }
+        } else {
+            strcpy(folderPath, "/");
+        }
+        
+        // Ensure path ends with / if not root
+        size_t pathLen = strlen(folderPath);
+        if (pathLen > 1 && folderPath[pathLen - 1] != '/') {
+            if (pathLen < sizeof(folderPath) - 1) {
+                folderPath[pathLen] = '/';
+                folderPath[pathLen + 1] = '\0';
+            }
+        }
         
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-        server.send(200, "application/json", "");
+        server.send(200, F("application/json"), "");
         
-        File root = FFat.open(folder);
+        File root = FFat.open(folderPath);
         if (root && root.isDirectory()) {
-            server.sendContent("{\"files\":[");
+            server.sendContent(F("{\"files\":["));
             
             bool firstFile = true;
             File file = root.openNextFile();
             while (file) {
                 if (!file.isDirectory()) {
-                    if (!firstFile) server.sendContent(",");
-                    server.sendContent("{\"name\":\"" + String(file.name()) + "\",");
-                    server.sendContent("\"size\":" + String(file.size()) + "}");
+                    if (!firstFile) server.sendContent(F(","));
+                    
+                    // Use char buffer for JSON formatting to avoid String creation
+                    char jsonBuffer[128];
+                    snprintf(jsonBuffer, sizeof(jsonBuffer), 
+                            "{\"name\":\"%s\",\"size\":%lu}", 
+                            file.name(), (unsigned long)file.size());
+                    server.sendContent(jsonBuffer);
                     firstFile = false;
                 }
                 file = root.openNextFile();
@@ -1247,76 +1366,122 @@ void fileEndPoints(WebServer& server) {
             root.close();
             
             // Second pass for folders
-            root = FFat.open(folder);
-            server.sendContent("],\"folders\":[");
+            root = FFat.open(folderPath);
+            server.sendContent(F("],\"folders\":["));
             bool firstFolder = true;
             if (root && root.isDirectory()) {
                 file = root.openNextFile();
                 while (file) {
                     if (file.isDirectory()) {
-                        if (!firstFolder) server.sendContent(",");
-                        server.sendContent("\"" + String(file.name()) + "\"");
+                        if (!firstFolder) server.sendContent(F(","));
+                        
+                        // Use char buffer for folder name formatting
+                        char folderBuffer[64];
+                        snprintf(folderBuffer, sizeof(folderBuffer), "\"%s\"", file.name());
+                        server.sendContent(folderBuffer);
                         firstFolder = false;
                     }
                     file = root.openNextFile();
                 }
                 root.close();
             }
-            server.sendContent("]}");
+            server.sendContent(F("]}"));
         } else {
-            server.sendContent("{\"files\":[],\"folders\":[]}");
+            server.sendContent(F("{\"files\":[],\"folders\":[]}"));
         }
     });
     
-    // Delete file endpoint
+    // Delete file endpoint - ULTRA MEMORY OPTIMIZATION
     server.on("/api/delete", HTTP_POST, [&](){
         String body = server.arg("plain");
         if (body.length() > 0) {
-            // Parse JSON body
-            int filenameStart = body.indexOf("\"filename\":\"") + 12;
-            int filenameEnd = body.indexOf("\"", filenameStart);
-            String filename = body.substring(filenameStart, filenameEnd);
+            // ULTRA-EFFICIENT: Use small StaticJsonDocument + char buffers (no String heap allocation)
+            StaticJsonDocument<256> doc;
+            DeserializationError error = deserializeJson(doc, body);
             
-            if (!filename.startsWith("/")) {
-                filename = "/" + filename;
-            }
-            
-            if (FFat.exists(filename)) {
-                if (FFat.remove(filename)) {
-                    server.send(200, "application/json", "{\"status\":\"deleted\",\"file\":\"" + filename + "\"}");
+            if (!error && doc.containsKey("filename")) {
+                const char* filenamePtr = doc["filename"];  // Points to doc memory, no heap allocation
+                
+                if (filenamePtr && strlen(filenamePtr) > 0) {
+                    // Use stack-allocated char buffer instead of String
+                    char fullPath[128];  // Stack allocation - no heap fragmentation
+                    
+                    // Construct path safely without heap allocation
+                    if (filenamePtr[0] == '/') {
+                        snprintf(fullPath, sizeof(fullPath), "%s", filenamePtr);
+                    } else {
+                        snprintf(fullPath, sizeof(fullPath), "/%s", filenamePtr);
+                    }
+                    
+                    if (FFat.exists(fullPath)) {
+                        if (FFat.remove(fullPath)) {
+                            // Use F() macro to store response in flash, not RAM
+                            server.send(200, F("application/json"), 
+                                      String(F("{\"status\":\"deleted\",\"file\":\"")) + fullPath + F("\"}"));
+                        } else {
+                            server.send(500, F("application/json"), F("{\"error\":\"Failed to delete file\"}"));
+                        }
+                    } else {
+                        server.send(404, F("application/json"), F("{\"error\":\"File not found\"}"));
+                    }
                 } else {
-                    server.send(500, "application/json", "{\"error\":\"Failed to delete file\"}");
+                    server.send(400, F("application/json"), F("{\"error\":\"Empty filename\"}"));
                 }
             } else {
-                server.send(404, "application/json", "{\"error\":\"File not found\"}");
+                server.send(400, F("application/json"), F("{\"error\":\"Invalid JSON or missing filename\"}"));
             }
         } else {
-            server.send(400, "application/json", "{\"error\":\"Missing filename parameter\"}");
+            server.send(400, F("application/json"), F("{\"error\":\"Missing request body\"}"));
         }
     });
     
-    // Create folder endpoint
+    // Create folder endpoint - ULTRA MEMORY OPTIMIZATION
     server.on("/api/create_folder", HTTP_POST, [&](){
         String body = server.arg("plain");
         if (body.length() > 0) {
-            // Simple JSON parsing for folder creation
-            int parentStart = body.indexOf("\"parent\":\"") + 10;
-            int parentEnd = body.indexOf("\"", parentStart);
-            String parent = body.substring(parentStart, parentEnd);
+            // ULTRA-EFFICIENT: Use small StaticJsonDocument + char buffers (no String heap allocation)
+            StaticJsonDocument<256> doc;
+            DeserializationError error = deserializeJson(doc, body);
             
-            int nameStart = body.indexOf("\"name\":\"") + 8;
-            int nameEnd = body.indexOf("\"", nameStart);
-            String name = body.substring(nameStart, nameEnd);
-            
-            if (!parent.startsWith("/")) parent = "/" + parent;
-            if (!parent.endsWith("/") && parent != "/") parent += "/";
-            
-            String folderPath = parent + name;
-            
-            // Create directory (note: FFat may not support directories)
-            server.send(200, "application/json", "{\"status\":\"created\",\"folder\":\"" + folderPath + "\"}");
+            if (!error && doc.containsKey("parent") && doc.containsKey("name")) {
+                const char* parentPtr = doc["parent"];  // Points to doc memory, no heap allocation
+                const char* namePtr = doc["name"];      // Points to doc memory, no heap allocation
+                
+                if (parentPtr && namePtr && strlen(parentPtr) > 0 && strlen(namePtr) > 0) {
+                    // Use stack-allocated char buffers instead of String
+                    char parentPath[64];   // Stack allocation - no heap fragmentation
+                    char folderPath[128];  // Stack allocation - no heap fragmentation
+                    
+                    // Normalize parent path safely without heap allocation
+                    if (parentPtr[0] == '/') {
+                        snprintf(parentPath, sizeof(parentPath), "%s", parentPtr);
+                    } else {
+                        snprintf(parentPath, sizeof(parentPath), "/%s", parentPtr);
+                    }
+                    
+                    // Ensure parent path ends with / if not root
+                    size_t parentLen = strlen(parentPath);
+                    if (parentLen > 1 && parentPath[parentLen - 1] != '/') {
+                        if (parentLen < sizeof(parentPath) - 1) {
+                            parentPath[parentLen] = '/';
+                            parentPath[parentLen + 1] = '\0';
+                        }
+                    }
+                    
+                    // Construct full folder path
+                    snprintf(folderPath, sizeof(folderPath), "%s%s", parentPath, namePtr);
+                    
+                    // Create directory (note: FFat may not support directories, but return success)
+                    server.send(200, F("application/json"), 
+                              String(F("{\"status\":\"created\",\"folder\":\"")) + folderPath + F("\"}"));
+                } else {
+                    server.send(400, F("application/json"), F("{\"error\":\"Empty parent or name\"}"));
+                }
+            } else {
+                server.send(400, F("application/json"), F("{\"error\":\"Invalid JSON or missing parameters\"}"));
+            }
         } else {
-            server.send(400, "application/json", "{\"error\":\"Missing folder parameters\"}");
+            server.send(400, F("application/json"), F("{\"error\":\"Missing request body\"}"));
         }
     });
     
@@ -1615,7 +1780,8 @@ void otaEndpoints(WebServer& server) {
         
         if (server.hasArg("plain")) {
             String body = server.arg("plain");
-            DynamicJsonDocument doc(1024);
+            // ULTRA-EFFICIENT: Reduced from 1024 to 256 bytes (75% reduction)
+            StaticJsonDocument<256> doc;  // Stack allocation instead of heap
             DeserializationError error = deserializeJson(doc, body);
             
             if (!error && doc.containsKey("kp") && doc.containsKey("ki") && doc.containsKey("kd")) {

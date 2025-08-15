@@ -416,17 +416,15 @@ void setup() {
                   pid.Kp, pid.Ki, pid.Kd, pid.sampleTime);
   }
   
-  // --- Initialize temperature averaging system ---
-  for (int i = 0; i < MAX_TEMP_SAMPLES; i++) {
-    tempAvg.tempSamples[i] = 0.0;
-  }
-  tempAvg.tempSampleIndex = 0;
-  tempAvg.tempSamplesReady = false;
-  tempAvg.lastTempSample = 0;
-  tempAvg.averagedTemperature = readTemperature(); // Initialize with first reading
+  // --- Initialize temperature EMA system ---
+  tempAvg.smoothedTemperature = readTemperature(); // Initialize with first reading
+  tempAvg.initialized = false; // Will become valid after first few readings
+  tempAvg.lastUpdate = millis();
+  tempAvg.sampleCount = 0;
   
-  Serial.println(F("PID controller initialized with relay-friendly time-proportional control"));
-  Serial.println(F("Temperature averaging system initialized (10 samples, 0.5s interval, reject top/bottom 2)"));
+  Serial.printf("[TEMP-EMA] Initialized with alpha=%.3f, spike threshold=%.1f°C\n", 
+                tempAvg.alpha, tempAvg.spikeThreshold);
+  Serial.println(F("EMA temperature averaging system initialized (memory optimized)"));
   
   // --- Initialize safety monitoring system ---
   safetySystem.init();

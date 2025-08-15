@@ -153,14 +153,14 @@
       },
       {
         "label": "Bake 1",
-        "min": 20,
-        "temp": 230,
+        "min": 30,
+        "temp": 175,
         "noMix": true
       },
       {
         "label": "Bake 2",
-        "min": 25,
-        "temp": 230,
+        "min": 35,
+        "temp": 175,
         "noMix": true
       },
       {
@@ -272,8 +272,8 @@
       },
       {
         "label": "Bake",
-        "min": 40,
-        "temp": 190,
+        "min": 50,
+        "temp": 175,
         "noMix": true
       },
       {
@@ -326,8 +326,8 @@
       },
       {
         "label": "Bake",
-        "min": 45,
-        "temp": 180,
+        "min": 55,
+        "temp": 175,
         "noMix": true
       },
       {
@@ -436,8 +436,8 @@
       },
       {
         "label": "Bake",
-        "min": 50,
-        "temp": 185,
+        "min": 60,
+        "temp": 175,
         "noMix": true
       },
       {

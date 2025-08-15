@@ -10,7 +10,7 @@
 | **Motor** | D2 (GPIO4) | **GPIO33** | ADC1_CH5, excellent for PWM |
 | **Light** | D5 (GPIO14) | **GPIO25** | DAC1, excellent for PWM |
 | **Buzzer** | D6 (GPIO12) | **GPIO26** | DAC2, excellent for PWM |
-| **RTD Sensor** | A0 (ADC) | **GPIO34** | ADC1_CH6, analog input only |
+| **RTD Sensor** | A0 (ADC) | **GPIO36** | ADC1_CH0, analog input only |
 
 ### TTGO T-Display Reserved Pins (DO NOT USE)
 - **Display SPI**: GPIO19(MOSI), GPIO18(SCK), GPIO5(CS), GPIO16(DC), GPIO23(RST), GPIO4(BL)

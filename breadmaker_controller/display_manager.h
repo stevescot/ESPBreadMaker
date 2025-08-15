@@ -16,7 +16,7 @@ public:
   {
     {
       auto cfg = _bus_instance.config();
-      cfg.spi_host = VSPI_HOST; // Use VSPI_HOST for ESP32
+      cfg.spi_host = SPI3_HOST; // Use SPI3_HOST for ESP32S3 (VSPI_HOST deprecated)
       cfg.spi_mode = 0;
       cfg.freq_write = 40000000;
       cfg.freq_read = 16000000;

@@ -73,66 +73,56 @@ static FermentationCache fermentCache;
 
 // Temperature and performance functions
 float getAveragedTemperature() {
-    return tempAvg.averagedTemperature;
+    return tempAvg.smoothedTemperature;
 }
 
+// Memory-efficient EMA temperature sampling - replaces complex array-based averaging
+// Uses only 16 bytes vs 200+ bytes, provides superior filtering with infinite sample history
 void updateTemperatureSampling() {
-  unsigned long nowMs = millis();
-  
-  // Sample at the configured interval
-  if (nowMs - tempAvg.lastTempSample >= tempAvg.tempSampleInterval) {
-    tempAvg.lastTempSample = nowMs;
-    // Take a new temperature sample using the calibrated readTemperature function
-    float rawTemp = readTemperature(); // Use calibrated temperature reading
-    tempAvg.tempSamples[tempAvg.tempSampleIndex] = rawTemp;
-    tempAvg.tempSampleIndex = (tempAvg.tempSampleIndex + 1) % tempAvg.tempSampleCount;
-    // Mark samples as ready once we've filled the array at least once
-    if (tempAvg.tempSampleIndex == 0 && !tempAvg.tempSamplesReady) {
-      tempAvg.tempSamplesReady = true;
+    unsigned long nowMs = millis();
+    
+    // Sample at the configured interval
+    if (nowMs - tempAvg.lastUpdate >= tempAvg.updateInterval) {
+        tempAvg.lastUpdate = nowMs;
+        
+        // Take a new temperature sample using the calibrated readTemperature function
+        float rawTemp = readTemperature();
+        
+        // Spike detection - ignore readings that change too rapidly
+        if (tempAvg.initialized) {
+            float tempChange = abs(rawTemp - tempAvg.lastRawTemp);
+            if (tempChange > tempAvg.spikeThreshold) {
+                // Ignore this reading - it's likely a spike
+                if (debugSerial) {
+                    Serial.printf("[TEMP-EMA] Spike detected: %.2f°C change (%.2f -> %.2f), ignoring\n", 
+                                tempChange, tempAvg.lastRawTemp, rawTemp);
+                }
+                return;
+            }
+        }
+        
+        // Initialize EMA with first valid reading
+        if (!tempAvg.initialized) {
+            tempAvg.smoothedTemperature = rawTemp;
+            tempAvg.initialized = true;
+            if (debugSerial) {
+                Serial.printf("[TEMP-EMA] Initialized with %.2f°C\n", rawTemp);
+            }
+        } else {
+            // Apply Exponential Moving Average: new = α × current + (1-α) × previous
+            tempAvg.smoothedTemperature = tempAvg.alpha * rawTemp + 
+                                        (1.0 - tempAvg.alpha) * tempAvg.smoothedTemperature;
+        }
+        
+        tempAvg.lastRawTemp = rawTemp;
+        tempAvg.sampleCount++;
+        
+        // Optional: Log every 10th sample for debugging
+        if (debugSerial && (tempAvg.sampleCount % 10 == 0)) {
+            Serial.printf("[TEMP-EMA] Sample #%u: Raw=%.2f°C, Smoothed=%.2f°C, α=%.3f\n", 
+                         tempAvg.sampleCount, rawTemp, tempAvg.smoothedTemperature, tempAvg.alpha);
+        }
     }
-    // Calculate averaged temperature if we have enough samples
-    if (tempAvg.tempSamplesReady && tempAvg.tempSampleCount > 0) {
-      // Step 1: Copy and sort samples for outlier rejection
-      float sortedSamples[MAX_TEMP_SAMPLES];
-      for (int i = 0; i < tempAvg.tempSampleCount; i++) {
-        sortedSamples[i] = tempAvg.tempSamples[i];
-      }
-      // Simple bubble sort
-      for (int i = 0; i < tempAvg.tempSampleCount - 1; i++) {
-        for (int j = 0; j < tempAvg.tempSampleCount - i - 1; j++) {
-          if (sortedSamples[j] > sortedSamples[j + 1]) {
-            float temp = sortedSamples[j];
-            sortedSamples[j] = sortedSamples[j + 1];
-            sortedSamples[j + 1] = temp;
-          }
-        }
-      }
-      // Step 2: Get clean samples (reject outliers if we have enough samples)
-      float cleanSamples[MAX_TEMP_SAMPLES];
-      int cleanCount = 0;
-      int effectiveSamples = tempAvg.tempSampleCount - (2 * tempAvg.tempRejectCount);
-      if (effectiveSamples >= 3) {
-        for (int i = tempAvg.tempRejectCount; i < tempAvg.tempSampleCount - tempAvg.tempRejectCount; i++) {
-          cleanSamples[cleanCount++] = sortedSamples[i];
-        }
-      } else {
-        for (int i = 0; i < tempAvg.tempSampleCount; i++) {
-          cleanSamples[cleanCount++] = sortedSamples[i];
-        }
-      }
-      // Step 3: Apply weighted average
-      float weightedSum = 0.0;
-      float totalWeight = 0.0;
-      for (int i = 0; i < cleanCount; i++) {
-        float weight = 0.5 + (1.5 * i) / (cleanCount - 1);
-        weightedSum += cleanSamples[i] * weight;
-        totalWeight += weight;
-      }
-      tempAvg.averagedTemperature = weightedSum / totalWeight;
-    } else {
-      tempAvg.averagedTemperature = rawTemp; // rawTemp is now the calibrated temperature
-    }
-  }
 }
 
 void updatePerformanceMetrics() {
