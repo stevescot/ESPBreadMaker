@@ -442,7 +442,16 @@ function updateStatusInternal(s) {
       populateStageDropdown(programIdx);
     }
   }
-  updateStageProgress(s.stage, s);
+  
+  // ---- Stage Progress Update ----
+  // Ensure programs are loaded before updating stage progress
+  if (window.cachedPrograms) {
+    updateStageProgress(s.stage, s);
+  } else if (typeof s.program === "string" && s.program.length > 0) {
+    fetchProgramsOnce(() => updateStageProgress(s.stage, s));
+  } else {
+    updateStageProgress(s.stage, s); // Still update even without program
+  }
   
   // ---- Plan Summary (stages table) ----
   // Ensure programs are loaded before showing plan summary for fermentation calculations
