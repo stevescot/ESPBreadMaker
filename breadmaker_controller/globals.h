@@ -46,6 +46,7 @@ struct TemperatureEMAState {
     unsigned long updateInterval = 500; // Update interval in milliseconds
     float lastRawTemp = 0.0;           // For spike detection
     uint32_t sampleCount = 0;          // Total samples processed (for statistics)
+    uint16_t consecutiveSpikes = 0;    // Counter for stuck-state detection
 };
 #endif
 

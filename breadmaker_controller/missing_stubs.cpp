@@ -88,16 +88,35 @@ void updateTemperatureSampling() {
         // Take a new temperature sample using the calibrated readTemperature function
         float rawTemp = readTemperature();
         
-        // Spike detection - ignore readings that change too rapidly
+        // Spike detection with intelligent stuck-state recovery
         if (tempAvg.initialized) {
             float tempChange = abs(rawTemp - tempAvg.lastRawTemp);
             if (tempChange > tempAvg.spikeThreshold) {
-                // Ignore this reading - it's likely a spike
-                if (debugSerial) {
-                    Serial.printf("[TEMP-EMA] Spike detected: %.2f°C change (%.2f -> %.2f), ignoring\n", 
-                                tempChange, tempAvg.lastRawTemp, rawTemp);
+                // Count consecutive spikes
+                tempAvg.consecutiveSpikes++;
+                
+                // If we've had many consecutive "spikes", the EWMA might be stuck at wrong value
+                if (tempAvg.consecutiveSpikes >= 10) {
+                    // Reset EWMA to current reading - the "spikes" are probably correct
+                    tempAvg.smoothedTemperature = rawTemp;
+                    tempAvg.lastRawTemp = rawTemp;
+                    tempAvg.consecutiveSpikes = 0;
+                    
+                    if (debugSerial) {
+                        Serial.printf("[TEMP-EMA] RESET: %d consecutive spikes detected, resetting EWMA to %.2f°C\n", 
+                                    10, rawTemp);
+                    }
+                } else {
+                    // Normal spike detection - ignore this reading
+                    if (debugSerial) {
+                        Serial.printf("[TEMP-EMA] Spike %d/10: %.2f°C change (%.2f -> %.2f), ignoring\n", 
+                                    tempAvg.consecutiveSpikes, tempChange, tempAvg.lastRawTemp, rawTemp);
+                    }
+                    return;
                 }
-                return;
+            } else {
+                // Reset spike counter on normal reading
+                tempAvg.consecutiveSpikes = 0;
             }
         }
         

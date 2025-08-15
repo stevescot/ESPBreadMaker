@@ -422,74 +422,60 @@ function initChart() {
   });
 }
 
-// Update temperature averaging parameters only
-async function updateTempAveraging() {
-  const tempSampleCount = parseInt(document.getElementById('tempSampleCount').value);
-  const tempRejectCount = parseInt(document.getElementById('tempRejectCount').value);
-  const tempSampleInterval = parseInt(document.getElementById('tempSampleInterval').value);
+// Update EWMA temperature parameters only
+async function updateTempEWMA() {
+  const tempAlpha = parseFloat(document.getElementById('tempAlpha').value);
+  const tempSpikeThreshold = parseFloat(document.getElementById('tempSpikeThreshold').value);
+  const tempUpdateInterval = parseInt(document.getElementById('tempUpdateInterval').value);
 
-  // Validate temperature averaging parameters
-  const remainingSamples = tempSampleCount - (2 * tempRejectCount);
-  if (remainingSamples < 3) {
-    showMessage('Invalid temperature averaging: must have at least 3 samples after rejection', 'error');
+  // Validate EWMA parameters
+  if (tempAlpha < 0.01 || tempAlpha > 0.5) {
+    showMessage('Invalid alpha: must be between 0.01 and 0.5', 'error');
+    return;
+  }
+  
+  if (tempSpikeThreshold < 1.0 || tempSpikeThreshold > 10.0) {
+    showMessage('Invalid spike threshold: must be between 1.0°C and 10.0°C', 'error');
     return;
   }
 
   try {
-    const url = `/api/pid_params?temp_samples=${tempSampleCount}&temp_reject=${tempRejectCount}&temp_interval=${tempSampleInterval}`;
-    console.log('Updating temperature averaging:', { tempSampleCount, tempRejectCount, tempSampleInterval });
+    const url = `/api/pid_params?temp_alpha=${tempAlpha}&temp_spike_threshold=${tempSpikeThreshold}&temp_interval=${tempUpdateInterval}`;
+    console.log('Updating EWMA parameters:', { tempAlpha, tempSpikeThreshold, tempUpdateInterval });
     
     const response = await fetchWithTimeout(url, 10000);
     const result = await response.json();
-    console.log('Temperature averaging update response:', result);
+    console.log('EWMA update response:', result);
     
     if (response.ok) {
-      // Enhanced feedback using intelligent update information
-      let successMessage = 'Temperature averaging parameters updated successfully';
-      
-      if (result.update_details) {
-        successMessage = result.update_details;
-        
-        if (result.data_preservation) {
-          successMessage += ` (${result.data_preservation})`;
-        }
-      } else if (!result.updated) {
-        successMessage = 'Temperature averaging verified - no changes required';
-      }
-      
-      showMessage(successMessage, 'success');
-      
-      // Log detailed preservation information
-      if (result.data_preservation) {
-        console.log('Data preservation status:', result.data_preservation);
-      }
+      showMessage('EWMA temperature parameters updated successfully', 'success');
       
       // Multiple refresh attempts to ensure backend has processed the update
       const refreshWithRetry = async (attempt = 1, maxAttempts = 3) => {
-        console.log(`Refreshing status after temperature averaging update (attempt ${attempt}/${maxAttempts})...`);
+        console.log(`Refreshing status after EWMA update (attempt ${attempt}/${maxAttempts})...`);
         
         if (typeof updateStatus === 'function') {
           await updateStatus();
         }
         
-        // Check if the values were actually updated by comparing with what we sent
-        const currentSamples = document.getElementById('currentTempSamples').textContent;
-        const currentReject = document.getElementById('currentTempReject').textContent;
+        // Check if the values were actually updated
+        const currentAlpha = document.getElementById('currentTempAlpha').textContent;
+        const currentThreshold = document.getElementById('currentTempSpikeThreshold').textContent;
         const currentInterval = document.getElementById('currentTempInterval').textContent;
         
-        const samplesMatch = currentSamples.includes(tempSampleCount.toString());
-        const rejectMatch = currentReject.includes(tempRejectCount.toString());
-        const intervalMatch = currentInterval.includes(tempSampleInterval.toString());
+        const alphaMatch = currentAlpha.includes(tempAlpha.toString());
+        const thresholdMatch = currentThreshold.includes(tempSpikeThreshold.toString());
+        const intervalMatch = currentInterval.includes(tempUpdateInterval.toString());
         
-        if (!samplesMatch || !rejectMatch || !intervalMatch) {
-          console.log(`Values not yet updated (attempt ${attempt}): samples=${samplesMatch}, reject=${rejectMatch}, interval=${intervalMatch}`);
+        if (!alphaMatch || !thresholdMatch || !intervalMatch) {
+          console.log(`EWMA values not yet updated (attempt ${attempt}): alpha=${alphaMatch}, threshold=${thresholdMatch}, interval=${intervalMatch}`);
           if (attempt < maxAttempts) {
-            setTimeout(() => refreshWithRetry(attempt + 1, maxAttempts), 1500); // Retry with increasing delay
+            setTimeout(() => refreshWithRetry(attempt + 1, maxAttempts), 1500);
           } else {
-            console.warn('Temperature averaging values may not have updated after multiple retries');
+            console.warn('EWMA values may not have updated after multiple retries');
           }
         } else {
-          console.log('Temperature averaging values successfully updated and confirmed');
+          console.log('EWMA values successfully updated and confirmed');
         }
       };
       
@@ -497,16 +483,16 @@ async function updateTempAveraging() {
       setTimeout(() => refreshWithRetry(), 2500);
     } else {
       // Handle validation errors from firmware
-      console.error('Temperature averaging validation errors:', result);
+      console.error('EWMA validation errors:', result);
       if (result.errors) {
-        showMessage('Temperature averaging validation errors: ' + result.errors, 'error');
+        showMessage('EWMA validation errors: ' + result.errors, 'error');
       } else {
-        showMessage('Failed to update temperature averaging parameters', 'error');
+        showMessage('Failed to update EWMA parameters', 'error');
       }
     }
   } catch (error) {
     console.error('Network error:', error);
-    showMessage('Error updating temperature averaging: ' + error.message, 'error');
+    showMessage('Error updating EWMA parameters: ' + error.message, 'error');
   }
 }
 
@@ -517,18 +503,22 @@ async function updatePIDParams() {
   const kd = parseFloat(document.getElementById('kdInput').value);
   const sampleTime = parseInt(document.getElementById('sampleTimeInput').value);
   const windowSize = parseInt(document.getElementById('windowSizeInput').value);
-  const tempSampleCount = parseInt(document.getElementById('tempSampleCount').value);
-  const tempRejectCount = parseInt(document.getElementById('tempRejectCount').value);
-  const tempSampleInterval = parseInt(document.getElementById('tempSampleInterval').value);
+  const tempAlpha = parseFloat(document.getElementById('tempAlpha').value);
+  const tempSpikeThreshold = parseFloat(document.getElementById('tempSpikeThreshold').value);
+  const tempUpdateInterval = parseInt(document.getElementById('tempUpdateInterval').value);
 
-  // Validate temperature averaging parameters
-  const remainingSamples = tempSampleCount - (2 * tempRejectCount);
-  if (remainingSamples < 3) {
-    showMessage('Invalid temperature averaging: must have at least 3 samples after rejection', 'error');
+  // Validate EWMA parameters
+  if (tempAlpha < 0.01 || tempAlpha > 0.5) {
+    showMessage('Invalid alpha: must be between 0.01 and 0.5', 'error');
+    return;
+  }
+  
+  if (tempSpikeThreshold < 1.0 || tempSpikeThreshold > 10.0) {
+    showMessage('Invalid spike threshold: must be between 1.0°C and 10.0°C', 'error');
     return;
   }
 
-  console.log('Updating PID params:', { kp, ki, kd, sampleTime, windowSize, tempSampleCount, tempRejectCount, tempSampleInterval });
+  console.log('Updating PID params:', { kp, ki, kd, sampleTime, windowSize, tempAlpha, tempSpikeThreshold, tempUpdateInterval });
 
   try {
     // Use POST request with JSON body for PID parameter updates
@@ -608,65 +598,82 @@ async function updatePIDParams() {
 // Load current PID parameters from controller
 async function loadCurrentParams() {
   try {
-    const response = await fetchWithTimeout('/api/pid', 8000);
-    const data = await response.json();
+    // Load PID parameters
+    const pidResponse = await fetchWithTimeout('/api/pid', 8000);
+    const pidData = await pidResponse.json();
     
-    document.getElementById('kpInput').value = data.kp.toFixed(6);
-    document.getElementById('kiInput').value = data.ki.toFixed(6);
-    document.getElementById('kdInput').value = data.kd.toFixed(6);
+    document.getElementById('kpInput').value = pidData.kp.toFixed(6);
+    document.getElementById('kiInput').value = pidData.ki.toFixed(6);
+    document.getElementById('kdInput').value = pidData.kd.toFixed(6);
     
-    if (data.sample_time_ms !== undefined) {
-      document.getElementById('sampleTimeInput').value = data.sample_time_ms.toString();
+    if (pidData.sample_time_ms !== undefined) {
+      document.getElementById('sampleTimeInput').value = pidData.sample_time_ms.toString();
     }
-    if (data.window_size_ms !== undefined) {
-      document.getElementById('windowSizeInput').value = data.window_size_ms.toString();
-    }
-    
-    // Load temperature averaging parameters if available
-    if (data.temp_sample_count !== undefined) {
-      document.getElementById('tempSampleCount').value = data.temp_sample_count.toString();
-    }
-    if (data.temp_reject_count !== undefined) {
-      document.getElementById('tempRejectCount').value = data.temp_reject_count.toString();
-    }
-    if (data.temp_sample_interval_ms !== undefined) {
-      document.getElementById('tempSampleInterval').value = data.temp_sample_interval_ms.toString();
+    if (pidData.window_size_ms !== undefined) {
+      document.getElementById('windowSizeInput').value = pidData.window_size_ms.toString();
     }
     
-    // Update current display
-    document.getElementById('currentKp').textContent = data.kp.toFixed(6);
-    document.getElementById('currentKi').textContent = data.ki.toFixed(6);
-    document.getElementById('currentKd').textContent = data.kd.toFixed(6);
-    document.getElementById('currentSampleTime').textContent = (data.sample_time_ms || 1000) + ' ms';
+    // Load EWMA temperature parameters
+    const ewmaResponse = await fetchWithTimeout('/api/pid_params', 8000);
+    const ewmaData = await ewmaResponse.json();
     
-    // Validate temperature averaging after loading
-    validateTempAveraging();
+    if (ewmaData.temp_alpha !== undefined) {
+      document.getElementById('tempAlpha').value = ewmaData.temp_alpha.toFixed(4);
+    }
+    if (ewmaData.temp_spike_threshold !== undefined) {
+      document.getElementById('tempSpikeThreshold').value = ewmaData.temp_spike_threshold.toFixed(1);
+    }
+    if (ewmaData.temp_sample_interval !== undefined) {
+      document.getElementById('tempUpdateInterval').value = ewmaData.temp_sample_interval.toString();
+    }
     
-    showMessage('Current PID parameters and settings loaded', 'success');
-    console.log('Loaded PID params:', data);
+    // Update current PID display
+    document.getElementById('currentKp').textContent = pidData.kp.toFixed(6);
+    document.getElementById('currentKi').textContent = pidData.ki.toFixed(6);
+    document.getElementById('currentKd').textContent = pidData.kd.toFixed(6);
+    document.getElementById('currentSampleTime').textContent = (pidData.sample_time_ms || 1000) + ' ms';
+    
+    // Update current EWMA display
+    if (ewmaData.temp_alpha !== undefined) {
+      document.getElementById('currentTempAlpha').textContent = ewmaData.temp_alpha.toFixed(4);
+    }
+    if (ewmaData.temp_spike_threshold !== undefined) {
+      document.getElementById('currentTempSpikeThreshold').textContent = ewmaData.temp_spike_threshold.toFixed(1) + ' °C';
+    }
+    if (ewmaData.temp_sample_interval !== undefined) {
+      document.getElementById('currentTempInterval').textContent = ewmaData.temp_sample_interval + ' ms';
+    }
+    if (ewmaData.temp_sample_count_total !== undefined) {
+      document.getElementById('currentTempTotalSamples').textContent = ewmaData.temp_sample_count_total.toString();
+    }
+    if (ewmaData.averaged_temperature !== undefined) {
+      document.getElementById('currentSmoothedTemp').textContent = ewmaData.averaged_temperature.toFixed(2) + ' °C';
+    }
+    if (ewmaData.temp_last_raw !== undefined) {
+      document.getElementById('currentLastRawTemp').textContent = ewmaData.temp_last_raw.toFixed(2) + ' °C';
+    }
+    
+    showMessage('Current PID and EWMA parameters loaded', 'success');
+    console.log('Loaded PID params:', pidData);
+    console.log('Loaded EWMA params:', ewmaData);
   } catch (error) {
-    showMessage('Error loading PID parameters: ' + error.message, 'error');
+    showMessage('Error loading parameters: ' + error.message, 'error');
   }
-
 }
-// Validate temperature averaging parameters
-function validateTempAveraging() {
-  const sampleCount = parseInt(document.getElementById('tempSampleCount').value);
-  const rejectCount = parseInt(document.getElementById('tempRejectCount').value);
+// Validate EWMA parameters (simplified since EWMA has fewer constraints)
+function validateEWMAParams() {
+  const alpha = parseFloat(document.getElementById('tempAlpha').value);
+  const spikeThreshold = parseFloat(document.getElementById('tempSpikeThreshold').value);
   
-  // Ensure we have at least 3 samples after rejection
-  const remainingSamples = sampleCount - (2 * rejectCount);
-  
-  if (remainingSamples < 3) {
-    // Adjust reject count to leave at least 3 samples
-    const maxRejectCount = Math.floor((sampleCount - 3) / 2);
-    document.getElementById('tempRejectCount').value = Math.max(0, maxRejectCount);
-    showMessage(`Reject count adjusted to ${maxRejectCount} to maintain minimum 3 samples for averaging`, 'warning');
+  if (alpha < 0.01 || alpha > 0.5) {
+    document.getElementById('tempAlpha').value = Math.max(0.01, Math.min(0.5, alpha));
+    showMessage('Alpha constrained to valid range (0.01 - 0.5)', 'warning');
   }
   
-  // Update max value for reject count input
-  const maxReject = Math.floor((sampleCount - 3) / 2);
-  document.getElementById('tempRejectCount').setAttribute('max', maxReject);
+  if (spikeThreshold < 1.0 || spikeThreshold > 10.0) {
+    document.getElementById('tempSpikeThreshold').value = Math.max(1.0, Math.min(10.0, spikeThreshold));
+    showMessage('Spike threshold constrained to valid range (1.0°C - 10.0°C)', 'warning');
+  }
 }
 
 // Update auto-tune method description based on selection
@@ -778,8 +785,8 @@ document.addEventListener('DOMContentLoaded', function() {
   });
   
   // Add temperature averaging validation handlers
-  document.getElementById('tempSampleCount').addEventListener('change', validateTempAveraging);
-  document.getElementById('tempRejectCount').addEventListener('change', validateTempAveraging);
+  document.getElementById('tempAlpha').addEventListener('change', validateEWMAParams);
+  document.getElementById('tempSpikeThreshold').addEventListener('change', validateEWMAParams);
   
   // Initialize method description
   updateAutoTuneMethodDescription();

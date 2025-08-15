@@ -795,6 +795,7 @@ void pidControlEndpoints(WebServer& server) {
             server.sendContent(",\"temp_spike_threshold\":" + String(tempAvg.spikeThreshold, 1));
             server.sendContent(",\"temp_sample_count_total\":" + String(tempAvg.sampleCount));
             server.sendContent(",\"temp_last_raw\":" + String(tempAvg.lastRawTemp, 2));
+            server.sendContent(",\"temp_consecutive_spikes\":" + String(tempAvg.consecutiveSpikes));
             server.sendContent("}");
         }
     });

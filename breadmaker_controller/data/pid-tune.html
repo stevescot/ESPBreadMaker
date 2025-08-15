@@ -198,41 +198,41 @@
         </div>
 
         <div class="param-group">
-          <h3>🌡️ Temperature Averaging</h3>
+          <h3>🌡️ EWMA Temperature Smoothing</h3>
           <div class="param-row">
-            <label class="param-label">Sample Count:</label>
-            <input type="number" id="tempSampleCount" class="param-input" step="1" min="5" max="50" value="10">
-            <span class="param-unit">samples</span>
+            <label class="param-label">Alpha (α):</label>
+            <input type="number" id="tempAlpha" class="param-input" step="0.01" min="0.01" max="0.5" value="0.1">
+            <span class="param-unit">smoothing factor</span>
           </div>
           <div class="param-desc">
-            <strong>Temperature Buffer Size:</strong> Number of temperature readings to collect for averaging. 
-            More samples = smoother but slower response to changes.
+            <strong>Smoothing Factor:</strong> Controls responsiveness vs stability. 
+            0.01 = very smooth/slow, 0.1 = balanced, 0.5 = very responsive/noisy.
           </div>
           
           <div class="param-row">
-            <label class="param-label">Reject Count:</label>
-            <input type="number" id="tempRejectCount" class="param-input" step="1" min="0" max="10" value="2">
-            <span class="param-unit">each end</span>
+            <label class="param-label">Spike Threshold:</label>
+            <input type="number" id="tempSpikeThreshold" class="param-input" step="0.5" min="1.0" max="10.0" value="5.0">
+            <span class="param-unit">°C</span>
           </div>
           <div class="param-desc">
-            <strong>Outlier Rejection:</strong> Number of highest and lowest readings to discard before averaging. 
-            Helps filter noise and sensor spikes. Must leave at least 3 samples for averaging.
+            <strong>Spike Detection:</strong> Ignore temperature readings that change by more than this amount. 
+            Protects against sensor glitches and noise spikes.
           </div>
           
           <div class="param-row">
-            <label class="param-label">Sample Interval:</label>
-            <input type="number" id="tempSampleInterval" class="param-input" step="100" min="100" max="2000" value="500">
+            <label class="param-label">Update Interval:</label>
+            <input type="number" id="tempUpdateInterval" class="param-input" step="100" min="100" max="2000" value="500">
             <span class="param-unit">ms</span>
           </div>
           <div class="param-desc">
-            <strong>Sampling Rate:</strong> Time between temperature measurements. 
+            <strong>Update Rate:</strong> Time between EWMA temperature updates. 
             Lower = more responsive, Higher = more stable but uses less CPU.
           </div>
         </div>
 
         <div class="button-group">
           <button class="btn btn-primary" onclick="updatePIDParams()">Apply All Parameters</button>
-          <button class="btn btn-primary" onclick="updateTempAveraging()">Apply Temp Averaging</button>
+          <button class="btn btn-primary" onclick="updateTempEWMA()">Apply EWMA Settings</button>
           <button class="btn btn-warning" onclick="resetToDefaults()">Reset Defaults</button>
           <button class="btn btn-primary" onclick="loadCurrentParams()">Load Current</button>
         </div>
@@ -455,25 +455,33 @@
         </div>
 
         <div class="param-group">
-          <h3>📊 Temperature Averaging Status 
+          <h3>📊 EWMA Temperature Status 
             <button onclick="forceStatusRefresh()" style="margin-left:1em; padding:0.2em 0.5em; font-size:0.8em; border-radius:4px; background:#666; color:#fff; border:none; cursor:pointer;">🔄 Refresh</button>
           </h3>
           <div class="status-grid">
             <div class="status-row">
-              <span class="status-label">Sample Buffer:</span>
-              <span class="status-value" id="currentTempSamples">-- samples</span>
+              <span class="status-label">Alpha (α):</span>
+              <span class="status-value" id="currentTempAlpha">--</span>
             </div>
             <div class="status-row">
-              <span class="status-label">Rejection:</span>
-              <span class="status-value" id="currentTempReject">-- each end</span>
+              <span class="status-label">Spike Threshold:</span>
+              <span class="status-value" id="currentTempSpikeThreshold">-- °C</span>
             </div>
             <div class="status-row">
-              <span class="status-label">Sample Rate:</span>
+              <span class="status-label">Update Rate:</span>
               <span class="status-value" id="currentTempInterval">-- ms</span>
             </div>
             <div class="status-row">
-              <span class="status-label">Effective Count:</span>
-              <span class="status-value" id="currentTempEffective">-- used</span>
+              <span class="status-label">Total Samples:</span>
+              <span class="status-value" id="currentTempTotalSamples">--</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Smoothed Temp:</span>
+              <span class="status-value" id="currentSmoothedTemp">-- °C</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">Last Raw Temp:</span>
+              <span class="status-value" id="currentLastRawTemp">-- °C</span>
             </div>
           </div>
         </div>
@@ -531,9 +539,9 @@
       document.getElementById('liveSampleTime').textContent = data.pid_sample_time ?? data.temp_sample_interval_ms ?? '--';
       document.getElementById('liveWindowSize').textContent = data.window_size_ms ?? '--';
       document.getElementById('liveOnTime').textContent = data.on_time ?? '--';
-      document.getElementById('liveTempSampleCount').textContent = data.temp_sample_count ?? '--';
-      document.getElementById('liveTempRejectCount').textContent = data.temp_reject_count ?? '--';
-      document.getElementById('liveTempSampleInterval').textContent = data.temp_sample_interval_ms ?? '--';
+      document.getElementById('liveTempAlpha').textContent = data.temp_alpha ?? '--';
+      document.getElementById('liveTempSpikeThreshold').textContent = data.temp_spike_threshold ?? '--';
+      document.getElementById('liveTempInterval').textContent = data.temp_sample_interval ?? '--';
       document.getElementById('liveManualMode').textContent = data.manualMode ?? '--';
       document.getElementById('livePhase').textContent = data.phase ?? '--';
       document.getElementById('liveHeater').textContent = data.heater ?? '--';
