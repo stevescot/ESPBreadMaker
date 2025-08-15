@@ -1504,7 +1504,31 @@ void fileEndPoints(WebServer& server) {
 
 void programsEndpoints(WebServer& server) {
     server.on("/api/programs", HTTP_GET, [&](){
-        server.send(200, "application/json", "{\"count\":" + String(getProgramCount()) + "}");
+        // Ultra-memory efficient program list using char buffers
+        char response[2048];
+        char* pos = response;
+        const char* end = response + sizeof(response) - 1;
+        
+        pos += snprintf(pos, end - pos, "[");
+        
+        for (int i = 0; i < getProgramCount() && pos < end - 100; i++) {
+            if (i > 0) {
+                pos += snprintf(pos, end - pos, ",");
+            }
+            
+            // Use direct program name lookup to avoid loading full program
+            String progName = getProgramName(i);
+            bool isValid = isProgramValid(i);
+            
+            pos += snprintf(pos, end - pos, 
+                           "{\"id\":%d,\"name\":\"%s\",\"valid\":%s}", 
+                           i, progName.c_str(), isValid ? "true" : "false");
+        }
+        
+        pos += snprintf(pos, end - pos, "]");
+        *pos = '\0';
+        
+        server.send(200, "application/json", response);
     });
     
     server.on("/api/program", HTTP_GET, [&](){
