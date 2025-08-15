@@ -4,14 +4,14 @@ This guide will help you set up the Breadmaker Controller and integrate it with 
 
 ## Prerequisites
 
-- ESP8266 NodeMCU or similar board
+- ESP32 TTGO T-Display board
 - Home Assistant installation
 - Local network access
 - Basic understanding of YAML configuration
 
 ## Step 1: Hardware Setup
 
-1. **Flash the firmware** to your ESP8266 board
+1. **Flash the firmware** to your ESP32 board
 2. **Connect the hardware** according to the circuit diagram
 3. **Power on** the device
 

@@ -56,12 +56,23 @@ If you only changed web files and don't need to recompile firmware:
 
 The scripts are configured for:
 - **ESP32 Board:** TTGO T-Display (16MB flash)
+- **Board FQBN:** esp32:esp32:esp32
 - **Partition Scheme:** app3M_fat9M_16MB (3MB app + 9.9MB FFat)
 - **Flash Size:** 16MB 
 - **Upload Speed:** 921600 baud
-- **Board:** esp8266:esp8266:nodemcuv2 (NodeMCU v2)
-- **Baud Rate:** 921600
-- **LittleFS Size:** 2MB
+- **File System:** FFat (not SPIFFS or LittleFS)
+- **Display:** ST7789 TFT (135x240 pixels)
+
+## Partition Layout
+
+```
+Name      Type    SubType   Offset    Size      Purpose
+nvs       data    nvs       0x9000    24KB      WiFi credentials, settings
+otadata   data    ota       0xf000    8KB       OTA update metadata
+app0      app     ota_0     0x10000   1.5MB     Main firmware (slot 0)
+app1      app     ota_1     0x190000  1.5MB     OTA firmware (slot 1)
+ffat      data    fat       0x310000  9.9MB     Web files, programs, data
+```
 
 ## Troubleshooting
 
@@ -73,28 +84,39 @@ The scripts are configured for:
 - Install Python if not already installed
 - Run: `pip install esptool`
 
-### "mklittlefs tool not found"
-- Install ESP8266 Arduino Core via Arduino IDE Board Manager
-- Go to Tools > Board > Boards Manager, search for "ESP8266" and install
+### "ESP32 core not found"
+- Run `.\setup_esp32_core.ps1` to install the correct ESP32 Arduino Core
+- Ensure version 2.0.17 is installed (newer versions will cause crashes)
+
+### "mkfatfs tool not found"
+- Install ESP32 Arduino Core via Arduino IDE Board Manager
+- Go to Tools > Board > Boards Manager, search for "ESP32" and install version 2.0.17
 
 ### "Compilation failed"
 - Check that all required libraries are installed:
-  - ESPAsyncTCP
+  - AsyncTCP (ESP32 version)
   - ESPAsyncWebServer
   - ArduinoJson
   - PID
+  - LovyanGFX (for display)
 
 ### "Upload failed"
 - Check COM port number in Device Manager
-- Ensure ESP8266 is connected and drivers are installed
-- Try pressing the RESET button on ESP8266 during upload
+- Ensure ESP32 is connected and drivers are installed
+- Try pressing the BOOT button on ESP32 during upload
+- Verify USB cable supports data transfer (not just power)
+
+### "Display issues"
+- Ensure LovyanGFX library is configured for ST7789
+- Check display rotation settings in display_manager.cpp
+- Verify pin assignments match TTGO T-Display
 
 ## After Upload
 
 1. Open Serial Monitor (115200 baud) to see boot messages
-2. The ESP8266 will try to connect to WiFi using saved credentials
+2. The ESP32 will try to connect to WiFi using saved credentials
 3. If no WiFi is configured, it may start an access point
-4. Navigate to the ESP8266's IP address in a web browser
+4. Navigate to the ESP32's IP address in a web browser
 5. Test the manual mode and device controls
 
 ## Web Interface Features

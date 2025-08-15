@@ -118,7 +118,7 @@ as symbols may be used add a utf8 charset to the header of html files to ensure 
 
 ## Serial Debugging
 
-Serial debugging is essential for diagnosing firmware and web server issues on the ESP8266 breadmaker controller. Here are best practices and tips:
+Serial debugging is essential for diagnosing firmware and web server issues on the ESP32 breadmaker controller. Here are best practices and tips:
 
 - **Web Server Type**: This project uses the `ESPAsyncWebServer` (AsyncWebServer). Do not use synchronous server methods like `handleClient()`—they are not compatible and not needed.
 
