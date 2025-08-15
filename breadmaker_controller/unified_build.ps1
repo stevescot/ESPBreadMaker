@@ -128,6 +128,10 @@ function Build-Firmware {
 }
 
 function Upload-FirmwareOTA {
+    param(
+        [switch]$UsePowerShell  # Use PowerShell method instead of curl
+    )
+    
     Write-Info "Uploading firmware via Web OTA..."
     
     if (!(Test-Path $FIRMWARE_FILE)) {
@@ -136,48 +140,233 @@ function Upload-FirmwareOTA {
         return $false
     }
     
-    try {
-        Write-Info "Uploading to: $WEB_OTA_ENDPOINT"
-        
-        # Create form data for the file upload
-        $boundary = [System.Guid]::NewGuid().ToString()
-        $fileBinary = [System.IO.File]::ReadAllBytes($FIRMWARE_FILE)
-        
-        $body = @"
+    if ($UsePowerShell) {
+        # PowerShell multipart form upload method
+        try {
+            Write-Info "Uploading to: $WEB_OTA_ENDPOINT"
+            Write-Info "Using PowerShell multipart form upload..."
+            
+            # Create form data for the file upload
+            $boundary = [System.Guid]::NewGuid().ToString()
+            $fileBinary = [System.IO.File]::ReadAllBytes($FIRMWARE_FILE)
+            
+            $body = @"
 --$boundary
 Content-Disposition: form-data; name="file"; filename="firmware.bin"
 Content-Type: application/octet-stream
 
 "@
-        $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
-        $bodyBytes += $fileBinary
-        $bodyBytes += [System.Text.Encoding]::UTF8.GetBytes("`r`n--$boundary--`r`n")
+            $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+            $bodyBytes += $fileBinary
+            $bodyBytes += [System.Text.Encoding]::UTF8.GetBytes("`r`n--$boundary--`r`n")
+            
+            $response = Invoke-WebRequest -Uri $WEB_OTA_ENDPOINT -Method POST -Body $bodyBytes -ContentType "multipart/form-data; boundary=$boundary" -TimeoutSec 60
+            
+            if ($response.StatusCode -eq 200) {
+                Write-Success "Firmware uploaded successfully via PowerShell"
+                Write-Success "Device should be rebooting now..."
+                
+                # Wait for device to reboot
+                Write-Info "Waiting for device to restart..."
+                Start-Sleep -Seconds 15
+                
+                # Test if device is back online
+                $retryCount = 0
+                $maxRetries = 6
+                do {
+                    Start-Sleep -Seconds 5
+                    $retryCount++
+                    Write-Info "Checking if device is back online (attempt $retryCount/$maxRetries)..."
+                    if (Test-DeviceConnectivity) {
+                        Write-Success "Device is back online after firmware update"
+                        return $true
+                    }
+                } while ($retryCount -lt $maxRetries)
+                
+                Write-Warning "Device may still be restarting or upload may have failed"
+                return $false
+            } else {
+                Write-Error "Upload failed with status: $($response.StatusCode)"
+                return $false
+            }
+        }
+        catch {
+            Write-Error "PowerShell upload failed: $($_.Exception.Message)"
+            Write-Info "Falling back to curl method..."
+            # Fall through to curl method
+        }
+    }
+    
+    # Curl binary upload method (default)
+    try {
+        Write-Info "Uploading to: $WEB_OTA_ENDPOINT"
+        Write-Info "Using curl for multipart form upload..."
         
-        $response = Invoke-WebRequest -Uri $WEB_OTA_ENDPOINT -Method POST -Body $bodyBytes -ContentType "multipart/form-data; boundary=$boundary" -TimeoutSec 30
+        # Use curl with proper multipart form upload (not raw binary)
+        $curlArgs = @(
+            "-v"
+            "-X", "POST"
+            "-F", "file=@$FIRMWARE_FILE"
+            "--max-time", "120"
+            "--connect-timeout", "10"
+            "--retry", "2"
+            "--retry-delay", "5"
+            $WEB_OTA_ENDPOINT
+        )
         
-        if ($response.StatusCode -eq 200) {
-            Write-Success "Firmware uploaded successfully"
+        Write-Info "Running: curl $($curlArgs -join ' ')"
+        
+        # Execute curl command
+        $curlResult = & curl @curlArgs 2>&1
+        $curlExitCode = $LASTEXITCODE
+        
+        if ($curlExitCode -eq 0) {
+            Write-Success "Firmware uploaded successfully via curl"
             Write-Success "Device should be rebooting now..."
             
             # Wait for device to reboot
             Write-Info "Waiting for device to restart..."
-            Start-Sleep -Seconds 10
+            Start-Sleep -Seconds 15
             
             # Test if device is back online
-            if (Test-DeviceConnectivity) {
-                Write-Success "Device is back online after firmware update"
-            } else {
-                Write-Warning "Device may still be restarting..."
-            }
+            $retryCount = 0
+            $maxRetries = 6
+            do {
+                Start-Sleep -Seconds 5
+                $retryCount++
+                Write-Info "Checking if device is back online (attempt $retryCount/$maxRetries)..."
+                if (Test-DeviceConnectivity) {
+                    Write-Success "Device is back online after firmware update"
+                    return $true
+                }
+            } while ($retryCount -lt $maxRetries)
             
-            return $true
+            Write-Warning "Device may still be restarting or upload may have failed"
+            return $false
         } else {
-            Write-Error "Upload failed with status: $($response.StatusCode)"
+            Write-Error "Upload failed with curl exit code: $curlExitCode"
+            Write-Error "Curl output: $curlResult"
             return $false
         }
     }
     catch {
         Write-Error "Failed to upload firmware: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Upload-FirmwareSerial {
+    param(
+        [string]$Port = $null
+    )
+    
+    Write-Info "Uploading firmware via Serial..."
+    
+    if (!(Test-Path $FIRMWARE_FILE)) {
+        Write-Error "Firmware binary not found: $FIRMWARE_FILE"
+        Write-Error "Run with -Build first to compile the firmware"
+        return $false
+    }
+    
+    # Try to find esptool
+    $esptoolPath = $null
+    $possiblePaths = @(
+        "esptool.py",
+        "esptool",
+        "$env:USERPROFILE\.platformio\penv\Scripts\esptool.py",
+        "$env:USERPROFILE\AppData\Local\Arduino15\packages\esp32\tools\esptool_py\*\esptool.py"
+    )
+    
+    foreach ($path in $possiblePaths) {
+        if ($path -like "*\*\*") {
+            # Handle wildcard paths
+            $resolvedPaths = Get-ChildItem -Path ($path -replace "\*", "*") -ErrorAction SilentlyContinue
+            if ($resolvedPaths) {
+                $esptoolPath = $resolvedPaths | Select-Object -First 1 -ExpandProperty FullName
+                break
+            }
+        } elseif (Get-Command $path -ErrorAction SilentleContinue) {
+            $esptoolPath = $path
+            break
+        }
+    }
+    
+    if (-not $esptoolPath) {
+        Write-Error "esptool not found. Please install esptool or use -WebOTA instead"
+        Write-Info "Install with: pip install esptool"
+        return $false
+    }
+    
+    Write-Info "Found esptool at: $esptoolPath"
+    
+    # Auto-detect COM port if not specified
+    if (-not $Port) {
+        Write-Info "Auto-detecting ESP32 COM port..."
+        try {
+            $ports = Get-CimInstance -Class Win32_PnPEntity | Where-Object { 
+                $_.Name -match "Silicon Labs CP210x|USB-SERIAL CH340|USB Serial Port|Arduino" -and 
+                $_.Name -match "COM\d+" 
+            }
+            
+            if ($ports) {
+                $Port = ($ports[0].Name -replace ".*\((COM\d+)\).*", '$1')
+                Write-Info "Detected ESP32 on port: $Port"
+            } else {
+                Write-Error "No ESP32 COM port detected. Please specify -Port parameter"
+                return $false
+            }
+        }
+        catch {
+            Write-Error "Failed to detect COM port: $($_.Exception.Message)"
+            return $false
+        }
+    }
+    
+    try {
+        Write-Info "Uploading to ESP32 on $Port using esptool..."
+        
+        # ESP32 partition addresses (standard for most ESP32 boards)
+        $bootloaderAddr = "0x1000"
+        $partitionAddr = "0x8000"
+        $firmwareAddr = "0x10000"
+        
+        # Build esptool command
+        $esptoolArgs = @(
+            "--chip", "esp32"
+            "--port", $Port
+            "--baud", "921600"
+            "--before", "default_reset"
+            "--after", "hard_reset"
+            "write_flash"
+            "-z"
+            "--flash_mode", "dio"
+            "--flash_freq", "80m"
+            "--flash_size", "4MB"
+            $firmwareAddr, $FIRMWARE_FILE
+        )
+        
+        Write-Info "Running esptool command..."
+        
+        if ($esptoolPath -like "*.py") {
+            $result = & python $esptoolPath @esptoolArgs 2>&1
+        } else {
+            $result = & $esptoolPath @esptoolArgs 2>&1
+        }
+        
+        $exitCode = $LASTEXITCODE
+        
+        if ($exitCode -eq 0) {
+            Write-Success "Firmware uploaded successfully via Serial"
+            Write-Info "ESP32 should be restarting now..."
+            return $true
+        } else {
+            Write-Error "Serial upload failed with exit code: $exitCode"
+            Write-Error "Output: $result"
+            return $false
+        }
+    }
+    catch {
+        Write-Error "Serial upload failed: $($_.Exception.Message)"
         return $false
     }
 }
@@ -313,8 +502,11 @@ try {
     
     # Upload via serial if requested
     if ($Serial -ne "") {
-        Write-Error "Serial upload not implemented yet. Use -WebOTA instead."
-        exit 1
+        $serialSuccess = Upload-FirmwareSerial -Port $Serial
+        if (-not $serialSuccess) {
+            Write-Error "Serial upload failed"
+            exit 1
+        }
     }
     
     # Upload data files if requested

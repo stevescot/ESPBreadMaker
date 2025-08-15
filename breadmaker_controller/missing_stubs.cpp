@@ -12,10 +12,13 @@
 #include <WiFi.h>
 #endif
 
-// Define build date if not already defined
+// Define build date if not already defined - force rebuild each time
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 #endif
+
+// Force a rebuild by including current timestamp as comment
+// BUILD_TIMESTAMP: Jul 27 2025 22:30:00
 
 // Stub implementations for missing functions
 
@@ -283,8 +286,8 @@ void updateTimeProportionalHeater() {
     windowStartTime = nowMs;
   }
   
-  // Disable heater if program not running or no setpoint
-  if (!programState.isRunning || pid.Setpoint <= 0) {
+  // Disable heater if no setpoint, or if program not running AND not in manual mode
+  if (pid.Setpoint <= 0 || (!programState.isRunning && !programState.manualMode)) {
     setHeater(false);
     return;
   }

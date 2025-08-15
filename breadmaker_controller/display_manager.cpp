@@ -48,7 +48,7 @@ static unsigned long lastButtonPress = 0;
 void displayManagerInit() {
   // Initialize LovyanGFX display
   display.init();
-  display.setRotation(1);  // Landscape orientation (240x135)
+  display.setRotation(3);  // Landscape orientation inverted (240x135, flipped top-bottom)
   display.fillScreen(COLOR_BLACK);
   
   // Initialize buttons
