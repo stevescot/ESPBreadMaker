@@ -21,9 +21,14 @@ function fetchWithTimeout(url, timeout = 10000) {
 
 // --- Real-time chart update logic ---
 async function updateStatus() {
-    // PID P, I, D terms
+  try {
+    const response = await fetchWithTimeout('/api/status', 5000);
+    if (!response.ok) throw new Error('Failed to fetch status');
+    const data = await response.json();
+
+    // PID P, I, D terms - use available data from status API
     if (document.getElementById('pidPTerm')) {
-      document.getElementById('pidPTerm').textContent =
+      document.getElementById('pidPTerm').textContent = 
         (data.pid_p !== undefined ? data.pid_p.toFixed(3) : '--');
     }
     if (document.getElementById('pidITerm')) {
@@ -34,10 +39,6 @@ async function updateStatus() {
       document.getElementById('pidDTerm').textContent =
         (data.pid_d !== undefined ? data.pid_d.toFixed(3) : '--');
     }
-  try {
-    const response = await fetchWithTimeout('/api/pid_debug', 5000);
-    if (!response.ok) throw new Error('Failed to fetch status');
-    const data = await response.json();
 
     // Time axis: seconds since test start, or just now if not running test
     let now = Date.now();
@@ -46,37 +47,40 @@ async function updateStatus() {
     chartData.labels.push(elapsed);
     if (chartData.labels.length > 300) chartData.labels.shift();
 
-    // Averaged temp
-    chartData.datasets[0].data.push(data.current_temp);
+    // Averaged temp (map from temperature field)
+    chartData.datasets[0].data.push(data.temperature || data.temp);
     if (chartData.datasets[0].data.length > 300) chartData.datasets[0].data.shift();
-    // Raw temp
-    chartData.datasets[1].data.push(data.raw_temp);
+    // Raw temp (use same as averaged since raw_temp not available)
+    chartData.datasets[1].data.push(data.temperature || data.temp);
     if (chartData.datasets[1].data.length > 300) chartData.datasets[1].data.shift();
     // Setpoint
     chartData.datasets[2].data.push(data.setpoint);
     if (chartData.datasets[2].data.length > 300) chartData.datasets[2].data.shift();
-    // PID output
-    chartData.datasets[3].data.push(data.output * 100);
+    // PID output (map from pid_output field)
+    chartData.datasets[3].data.push((data.pid_output || 0) * 100);
     if (chartData.datasets[3].data.length > 300) chartData.datasets[3].data.shift();
 
     // --- PID Component Chart ---
+    // Since individual P, I, D terms aren't available in status API, 
+    // we'll skip this chart update or use dummy values
     if (window.pidComponentChart && window.pidComponentData) {
       window.pidComponentData.labels.push(elapsed);
       if (window.pidComponentData.labels.length > 300) window.pidComponentData.labels.shift();
-      window.pidComponentData.datasets[0].data.push(data.pid_p);
+      // Use dummy values since individual terms aren't available
+      window.pidComponentData.datasets[0].data.push(0);
       if (window.pidComponentData.datasets[0].data.length > 300) window.pidComponentData.datasets[0].data.shift();
-      window.pidComponentData.datasets[1].data.push(data.pid_i);
+      window.pidComponentData.datasets[1].data.push(0);
       if (window.pidComponentData.datasets[1].data.length > 300) window.pidComponentData.datasets[1].data.shift();
-      window.pidComponentData.datasets[2].data.push(data.pid_d);
+      window.pidComponentData.datasets[2].data.push(0);
       if (window.pidComponentData.datasets[2].data.length > 300) window.pidComponentData.datasets[2].data.shift();
       window.pidComponentChart.update();
     }
 
     // --- Update status display fields ---
-    // Current Temp
+    // Current Temp (map from temperature field)
     if (document.getElementById('currentTemp')) {
       document.getElementById('currentTemp').textContent =
-        (data.current_temp !== undefined ? data.current_temp.toFixed(1) : '--.-') + '°C';
+        (data.temperature !== undefined ? data.temperature.toFixed(1) : '--.-') + '°C';
     }
     // Target Temp (Setpoint)
     if (document.getElementById('targetTemp')) {
@@ -85,28 +89,28 @@ async function updateStatus() {
     }
     // Temperature Error
     if (document.getElementById('tempError')) {
-      if (data.setpoint !== undefined && data.current_temp !== undefined) {
-        document.getElementById('tempError').textContent = (data.setpoint - data.current_temp).toFixed(1) + '°C';
+      if (data.setpoint !== undefined && data.temperature !== undefined) {
+        document.getElementById('tempError').textContent = (data.setpoint - data.temperature).toFixed(1) + '°C';
       } else {
         document.getElementById('tempError').textContent = '--.-°C';
       }
     }
-    // PID Output
+    // PID Output (map from pid_output field)
     if (document.getElementById('pidOutput')) {
       document.getElementById('pidOutput').textContent =
-        (data.output !== undefined ? (data.output * 100).toFixed(2) : '--.-------') + '%';
+        (data.pid_output !== undefined ? (data.pid_output * 100).toFixed(2) : '--.-------') + '%';
     }
-    // Heater State
+    // Heater State (map from heater field)
     if (document.getElementById('heaterState')) {
       document.getElementById('heaterState').textContent =
-        (data.heater_state === true ? 'ON' : data.heater_state === false ? 'OFF' : '--');
+        (data.heater === true ? 'ON' : data.heater === false ? 'OFF' : '--');
     }
-    // Control Phase (show manual/auto/running)
+    // Control Phase (map from running and manualMode fields)
     if (document.getElementById('phaseStatus')) {
       let phase = '--';
-      if (data.manual_mode === true) phase = 'Manual';
-      else if (data.is_running === true) phase = 'Program';
-      else if (data.manual_mode === false && data.is_running === false) phase = 'Idle';
+      if (data.manualMode === true) phase = 'Manual';
+      else if (data.running === true) phase = 'Program';
+      else if (data.manualMode === false && data.running === false) phase = 'Idle';
       document.getElementById('phaseStatus').textContent = phase;
     }
     // Window Progress
@@ -527,10 +531,23 @@ async function updatePIDParams() {
   console.log('Updating PID params:', { kp, ki, kd, sampleTime, windowSize, tempSampleCount, tempRejectCount, tempSampleInterval });
 
   try {
-    const url = `/api/pid_params?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}&sample_time=${sampleTime}&window_size=${windowSize}&temp_samples=${tempSampleCount}&temp_reject=${tempRejectCount}&temp_interval=${tempSampleInterval}`;
-    console.log('Request URL:', url);
+    // Use POST request with JSON body for PID parameter updates
+    const pidData = {
+      kp: parseFloat(kp.toFixed(6)),
+      ki: parseFloat(ki.toFixed(6)),
+      kd: parseFloat(kd.toFixed(6))
+    };
     
-    const response = await fetchWithTimeout(url, 10000);
+    console.log('Request data:', pidData);
+    
+    const response = await fetch('/api/pid', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(pidData)
+    });
+    
     const data = await response.json();
     
     if (response.ok) {
@@ -591,7 +608,7 @@ async function updatePIDParams() {
 // Load current PID parameters from controller
 async function loadCurrentParams() {
   try {
-    const response = await fetchWithTimeout('/api/pid_debug', 8000);
+    const response = await fetchWithTimeout('/api/pid', 8000);
     const data = await response.json();
     
     document.getElementById('kpInput').value = data.kp.toFixed(6);
@@ -937,6 +954,35 @@ function detectRangeFromSetpoint() {
   showMessage(`🎯 Auto-detected range: ${detectedRange.name}`, 'success', 3000);
 }
 
+// Load temperature range settings into the UI form fields
+function loadTemperatureRangeSettings() {
+  if (currentRangeIndex < 0 || currentRangeIndex >= temperaturePIDSuggestions.length) {
+    console.warn('Invalid range index:', currentRangeIndex);
+    return;
+  }
+  
+  const range = temperaturePIDSuggestions[currentRangeIndex];
+  console.log('Loading range settings:', range);
+  
+  // Update PID parameter fields
+  if (document.getElementById('pidKp')) {
+    document.getElementById('pidKp').value = range.kp.toFixed(6);
+  }
+  if (document.getElementById('pidKi')) {
+    document.getElementById('pidKi').value = range.ki.toFixed(6);
+  }
+  if (document.getElementById('pidKd')) {
+    document.getElementById('pidKd').value = range.kd.toFixed(1);
+  }
+  
+  // Update window size if there's a field for it
+  if (document.getElementById('windowSize')) {
+    document.getElementById('windowSize').value = range.windowMs;
+  }
+  
+  console.log(`Loaded settings for ${range.name}: Kp=${range.kp}, Ki=${range.ki}, Kd=${range.kd}, Window=${range.windowMs}ms`);
+}
+
 // Update the range configuration status display
 function updateRangeStatusDisplay() {
   const statusGrid = document.getElementById('rangeStatusGrid');
@@ -1072,18 +1118,8 @@ function startRangeConfigurationWizard() {
 // Update PID profile on the controller (API call)
 async function updatePIDProfileOnController(rangeKey, params) {
   try {
-    const response = await fetch('/api/pid_profile', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        profile: rangeKey,
-        kp: params.kp,
-        ki: params.ki,
-        kd: params.kd,
-        windowMs: params.windowMs
-      })
+    const response = await fetch(`/api/pid_profile/set?kp=${params.kp}&ki=${params.ki}&kd=${params.kd}&windowMs=${params.windowMs}`, {
+      method: 'GET'
     });
     
     if (!response.ok) {
@@ -1132,4 +1168,146 @@ function initializeRangeManagement() {
   // Set initial setpoint to current baking range
   document.getElementById('targetSetpoint').value = '125';
   detectRangeFromSetpoint();
+}
+
+// Apply temperature range settings to PID controls
+function applyTemperatureRangeSettings() {
+  const rangeSelect = document.getElementById('tempRangeSelector');
+  const selectedRange = rangeSelect.value;
+  
+  if (!selectedRange) {
+    showMessage('Please select a temperature range first', 'error', 3000);
+    return;
+  }
+  
+  // Find the corresponding range configuration
+  const range = temperaturePIDSuggestions.find(r => r.key === selectedRange);
+  if (!range) {
+    showMessage('Invalid temperature range selected', 'error', 3000);
+    return;
+  }
+  
+  // Check if this range has saved settings
+  const savedSettings = rangeConfigurationStatus[selectedRange];
+  if (savedSettings && savedSettings.configured) {
+    // Apply saved settings
+    document.getElementById('kpInput').value = savedSettings.kp.toFixed(6);
+    document.getElementById('kiInput').value = savedSettings.ki.toFixed(6);
+    document.getElementById('kdInput').value = savedSettings.kd.toFixed(3);
+    document.getElementById('windowSizeInput').value = savedSettings.windowMs;
+    
+    showMessage(`Applied saved settings for ${range.name}`, 'success', 3000);
+  } else {
+    // Apply default suggestions for this range
+    document.getElementById('kpInput').value = range.kp.toFixed(6);
+    document.getElementById('kiInput').value = range.ki.toFixed(6);
+    document.getElementById('kdInput').value = range.kd.toFixed(3);
+    document.getElementById('windowSizeInput').value = range.windowMs;
+    
+    showMessage(`Applied default suggestions for ${range.name}`, 'info', 3000);
+  }
+  
+  // Update the current range index
+  currentRangeIndex = temperaturePIDSuggestions.findIndex(r => r.key === selectedRange);
+  updateRangeStatusDisplay();
+}
+
+// Start manual temperature test
+async function startManualTest() {
+  const targetTemp = parseFloat(document.getElementById('targetTempInput').value);
+  
+  if (isNaN(targetTemp) || targetTemp < 0 || targetTemp > 250) {
+    showMessage('Please enter a valid target temperature (0-250°C)', 'error', 3000);
+    return;
+  }
+  
+  try {
+    // Enable manual mode
+    const manualModeResponse = await fetch('/api/manual_mode?on=1', {
+      method: 'GET'
+    });
+    
+    if (!manualModeResponse.ok) {
+      throw new Error('Failed to enable manual mode');
+    }
+    
+    // Set the temperature setpoint
+    const tempResponse = await fetch(`/api/temperature?setpoint=${targetTemp}`, {
+      method: 'GET'
+    });
+    
+    if (!tempResponse.ok) {
+      throw new Error('Failed to set temperature setpoint');
+    }
+    
+    // Reset test start time for chart
+    testStartTime = Date.now();
+    
+    // Enable status updates if not already running
+    if (!updateInterval) {
+      startStatusUpdates();
+    }
+    
+    showMessage(`Manual test started - target: ${targetTemp}°C`, 'success', 3000);
+    
+    // Update button states
+    const startBtn = document.querySelector('button[onclick="startManualTest()"]');
+    const stopBtn = document.querySelector('button[onclick="stopTest()"]');
+    if (startBtn) startBtn.disabled = true;
+    if (stopBtn) stopBtn.disabled = false;
+    
+  } catch (error) {
+    console.error('Failed to start manual test:', error);
+    showMessage('Failed to start manual test: ' + error.message, 'error', 5000);
+  }
+}
+
+// Stop any running test
+async function stopTest() {
+  try {
+    // Set setpoint to 0 to turn off heating
+    await fetch('/api/temperature?setpoint=0', {
+      method: 'GET'
+    });
+    
+    // Disable manual mode
+    const response = await fetch('/api/manual_mode?on=0', {
+      method: 'GET'
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to stop test');
+    }
+    
+    showMessage('Test stopped', 'info', 3000);
+    
+    // Update button states
+    const startBtn = document.querySelector('button[onclick="startManualTest()"]');
+    const stopBtn = document.querySelector('button[onclick="stopTest()"]');
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = true;
+    
+  } catch (error) {
+    console.error('Failed to stop test:', error);
+    showMessage('Failed to stop test: ' + error.message, 'error', 5000);
+  }
+}
+
+// Test beep function
+async function testBeep() {
+  try {
+    const response = await fetch('/beep', {
+      method: 'GET'
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to trigger test beep');
+    }
+    
+    showMessage('Test beep sent', 'info', 2000);
+    
+  } catch (error) {
+    console.error('Failed to trigger test beep:', error);
+    showMessage('Failed to trigger test beep: ' + error.message, 'error', 3000);
+  }
 }

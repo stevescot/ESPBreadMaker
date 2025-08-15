@@ -12,6 +12,9 @@ FermentationState fermentState = {
   0.0  // fermentWeightedSec
 };
 
+// Settings save deferral timer
+unsigned long pendingSettingsSaveTime = 0;
+
 // --- Dynamic restart tracking state instance ---
 DynamicRestartState dynamicRestart = {
   0,    // lastDynamicRestart
@@ -25,8 +28,14 @@ OutputStates outputStates;
 // --- Temperature averaging state instance ---
 TemperatureAveragingState tempAvg;
 
+// --- WiFi cache instance ---
+WiFiCache wifiCache;
+
 // --- Program state instance ---
 ProgramState programState;
 
 // --- PID control instance ---
 PIDControl pid;
+
+// --- Safety system instance ---
+SafetySystem safetySystem;

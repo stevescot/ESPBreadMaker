@@ -111,6 +111,13 @@ void drawTemperature(int x, int y, float temp);
 void drawStageInfo(int x, int y, const String& stage, unsigned long timeLeft);
 void drawOutputStates(int x, int y, bool heater, bool motor, bool light, bool buzzer);
 
+// Screensaver functionality
+void updateActivityTime();
+bool isScreensaverActive();
+void enableScreensaver();
+void disableScreensaver();
+void checkScreensaver();
+
 extern LGFX display;
 
 #endif // DISPLAY_MANAGER_H

@@ -278,10 +278,17 @@ function updateStageProgress(currentStage, statusData) {
     // Add elapsed time for this stage if available
     if (actualStarts[i] && (i === activeIdx || i < activeIdx)) {
       if (i === activeIdx && typeof statusData.timeLeft === 'number' && statusData.running) {
-        // Show time left for the active stage
+        // Show time left for the active stage - use adjustedTimeLeft for fermentation stages
         const span = document.createElement('span');
         span.className = 'stage-timeleft';
-        span.textContent = ' (' + formatDuration(statusData.timeLeft) + ' left)';
+        
+        // For fermentation stages, show the real clock time (adjustedTimeLeft)
+        const isCurrentStageFermentation = customStages[i] && customStages[i].isFermentation;
+        const timeToShow = isCurrentStageFermentation && typeof statusData.adjustedTimeLeft === 'number' 
+                          ? statusData.adjustedTimeLeft 
+                          : statusData.timeLeft;
+        
+        span.textContent = ' (' + formatDuration(timeToShow) + ' left)';
         div.appendChild(span);
       } else {
         let elapsed = 0;
@@ -296,19 +303,16 @@ function updateStageProgress(currentStage, statusData) {
         }
       }
     } else if (!isIdle && i > activeIdx) {
-      // Show planned duration for future stages (fermentation-adjusted if available)
+      // Show planned duration for future stages using firmware predictions
       const stage = customStages[i];
       let plannedDuration = stage.min * 60; // Default to raw duration
       
-      // Try to calculate adjusted duration from predictedStageEndTimes
+      // Use firmware's predictedStageEndTimes if available (already fermentation-adjusted)
       if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.predictedStageEndTimes[i-1]) {
         plannedDuration = statusData.predictedStageEndTimes[i] - statusData.predictedStageEndTimes[i-1];
       } else if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.programStart && i === 0) {
         // For first stage, use programStart as reference
         plannedDuration = statusData.predictedStageEndTimes[i] - statusData.programStart;
-      } else if (stage.isFermentation && typeof statusData.fermentationFactor === 'number' && statusData.fermentationFactor > 0) {
-        // Apply fermentation factor for fermentation stages
-        plannedDuration = (stage.min * 60) * statusData.fermentationFactor;
       }
       
       if (plannedDuration > 0) {
@@ -441,7 +445,14 @@ function updateStatusInternal(s) {
   updateStageProgress(s.stage, s);
   
   // ---- Plan Summary (stages table) ----
-  showPlanSummary(s);
+  // Ensure programs are loaded before showing plan summary for fermentation calculations
+  if (window.cachedPrograms) {
+    showPlanSummary(s);
+  } else if (typeof s.program === "string" && s.program.length > 0) {
+    fetchProgramsOnce(() => showPlanSummary(s));
+  } else {
+    showPlanSummary(s); // Still show even without program for "No program selected" message
+  }
   
   // ---- Manual Mode UI ----
   updateManualModeToggle(s);
@@ -611,47 +622,33 @@ function updateProgramReadyAt(s) {
     el.textContent = '';
     return;
   }
-  let totalMin = prog.customStages.reduce((sum, st) => sum + (st.min || 0), 0);
+  let totalMin = 0;
+  // Calculate total duration considering fermentation factor
+  prog.customStages.forEach(st => {
+    let duration = st.min || 0;
+    if (st.isFermentation && typeof s.fermentationFactor === 'number' && s.fermentationFactor > 0) {
+      duration *= s.fermentationFactor;
+    }
+    totalMin += duration;
+  });
   
   // If running or scheduled, show actual finish time
   if (s.running || (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000))) {
     // Use firmware's calculated programReadyAt if available
     if (typeof s.programReadyAt === 'number' && s.programReadyAt > 0) {
       finishTs = s.programReadyAt * 1000;
-    } else if (s.scheduledStart && s.scheduledStart > Math.floor(Date.now() / 1000)) {
-      // For scheduled start, use predictedProgramEnd if available (accounts for fermentation)
-      if (typeof s.predictedProgramEnd === 'number' && s.predictedProgramEnd > 0) {
-        finishTs = s.predictedProgramEnd * 1000;
-      } else {
-        finishTs = (s.scheduledStart * 1000) + (totalMin * 60000);
-      }
-    } else if (s.stage && s.stage !== "Idle" && typeof s.stageIdx === "number" && typeof s.timeLeft === "number" && s.timeLeft > 0) {
-      // Calculate remaining time using fermentation-adjusted predictions if available
-      if (typeof s.programReadyAt === 'number' && s.programReadyAt > 0) {
-        finishTs = s.programReadyAt * 1000;
-      } else {
-        // Fallback to raw calculation
-        let remainMin = 0;
-        for (let i = s.stageIdx + 1; i < prog.customStages.length; ++i) {
-          remainMin += prog.customStages[i].min || 0;
-        }
-        finishTs = Date.now() + (s.timeLeft * 1000) + (remainMin * 60000);
-      }
-    } else {
-      finishTs = Date.now() + (totalMin * 60000);
-    }
-    label = 'Program ready at:';
-  } else {
-    // Not running, show 'if started now' - use predictedProgramEnd if available
-    if (typeof s.predictedProgramEnd === 'number' && s.predictedProgramEnd > 0) {
-      // Use firmware's fermentation-adjusted prediction
+      label = 'Program ready at:';
+    } else if (typeof s.predictedProgramEnd === 'number' && s.predictedProgramEnd > 0) {
       finishTs = s.predictedProgramEnd * 1000;
-    } else {
-      // Fallback to raw calculation
-      finishTs = Date.now() + (totalMin * 60000);
+      label = 'Program ready at:';
     }
-    showIfStartedNow = true;
-    label = 'If started now, ready at:';
+  } else {
+    // Not running - use firmware's predictedProgramEnd for "if started now"
+    if (typeof s.predictedProgramEnd === 'number' && s.predictedProgramEnd > 0) {
+      finishTs = s.predictedProgramEnd * 1000;
+      showIfStartedNow = true;
+      label = 'If started now, ready at:';
+    }
   }
   // If the program ready time is in the past, clear the display
   if (finishTs <= Date.now()) {
@@ -687,9 +684,18 @@ function updateCountdownDisplay() {
   if (stageReadyAt > 0) {
     timeLeft = Math.max(0, Math.round(stageReadyAt - (now / 1000)));
   } else if (typeof s.timeLeft === 'number') {
-    // fallback if stageReadyAt missing
+    // fallback if stageReadyAt missing - use adjustedTimeLeft for fermentation stages
     let elapsed = Math.floor((now - lastStatusTime) / 1000);
-    timeLeft = Math.max(0, s.timeLeft - elapsed);
+    
+    // For fermentation stages, use adjustedTimeLeft (real clock time)
+    const isCurrentStageFermentation = s.stage && customStages && 
+          customStages.find(stage => stage.label === s.stage && stage.isFermentation);
+    
+    if (isCurrentStageFermentation && typeof s.adjustedTimeLeft === 'number') {
+      timeLeft = Math.max(0, s.adjustedTimeLeft - elapsed);
+    } else {
+      timeLeft = Math.max(0, s.timeLeft - elapsed);
+    }
   }
 
   // UI logic fix: Only show "stage ready at" if current stage is active and stageReadyAt is valid (future or present)
@@ -774,7 +780,15 @@ function showPlanSummary(s) {
   }
   
   if (!prog) {
-    planSummary.innerHTML = '<i>Program details not available.</i>';
+    // If we have a program name but no details, show the name
+    if (s.program && s.program.trim() !== '') {
+      planSummary.innerHTML = `<div style="padding:15px; background:#1e1e1e; border:1px solid #444; border-radius:8px; margin:10px 0;">
+        <h4 style="color:#66bb6a; margin:0 0 8px 0; font-size:1.1em;">${s.program}</h4>
+        <p style="color:#bbb; margin:0; font-style:italic;">Program details loading...</p>
+      </div>`;
+    } else {
+      planSummary.innerHTML = '<i>Program details not available.</i>';
+    }
     return;
   }
   // --- Custom Stages Support ---
@@ -791,39 +805,9 @@ function showPlanSummary(s) {
     }
     let summary = '<table class="plan-summary-table"><tr><th>Stage</th><th>Temp</th><th>Mix Pattern</th><th>Duration</th><th>Instructions</th><th>Calendar</th></tr>';
 
-    // --- Calculate fermentation factor for preview if not running ---
-    let fermentationFactor = 1.0;
-    if (typeof s.fermentationFactor === 'number' && s.fermentationFactor > 0) {
-      fermentationFactor = s.fermentationFactor;
-    } else if (!s.running && typeof s.temp === 'number' && s.temp > 0) {
-      // Estimate factor for preview using current temp and same logic as firmware (Arrhenius or Q10, example below)
-      // Clamp temp to reasonable range to avoid negative/NaN durations
-      const temp = Math.max(10, Math.min(50, s.temp));
-      const baseTemp = 30;
-      const Q10 = 2;
-      fermentationFactor = Math.pow(Q10, (baseTemp - temp) / 10);
-      fermentationFactor = Math.max(0.2, Math.min(fermentationFactor, 5));
-    }
-
-    // Use predictedStageEndTimes from status if available
+    // --- Use firmware-provided timing data ---
+    // Use firmware-provided predicted stage end times (already fermentation-adjusted)
     const predictedStageEndTimes = Array.isArray(s.predictedStageEndTimes) ? s.predictedStageEndTimes : null;
-
-    // For preview: calculate predicted end times if not running
-    let previewStageEndTimes = null;
-    if (!s.running && typeof s.temp === 'number' && s.temp > 0) {
-      let now = Date.now();
-      previewStageEndTimes = [];
-      let t = now;
-      for (let i = 0; i < prog.customStages.length; ++i) {
-        let st = prog.customStages[i];
-        let min = st.min;
-        if (st.fermentation) {
-          min = min * fermentationFactor;
-        }
-        t += min * 60000;
-        previewStageEndTimes.push(Math.floor(t / 1000));
-      }
-    }
 
     prog.customStages.forEach((st, i) => {
       const color = st.color || palette[i % palette.length];
@@ -836,49 +820,48 @@ function showPlanSummary(s) {
       } else if (Array.isArray(s.stageStartTimes) && s.stageStartTimes[i]) {
         // Stage hasn't started yet - use estimated time
         stStart = new Date(s.stageStartTimes[i] * 1000);
-      } else if (!s.running && typeof s.temp === 'number' && s.temp > 0) {
-        // Preview: use now or previous preview end time
+      } else if (!s.running && s.fermentationFactor > 0) {
+        // Preview: use now or previous stage end time from firmware predictions
         if (i === 0) {
           stStart = new Date();
-        } else if (previewStageEndTimes && previewStageEndTimes[i-1]) {
-          stStart = new Date(previewStageEndTimes[i-1] * 1000);
+        } else if (predictedStageEndTimes && predictedStageEndTimes[i-1]) {
+          stStart = new Date(predictedStageEndTimes[i-1] * 1000);
         }
       }
-      // Calculate adjusted duration (min) for fermentation stages
-      let isFermentation = !!st.fermentation;
-      let adjustedMin = st.min;
-      if (isFermentation && fermentationFactor !== 1.0) {
-        adjustedMin = st.min * fermentationFactor;
-      } else {
-        adjustedMin = st.min;
-      }
-      // If predictedStageEndTimes is available, always use it to show predicted end time and duration
+      
+      // Use firmware-provided predicted stage end times and durations
       let predictedEnd = null;
       let predictedDurationMin = null;
       if (predictedStageEndTimes && predictedStageEndTimes[i]) {
         predictedEnd = new Date(predictedStageEndTimes[i] * 1000);
         // For duration, use difference between this and previous stage end (or start)
         if (i === 0) {
-          // First stage: duration is end - start (use stStart if available, else just use planned)
+          // First stage: duration is end - start (use stStart if available)
           if (stStart) {
             predictedDurationMin = (predictedStageEndTimes[0] - (stStart.getTime() / 1000)) / 60;
-          } else {
-            predictedDurationMin = adjustedMin;
           }
         } else {
           predictedDurationMin = (predictedStageEndTimes[i] - predictedStageEndTimes[i-1]) / 60;
         }
-      } else {
-        // Fallback: use planned/adjusted duration
-        predictedDurationMin = adjustedMin;
+        // Only keep predictedDurationMin if it's a valid positive number
+        if (typeof predictedDurationMin !== 'number' || isNaN(predictedDurationMin) || predictedDurationMin < 0) {
+          predictedDurationMin = null; // Clear invalid predictions
+        }
       }
-      // Clamp predictedDurationMin to avoid negative/NaN
-      if (typeof predictedDurationMin !== 'number' || isNaN(predictedDurationMin) || predictedDurationMin < 0) {
-        predictedDurationMin = adjustedMin;
+      // Only show calendar if we can calculate timing and this stage requires user interaction
+      let stEnd = null;
+      if (predictedEnd) {
+        // Use firmware-provided end time
+        stEnd = predictedEnd;
+      } else if (stStart && predictedDurationMin) {
+        // Calculate end time from firmware-provided duration
+        stEnd = new Date(stStart.getTime() + (predictedDurationMin * 60000));
+      } else if (stStart) {
+        // Fallback to planned duration
+        stEnd = new Date(stStart.getTime() + (st.min * 60000));
       }
-      // Only show calendar if running and this stage requires user interaction
-      let stEnd = stStart ? new Date(stStart.getTime() + (adjustedMin * 60000)) : null;
-      if ((s.running || (!s.running && typeof s.temp === 'number' && s.temp > 0)) && stStart && stEnd && st.instructions && st.instructions !== 'No action needed.') {
+      
+      if (stStart && stEnd && st.instructions && st.instructions !== 'No action needed.') {
         let breadmakerUrl = window.location.origin + '/';
         let gcalUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent('Breadmaker: ' + st.label + ' (' + s.program + ')')}` +
           `&dates=${toGCalDate(stStart)}/${toGCalDate(stEnd)}` +
@@ -922,35 +905,23 @@ function showPlanSummary(s) {
           durationCell = '--';
         }
       } else if (rowClass === 'active' && typeof s.timeLeft === 'number' && i === currentStageIdx && s.running) {
-        // Show actual time left for the active stage
-        durationCell = `<span title="Time left in this stage">${formatDuration(s.timeLeft)}</span>`;
+        // Show actual time left for the active stage - use adjustedTimeLeft for fermentation stages
+        const isCurrentStageFermentation = typeof s.stageIdx === 'number' && 
+          prog && prog.customStages && 
+          prog.customStages[s.stageIdx] && 
+          prog.customStages[s.stageIdx].isFermentation;
+        
+        const timeToShow = isCurrentStageFermentation && typeof s.adjustedTimeLeft === 'number' 
+          ? s.adjustedTimeLeft 
+          : s.timeLeft;
+        
+        durationCell = `<span title="Time left in this stage">${formatDuration(timeToShow)}</span>`;
       } else if (typeof predictedDurationMin === 'number' && !isNaN(predictedDurationMin)) {
-        // Always show predicted duration if available
-        durationCell = `<span title="Predicted by firmware">${formatDuration(predictedDurationMin * 60)}<br><small>(${predictedDurationMin.toFixed(1)} min)</small></span>`;
+        // Use firmware-provided predicted duration (already fermentation-adjusted)
+        durationCell = `<span title="Predicted by firmware (fermentation-adjusted)">${formatDuration(predictedDurationMin * 60)}<br><small>(${predictedDurationMin.toFixed(1)} min)</small></span>`;
       } else {
-        // Calculate fermentation-adjusted duration if fermentation data is available
-        let adjustedDuration = st.min * 60; // Default to raw duration
-        
-        // Try to calculate adjusted duration from predictedStageEndTimes
-        if (Array.isArray(s.predictedStageEndTimes) && s.predictedStageEndTimes[i] && s.predictedStageEndTimes[i-1]) {
-          adjustedDuration = s.predictedStageEndTimes[i] - s.predictedStageEndTimes[i-1];
-        } else if (Array.isArray(s.predictedStageEndTimes) && s.predictedStageEndTimes[i] && s.programStart) {
-          // For first stage, use programStart as reference
-          if (i === 0) {
-            adjustedDuration = s.predictedStageEndTimes[i] - s.programStart;
-          }
-        } else if (st.isFermentation && typeof s.fermentationFactor === 'number' && s.fermentationFactor > 0) {
-          // Apply fermentation factor for fermentation stages
-          adjustedDuration = (st.min * 60) * s.fermentationFactor;
-        }
-        
-        // Always show adjusted duration if it's different from planned, or if it's a fermentation stage
-        if (st.isFermentation || Math.abs(adjustedDuration - (st.min * 60)) > 30) { // More than 30 seconds difference
-          let adjustedMin = adjustedDuration / 60;
-          durationCell = `<span title="Fermentation-adjusted duration">${formatDuration(adjustedDuration)}<br><small>(${adjustedMin.toFixed(1)} min)</small></span>`;
-        } else {
-          durationCell = `${formatDuration(st.min * 60)}`;
-        }
+        // Simple fallback to planned duration
+        durationCell = `<span title="Planned duration">${formatDuration(st.min * 60)}<br><small>(${st.min.toFixed(1)} min)</small></span>`;
       }
       // For completed (done) stages, override background to a grey shade
       let rowStyle = `color:#232323;`;
@@ -1047,13 +1018,23 @@ function renderProgramProgressBar(s) {
   const stages = prog.customStages;
   const actualStarts = Array.isArray(s.actualStageStartTimes) ? s.actualStageStartTimes : [];
   const estStarts = Array.isArray(s.stageStartTimes) ? s.stageStartTimes : [];
-  // Calculate total program duration (estimate)
-  let totalMin = stages.reduce((sum, st) => sum + (st.min || 0), 0);
-  let totalSec = totalMin * 60;
-  // If we have actual start times, use them for elapsed
-  let elapsed = typeof s.elapsed === 'number' ? s.elapsed : 0;
-  if (!elapsed && actualStarts[0]) {
+  // Calculate total program duration using firmware predictions if available
+  let totalSec = 0;
+  let elapsed = 0;
+  
+  if (typeof s.predictedProgramEnd === 'number' && actualStarts[0]) {
+    // Use firmware-calculated total duration (includes fermentation adjustments)
+    totalSec = s.predictedProgramEnd - actualStarts[0];
     elapsed = Math.floor((Date.now()/1000) - actualStarts[0]);
+  } else {
+    // Fallback to raw stage durations (without fermentation adjustments)
+    let totalMin = stages.reduce((sum, st) => sum + (st.min || 0), 0);
+    totalSec = totalMin * 60;
+    // If we have actual start times, use them for elapsed
+    elapsed = typeof s.elapsed === 'number' ? s.elapsed : 0;
+    if (!elapsed && actualStarts[0]) {
+      elapsed = Math.floor((Date.now()/1000) - actualStarts[0]);
+    }
   }
   // Render progress bar
   let html = '<div class="program-progress-bar" style="display:flex;height:18px;width:100%;border-radius:8px;overflow:hidden;box-shadow:0 1px 2px #0003;background:#eee;">';
@@ -1083,8 +1064,27 @@ function renderProgramProgressBar(s) {
     accSec += stSec;
   }
   html += '</div>';
-  // Show total elapsed/remaining
-  let remain = Math.max(0, totalSec - elapsed);
+  // Show total elapsed/remaining using firmware-provided data when available
+  let remain = 0;
+  
+  // Priority 1: Use firmware-provided timing data (most accurate)
+  if (s.running && typeof s.totalProgramDuration === 'number' && typeof s.elapsedTime === 'number' && typeof s.remainingTime === 'number') {
+    totalSec = s.totalProgramDuration;
+    // For fermentation programs, calculate real elapsed time from total - remaining
+    // This ensures elapsed time matches the fermentation-adjusted total duration
+    elapsed = s.totalProgramDuration - s.remainingTime;
+    remain = s.remainingTime;
+  }
+  // Priority 2: Use firmware predictedProgramEnd (fermentation-adjusted)
+  else if (typeof s.predictedProgramEnd === 'number' && s.predictedProgramEnd > 0 && actualStarts[0]) {
+    totalSec = s.predictedProgramEnd - actualStarts[0];
+    elapsed = Math.floor((Date.now()/1000) - actualStarts[0]);
+    remain = Math.max(0, s.predictedProgramEnd - Math.floor(Date.now()/1000));
+  }
+  // Priority 3: Fallback to calculated remaining time (raw durations)
+  else {
+    remain = Math.max(0, totalSec - elapsed);
+  }
   html += `<div style='margin-top:2px;font-size:0.95em;color:#ffd600;text-shadow:0 1px 2px #000;'>Elapsed: ${formatDuration(elapsed)} / ${formatDuration(totalSec)} &nbsp; Remaining: ${formatDuration(remain)}</div>`;
   elem.innerHTML = html;
 }

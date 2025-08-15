@@ -5,7 +5,50 @@ if you have made changes, recompile to confirm they are succesful
 if there are compile errors attempt a fix first, do this a maximum 3 times before asking for confirmation
 
 ## Project Overview
-This project is an ESP8266-based breadmaker controller with a web UI, stage-based breadmaking logic, and persistent storage using LittleFS. It supports program editing, calibration, OTA firmware updates, and live status monitoring.
+This project is an ESP32-based breadmaker controller with a web UI, stage-based breadmaking logic, and persistent storage using FFat filesystem. It supports program editing, calibration, OTA firmware updates, and live status monitoring.
+
+## Device Connection & Authentication
+- **Device IP**: 192.168.250.125
+- **Web Interface**: http://192.168.250.125/
+- **OTA Password**: admin (for ArduinoOTA port 3232 - currently not working reliably)
+- **Web-based OTA**: Use `/api/update` endpoint (preferred method)
+- **Serial Connection**: Not available (device is remote/wireless only)
+
+## Build and Upload Procedures
+
+### Quick Reference Commands
+```powershell
+# Build only (compile and check)
+.\unified_build.ps1 -Build
+
+# Build and upload via web OTA (recommended)
+.\unified_build.ps1 -Build -WebOTA
+
+# Upload data files only
+.\unified_build.ps1 -UploadData
+
+# Build and upload everything
+.\unified_build.ps1 -Build -WebOTA -UploadData
+
+# Upload via serial (if connected)
+.\unified_build.ps1 -Build -Serial COM3
+
+# Clean build (remove build artifacts)
+.\unified_build.ps1 -Clean
+```
+
+### Detailed Build Process
+1. **Always build first** to verify compilation before upload
+2. **Use web-based OTA** (`/api/update`) instead of ArduinoOTA port 3232
+3. **Upload data files** separately if web files changed
+4. **Verify functionality** after upload with basic endpoint tests
+
+### Filesystem Migration (IMPORTANT)
+- **OLD**: Project used LittleFS filesystem
+- **NEW**: Project now uses FFat filesystem  
+- **Rule**: Always use `FFat.open()`, `FFat.exists()`, `FFat.remove()`, etc.
+- **Never use**: `LittleFS.*` calls in new code
+- **File paths**: All program files are in root (`/program_X.json`), not `/programs/` subdirectory
 
 ## Key Files
 - `breadmaker_controller.ino`: Main firmware, web server, state machine, and endpoints.
@@ -28,6 +71,29 @@ This project is an ESP8266-based breadmaker controller with a web UI, stage-base
 - `/index.html`: Main UI
 ## Testing
 The breadmaker is on 192.168.250.125 you can perform any tests that do not change temperature, querying the status, ha endpoints, pulling pages etc.
+
+### API Testing Commands
+```powershell
+# Test basic endpoints
+curl -s http://192.168.250.125/api/settings
+curl -s http://192.168.250.125/api/programs  
+curl -s http://192.168.250.125/api/status
+
+# Test program selection
+curl -s "http://192.168.250.125/select?idx=0"
+
+# Check filesystem
+curl -s http://192.168.250.125/debug/fs | Select-String "program"
+
+# Restart device
+curl -X POST http://192.168.250.125/api/restart
+```
+
+### Common Issues & Solutions
+- **Programs not loading (count=0)**: Check filesystem references use FFat, not LittleFS
+- **API 404 errors**: Ensure endpoints are implemented in web_endpoints_new.cpp
+- **OTA upload fails**: Use web-based OTA (`/api/update`) instead of port 3232
+- **Compilation errors**: Check for missing forward declarations and proper includes
 
 ## UI/UX
 - All navigation to static pages should use `.html` extensions (e.g., `/programs.html`, `/calibration.html`, `/update.html`)
@@ -66,12 +132,28 @@ void setup() {
   // ... HTTP server start ...
   Serial.println("[DEBUG] HTTP server started");
 
-## Hardware Pinout
-- **Heater**: D1 (PWM, analogWrite 77 for ON)
-- **Motor**: D2 (PWM, analogWrite 77 for ON)
-- **RTD (Temperature Sensor)**: A0 (analog input)
-- **Light**: D5 (PWM, analogWrite 77 for ON)
-- **Buzzer**: D6 (PWM, analogWrite 77 for ON)
+## Hardware Pinout (ESP32)
+- **Heater**: GPIO Pin (PWM controlled)
+- **Motor**: GPIO Pin (PWM controlled)  
+- **RTD (Temperature Sensor)**: GPIO34 (analog input)
+- **Light**: GPIO Pin (PWM controlled)
+- **Buzzer**: GPIO Pin (PWM controlled)
+- **Display**: TTGO T-Display (ST7789 TFT via LovyanGFX - NOT TFT_eSPI)
+
+## Legacy Files to Clean Up
+The following files are now consolidated into `unified_build.ps1` and can be removed:
+- `upload_programs.bat` → Use `.\unified_build.ps1 -UploadData`
+- `build_and_upload_ota.ps1` → Use `.\unified_build.ps1 -Build -WebOTA`
+- `upload_files_robust.ps1` → Use `.\unified_build.ps1 -UploadData`
+- `upload_ota_direct.ps1` → Use `.\unified_build.ps1 -WebOTA`
+- Various other upload_*.ps1 scripts in archive/ folder
+
+## Future Development Workflow
+1. Make code changes
+2. **Always compile first**: `.\unified_build.ps1 -Build`
+3. **Upload if successful**: `.\unified_build.ps1 -WebOTA` 
+4. **Test functionality**: `.\unified_build.ps1 -Test`
+5. **Upload data if web files changed**: `.\unified_build.ps1 -UploadData`
 
 
 ## Consistent Styling
@@ -114,8 +196,27 @@ void setup() {
 ## Status JSON vs. Program Definitions
 - The `/status` endpoint (and all status JSON returned by control endpoints or WebSocket pushes)
 - The full program definitions (all fields, stages, etc.) are only provided by the `/api/programs` endpoint.
-- This keeps status updates small and efficient, and prevents memory or JSON truncation issues on the ESP8266.
+- This keeps status updates small and efficient, and prevents memory or JSON truncation issues on the ESP32.
 - If you need to display or edit program details in the UI, fetch them from `/api/programs` and cache as needed.
+
+## Copilot Action Rules
+1. **Always build before upload**: Use `.\unified_build.ps1 -Build` to verify compilation
+2. **Use web OTA for uploads**: `.\unified_build.ps1 -Build -WebOTA` (most reliable)
+3. **Test after changes**: `.\unified_build.ps1 -Test` to verify functionality
+4. **Upload data if web files changed**: `.\unified_build.ps1 -UploadData`
+5. **Maximum 3 fix attempts**: If compilation fails, try up to 3 automatic fixes before asking for guidance
+
+## Quick Commands Reference
+```powershell
+# Standard development cycle
+.\unified_build.ps1 -Build           # Check compilation
+.\unified_build.ps1 -Build -WebOTA   # Deploy firmware
+.\unified_build.ps1 -Test            # Verify functionality
+
+# Emergency/troubleshooting
+curl -X POST http://192.168.250.125/api/restart  # Restart device
+curl -s http://192.168.250.125/debug/fs          # Check filesystem
+```
 
 ---
 This file is for Copilot and future maintainers. Update as the project evolves.

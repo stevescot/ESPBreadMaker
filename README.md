@@ -63,7 +63,7 @@ Or in Arduino IDE: Tools → Board → Boards Manager → ESP32 → select "2.0.
      - LovyanGFX (advanced graphics library for TTGO T-Display)
      - WiFiManager (WiFi configuration portal)
    - Upload the `data/` folder to FFat using the Arduino ESP32 Data Upload tool or provided scripts
-   - Build and upload the firmware using provided scripts (`build_esp32.ps1`) or Arduino IDE
+   - Build and upload the firmware using the unified build script (`unified_build.ps1`) or Arduino IDE
 
 3. **First Boot & WiFi Setup**
    - Power on the device. If no WiFi is configured, WiFiManager will start a captive portal for setup
@@ -207,7 +207,7 @@ The capacitive buttons complement the web interface by providing:
   - Update page: Shows firmware build time, upload progress, and rebooting status after OTA update.
   - All web UIs use a modern dark theme and improved event handling.
 - **Build & Upload Workflow:**
-  - Scripts for building and uploading both firmware and web files (FFat image) are provided (`build_esp32.ps1`, `upload_files_robust.ps1`).
+  - Unified build script for compilation and upload (`unified_build.ps1`) supports both serial and web OTA methods.
   - Web UI files are uploaded to ESP32 FFat for serving.
 - **Firmware Improvements:**
   - Modularized code for maintainability and robustness.
@@ -239,7 +239,7 @@ The capacitive buttons complement the web interface by providing:
   - Manual mode toggle and output controls
   - Program dropdown and robust status polling
   - Firmware build time and upload/rebooting status on update page
-- **Build/Upload:** Scripts for firmware and web files (FFat) included; see build_esp32.ps1 and upload_files_robust.ps1.
+- **Build/Upload:** Unified build script included; see unified_build.ps1 for all build and upload operations.
 - **Persistent Program Selection:** Last selected program saved and restored on boot.
 - **Custom Stages Only:** All programs use custom stages for maximum flexibility.
 - **Error Handling:** Robust to missing/default program names and invalid states.
@@ -261,8 +261,8 @@ See the test/README.md for test plan and details.
 4. **Upload `data/` folder** to FFat using the Arduino ESP32 Data Upload tool or provided scripts
 5. **Build and upload** the firmware using provided scripts:
    ```bash
-   .\build_esp32.ps1 -Port COM3           # Upload via serial
-   .\build_esp32.ps1 -OTA 192.168.1.100   # Upload via WiFi (OTA)
+   .\unified_build.ps1 -Build -Serial COM3    # Upload via serial
+   .\unified_build.ps1 -Build -WebOTA         # Upload via WiFi (recommended)
    ```
 6. **Power on the device.** If no WiFi is configured, WiFiManager will start a captive portal for setup
 7. **Access the web UI** at the device's IP address

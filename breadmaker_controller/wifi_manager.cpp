@@ -4,6 +4,9 @@
 #include <WiFi.h>           // ESP32 WiFi library
 #include <WiFiManager.h>    // tzapu WiFiManager library
 
+// External variables
+extern bool debugSerial;
+
 const byte DNS_PORT = 53;
 const char* WIFI_FILE = "/wifi.json";
 
@@ -20,7 +23,7 @@ bool loadWiFiCreds(String &ssid, String &pass) {
 }
 
 void startWiFiManagerPortal() {
-  Serial.println("[WiFi] Starting WiFiManager captive portal...");
+  if (debugSerial) Serial.println("[WiFi] Starting WiFiManager captive portal...");
   
   WiFiManager wm;
   
@@ -34,28 +37,34 @@ void startWiFiManagerPortal() {
   String apName = "BreadmakerSetup";
   String apPassword = "breadmaker123";
   
-  Serial.printf("[WiFi] Starting AP: %s\n", apName.c_str());
+  if (debugSerial) Serial.printf("[WiFi] Starting AP: %s\n", apName.c_str());
   
   // Set callback for when connecting to previous WiFi fails, and enters Access Point mode
   wm.setAPCallback([](WiFiManager *myWiFiManager) {
-    Serial.println("[WiFi] Entered config mode");
-    Serial.printf("[WiFi] AP IP address: %s\n", WiFi.softAPIP().toString().c_str());
-    Serial.printf("[WiFi] AP SSID: %s\n", myWiFiManager->getConfigPortalSSID().c_str());
-    Serial.println("[WiFi] Connect to the AP and navigate to 192.168.4.1 to configure WiFi");
+    if (debugSerial) {
+      Serial.println("[WiFi] Entered config mode");
+      Serial.printf("[WiFi] AP IP address: %s\n", WiFi.softAPIP().toString().c_str());
+      Serial.printf("[WiFi] AP SSID: %s\n", myWiFiManager->getConfigPortalSSID().c_str());
+      Serial.println("[WiFi] Connect to the AP and navigate to 192.168.4.1 to configure WiFi");
+    }
   });
 
   // Set callback for when WiFi credentials are saved
   wm.setSaveConfigCallback([]() {
-    Serial.println("[WiFi] Configuration saved via WiFiManager");
-    Serial.println("[WiFi] Device will restart shortly...");
+    if (debugSerial) {
+      Serial.println("[WiFi] Configuration saved via WiFiManager");
+      Serial.println("[WiFi] Device will restart shortly...");
+    }
   });
 
   // Try to connect with saved credentials or start config portal
   bool connected = wm.autoConnect(apName.c_str(), apPassword.c_str());
   
   if (connected) {
-    Serial.println("[WiFi] WiFi connected successfully!");
-    Serial.printf("[WiFi] IP address: %s\n", WiFi.localIP().toString().c_str());
+    if (debugSerial) {
+      Serial.println("[WiFi] WiFi connected successfully!");
+      Serial.printf("[WiFi] IP address: %s\n", WiFi.localIP().toString().c_str());
+    }
     
     // Save credentials to our JSON file for compatibility
     String ssid = WiFi.SSID();
@@ -69,11 +78,13 @@ void startWiFiManagerPortal() {
     if (f) {
       serializeJson(doc, f);
       f.close();
-      Serial.println("[WiFi] Credentials saved to FATFS");
+      if (debugSerial) Serial.println("[WiFi] Credentials saved to FATFS");
     }
   } else {
-    Serial.println("[WiFi] Failed to connect to WiFi or configure via portal");
-    Serial.println("[WiFi] Device will restart...");
+    if (debugSerial) {
+      Serial.println("[WiFi] Failed to connect to WiFi or configure via portal");
+      Serial.println("[WiFi] Device will restart...");
+    }
     delay(3000);
     ESP.restart();
   }
@@ -81,7 +92,7 @@ void startWiFiManagerPortal() {
 
 // Legacy functions for compatibility (not used with WiFiManager)
 void startCaptivePortal() {
-  Serial.println("[WiFi] Using WiFiManager instead of custom captive portal");
+  if (debugSerial) Serial.println("[WiFi] Using WiFiManager instead of custom captive portal");
   startWiFiManagerPortal();
 }
 
@@ -91,5 +102,5 @@ void processCaptivePortalDNS() {
 
 void cleanupCaptivePortalEndpoints() {
   // Not needed with WiFiManager
-  Serial.println("[WiFi] WiFiManager handles cleanup automatically");
+  if (debugSerial) Serial.println("[WiFi] WiFiManager handles cleanup automatically");
 }

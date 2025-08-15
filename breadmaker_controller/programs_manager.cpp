@@ -1,4 +1,4 @@
-#include <LittleFS.h>
+#include <FFat.h>
 #include <ArduinoJson.h>
 #include "programs_manager.h"
 #include "globals.h"
@@ -12,7 +12,7 @@ void loadProgramMetadata() {
   programMetadata.clear();
   
   // Use lightweight index file instead of full programs.json
-  File f = LittleFS.open("/programs_index.json", "r");
+  File f = FFat.open("/programs_index.json", "r");
   if (!f || f.size() == 0) {
     if (f) f.close();
     Serial.println("[ERROR] programs_index.json not found or empty");
@@ -70,8 +70,8 @@ bool loadSpecificProgram(int programId) {
   }
   
   // Load individual program file instead of entire programs.json
-  String programFileName = "/programs/program_" + String(programId) + ".json";
-  File f = LittleFS.open(programFileName, "r");
+  String programFileName = "/program_" + String(programId) + ".json";
+  File f = FFat.open(programFileName, "r");
   if (!f || f.size() == 0) {
     if (f) f.close();
     Serial.printf("[ERROR] Program file %s not found or empty\n", programFileName.c_str());

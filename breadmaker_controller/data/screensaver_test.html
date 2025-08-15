@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screensaver Test - Breadmaker Controller</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .status-section {
+            background: #e8f4f8;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .enable { background-color: #ff9800; color: white; }
+        .disable { background-color: #4CAF50; color: white; }
+        .status-btn { background-color: #2196F3; color: white; }
+        .activity { background-color: #9C27B0; color: white; }
+        
+        button:hover {
+            opacity: 0.8;
+        }
+        
+        .info {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        
+        .status-display {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #28a745;
+            margin: 15px 0;
+        }
+        
+        #screensaver-status {
+            font-weight: bold;
+            color: #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖥️ Screensaver Test Interface</h1>
+        
+        <div class="info">
+            <h3>ℹ️ Screensaver Information</h3>
+            <p><strong>Timeout:</strong> 1 hour (3,600,000 ms) of inactivity</p>
+            <p><strong>Behavior:</strong> Turns off display backlight and puts screen to sleep</p>
+            <p><strong>Wake Triggers:</strong> Physical buttons, capacitive touch, web API activity</p>
+        </div>
+        
+        <div class="status-section">
+            <h3>Current Status</h3>
+            <div class="status-display">
+                <div>Screensaver Active: <span id="screensaver-status">Checking...</span></div>
+                <div>Last Update: <span id="last-update">Never</span></div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button class="status-btn" onclick="checkStatus()">🔍 Check Status</button>
+            <button class="enable" onclick="enableScreensaver()">😴 Enable Screensaver</button>
+            <button class="disable" onclick="disableScreensaver()">🔆 Disable Screensaver</button>
+            <button class="activity" onclick="updateActivity()">👆 Update Activity</button>
+        </div>
+        
+        <div class="status-section">
+            <h3>Test Instructions</h3>
+            <ol>
+                <li><strong>Manual Test:</strong> Click "Enable Screensaver" to immediately activate it</li>
+                <li><strong>Wake Test:</strong> Press any physical button or touch sensor to wake up</li>
+                <li><strong>Activity Test:</strong> Click "Update Activity" to reset the inactivity timer</li>
+                <li><strong>Auto Test:</strong> Wait 1 hour without any activity to see automatic activation</li>
+                <li><strong>Web Activity:</strong> Any web page access resets the timer automatically</li>
+            </ol>
+        </div>
+        
+        <div class="status-section">
+            <h3>Response Log</h3>
+            <div id="response-log" style="background: #000; color: #0f0; padding: 15px; border-radius: 5px; font-family: monospace; height: 200px; overflow-y: auto;">
+                Ready for testing...<br>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function log(message) {
+            const logDiv = document.getElementById('response-log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function checkStatus() {
+            try {
+                log('Checking screensaver status...');
+                const response = await fetch('/api/display/screensaver/status');
+                const data = await response.json();
+                
+                document.getElementById('screensaver-status').textContent = data.active ? 'YES' : 'NO';
+                document.getElementById('screensaver-status').style.color = data.active ? '#dc3545' : '#28a745';
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+                
+                log(`Status: ${data.active ? 'ACTIVE' : 'INACTIVE'}`);
+            } catch (error) {
+                log(`Error checking status: ${error.message}`);
+            }
+        }
+
+        async function enableScreensaver() {
+            try {
+                log('Enabling screensaver...');
+                const response = await fetch('/api/display/screensaver/enable', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                log(`Response: ${data.status}`);
+                
+                // Check status after a brief delay
+                setTimeout(checkStatus, 500);
+            } catch (error) {
+                log(`Error enabling screensaver: ${error.message}`);
+            }
+        }
+
+        async function disableScreensaver() {
+            try {
+                log('Disabling screensaver...');
+                const response = await fetch('/api/display/screensaver/disable', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                log(`Response: ${data.status}`);
+                
+                // Check status after a brief delay
+                setTimeout(checkStatus, 500);
+            } catch (error) {
+                log(`Error disabling screensaver: ${error.message}`);
+            }
+        }
+
+        async function updateActivity() {
+            try {
+                log('Updating activity time...');
+                const response = await fetch('/api/display/activity', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                log(`Response: ${data.status}`);
+                log('Activity timer reset - screensaver timeout restarted');
+            } catch (error) {
+                log(`Error updating activity: ${error.message}`);
+            }
+        }
+
+        // Auto-check status on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            log('Screensaver Test Interface loaded');
+            checkStatus();
+            
+            // Auto-refresh status every 10 seconds
+            setInterval(checkStatus, 10000);
+        });
+        
+        // Log web activity
+        log('Web page loaded - this counts as activity!');
+    </script>
+</body>
+</html>

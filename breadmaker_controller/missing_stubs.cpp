@@ -1,14 +1,20 @@
 #include "missing_stubs.h"
 #include "globals.h"
 #include "programs_manager.h"
+#include "calibration.h"
 #include <Arduino.h>
-#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
+#include <cmath>
 
 #ifdef ESP32
 #include <esp_system.h>
 #include <WiFi.h>
+#endif
+
+// Define build date if not already defined
+#ifndef FIRMWARE_BUILD_DATE
+#define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 #endif
 
 // Stub implementations for missing functions
@@ -33,6 +39,11 @@ extern void invalidateStatusCache();
 extern void clearResumeState();
 extern size_t getProgramCount();
 extern String getProgramName(int programId);
+extern bool isProgramValid(int programId);
+extern bool ensureProgramLoaded(int programId);
+extern Program* getActiveProgramMutable();
+extern void switchToProfile(const String& profileName);
+extern void saveSettings();
 
 // Performance tracking variables
 static unsigned long lastLoopTime = 0;
@@ -42,6 +53,20 @@ static unsigned long loopCount = 0;
 static uint32_t minFreeHeap = UINT32_MAX;
 static unsigned long lastWifiStatus = 0;
 static unsigned long wifiReconnectCount = 0;
+
+// Fermentation calculation cache
+struct FermentationCache {
+  int cachedProgramId = -1;
+  unsigned int cachedStageIdx = UINT_MAX;
+  time_t cachedProgramEndTime = 0;
+  unsigned long cachedStageEndTimes[20] = {0};
+  unsigned long cachedTotalDuration = 0;
+  unsigned long cachedElapsedTime = 0;
+  unsigned long cachedRemainingTime = 0;
+  unsigned long lastCacheUpdate = 0;
+  bool isValid = false;
+};
+static FermentationCache fermentCache;
 
 // Temperature and performance functions
 float getAveragedTemperature() {
@@ -54,8 +79,8 @@ void updateTemperatureSampling() {
   // Sample at the configured interval
   if (nowMs - tempAvg.lastTempSample >= tempAvg.tempSampleInterval) {
     tempAvg.lastTempSample = nowMs;
-    // Take a new temperature sample
-    float rawTemp = analogRead(PIN_RTD) * 3.3 / 4095.0 * 100.0; // Simple ADC conversion for stub
+    // Take a new temperature sample using the calibrated readTemperature function
+    float rawTemp = readTemperature(); // Use calibrated temperature reading
     tempAvg.tempSamples[tempAvg.tempSampleIndex] = rawTemp;
     tempAvg.tempSampleIndex = (tempAvg.tempSampleIndex + 1) % tempAvg.tempSampleCount;
     // Mark samples as ready once we've filled the array at least once
@@ -102,7 +127,7 @@ void updateTemperatureSampling() {
       }
       tempAvg.averagedTemperature = weightedSum / totalWeight;
     } else {
-      tempAvg.averagedTemperature = rawTemp;
+      tempAvg.averagedTemperature = rawTemp; // rawTemp is now the calibrated temperature
     }
   }
 }
@@ -131,6 +156,37 @@ void updatePerformanceMetrics() {
     wifiReconnectCount++;
   }
   lastWifiStatus = currentWifiStatus;
+}
+
+// Performance metrics getter functions
+unsigned long getMaxLoopTime() {
+  return maxLoopTime;
+}
+
+unsigned long getAverageLoopTime() {
+  return loopCount > 0 ? totalLoopTime / loopCount : 0;
+}
+
+unsigned long getLoopCount() {
+  return loopCount;
+}
+
+uint32_t getMinFreeHeap() {
+  return minFreeHeap == UINT32_MAX ? ESP.getFreeHeap() : minFreeHeap;
+}
+
+unsigned long getWifiReconnectCount() {
+  return wifiReconnectCount;
+}
+
+float getHeapFragmentation() {
+  // Calculate heap fragmentation percentage
+  uint32_t freeHeap = ESP.getFreeHeap();
+  uint32_t maxAlloc = ESP.getMaxAllocHeap();
+  if (freeHeap > 0) {
+    return ((float)(freeHeap - maxAlloc) / freeHeap) * 100.0;
+  }
+  return 0.0;
 }
 
 void checkAndSwitchPIDProfile() {
@@ -318,139 +374,7 @@ void updateTimeProportionalHeater() {
   setHeater(heaterShouldBeOn);
 }
 
-// Settings functions
-void loadSettings() {
-    Serial.println("[loadSettings] Loading settings...");
-    File f = LittleFS.open("/settings.json", "r");
-    if (!f) {
-        Serial.println("[loadSettings] settings.json not found, using defaults.");
-        debugSerial = true;
-        return;
-    }
-    
-    DynamicJsonDocument doc(512);
-    DeserializationError err = deserializeJson(doc, f);
-    if (err) {
-        Serial.print("[loadSettings] Failed to parse settings.json: ");
-        Serial.println(err.c_str());
-        f.close();
-        debugSerial = true;
-        return;
-    }
-    
-    // Load basic settings
-    debugSerial = doc["debugSerial"] | true;
-    
-    // Load PID parameters for backward compatibility
-    if (doc.containsKey("pidKp")) {
-        pid.Kp = doc["pidKp"] | 2.0;
-        pid.Ki = doc["pidKi"] | 5.0;
-        pid.Kd = doc["pidKd"] | 1.0;
-        pid.sampleTime = doc["pidSampleTime"] | 1000;
-        windowSize = doc["pidWindowSize"] | 30000;
-        
-        // Apply loaded PID parameters
-        if (pid.controller) {
-            pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
-            pid.controller->SetSampleTime(pid.sampleTime);
-        }
-        Serial.printf("[loadSettings] Legacy PID parameters loaded: Kp=%.6f, Ki=%.6f, Kd=%.6f\n", pid.Kp, pid.Ki, pid.Kd);
-        Serial.printf("[loadSettings] Timing parameters loaded: SampleTime=%lums, WindowSize=%lums\n", pid.sampleTime, windowSize);
-    }
-    
-    // Load PID profile settings
-    if (doc.containsKey("activeProfile")) {
-        pid.activeProfile = doc["activeProfile"] | "Baking Heat";
-    }
-    if (doc.containsKey("autoSwitching")) {
-        pid.autoSwitching = doc["autoSwitching"] | true;
-    }
-    
-    // Load temperature averaging parameters
-    if (doc.containsKey("tempSampleCount")) {
-        tempAvg.tempSampleCount = doc["tempSampleCount"] | 10;
-        tempAvg.tempRejectCount = doc["tempRejectCount"] | 2;
-        tempAvg.tempSampleInterval = doc["tempSampleInterval"] | 500;
-        
-        // Validate parameters
-        if (tempAvg.tempSampleCount < 5) tempAvg.tempSampleCount = 5;
-        if (tempAvg.tempSampleCount > MAX_TEMP_SAMPLES) tempAvg.tempSampleCount = MAX_TEMP_SAMPLES;
-        if (tempAvg.tempRejectCount < 0) tempAvg.tempRejectCount = 0;
-        
-        // Ensure we have at least 3 samples after rejection
-        int effectiveSamples = tempAvg.tempSampleCount - (2 * tempAvg.tempRejectCount);
-        if (effectiveSamples < 3) {
-            tempAvg.tempRejectCount = (tempAvg.tempSampleCount - 3) / 2;
-        }
-        
-        // Reset sampling system when parameters change
-        tempAvg.tempSamplesReady = false;
-        tempAvg.tempSampleIndex = 0;
-        Serial.printf("[loadSettings] Temperature averaging loaded: Samples=%d, Reject=%d, Interval=%lums\n", 
-                     tempAvg.tempSampleCount, tempAvg.tempRejectCount, tempAvg.tempSampleInterval);
-    }
-    
-    // Restore last selected program by ID
-    if (doc.containsKey("lastProgramId")) {
-        int lastId = doc["lastProgramId"];
-        if (lastId >= 0 && lastId < (int)getProgramCount()) {
-            programState.activeProgramId = lastId;
-            Serial.print("[loadSettings] lastProgramId loaded: ");
-            Serial.println(lastId);
-        }
-    }
-    
-    f.close();
-    Serial.println("[loadSettings] Settings loaded.");
-}
-
-void saveSettings() {
-    if (debugSerial) Serial.println("[saveSettings] Saving settings...");
-    
-    File f = LittleFS.open("/settings.json", "w");
-    if (!f) {
-        if (debugSerial) Serial.println("[saveSettings] Failed to open settings.json for writing!");
-        return;
-    }
-    
-    // Stream JSON directly to file - memory efficient
-    f.print("{\n");
-    f.printf("  \"outputMode\":\"%s\",\n", "digital");  // Always digital mode
-    f.printf("  \"debugSerial\":%s,\n", debugSerial ? "true" : "false");
-    
-    if (getProgramCount() > 0) {
-        f.printf("  \"lastProgramId\":%d,\n", (int)programState.activeProgramId);
-        f.print("  \"lastProgram\":\"");
-        f.print(getProgramName(programState.activeProgramId));
-        f.print("\",\n");
-    } else {
-        f.print("  \"lastProgramId\":0,\n");
-        f.print("  \"lastProgram\":\"Unknown\",\n");
-    }
-    
-    // PID parameters for backward compatibility
-    f.printf("  \"pidKp\":%.6f,\n", pid.Kp);
-    f.printf("  \"pidKi\":%.6f,\n", pid.Ki);
-    f.printf("  \"pidKd\":%.6f,\n", pid.Kd);
-    f.printf("  \"pidSampleTime\":%lu,\n", pid.sampleTime);
-    f.printf("  \"pidWindowSize\":%lu,\n", windowSize);
-    
-    // PID profile settings
-    f.print("  \"activeProfile\":\"");
-    f.print(pid.activeProfile);
-    f.print("\",\n");
-    f.printf("  \"autoSwitching\":%s,\n", pid.autoSwitching ? "true" : "false");
-    
-    // Temperature averaging parameters
-    f.printf("  \"tempSampleCount\":%d,\n", tempAvg.tempSampleCount);
-    f.printf("  \"tempRejectCount\":%d,\n", tempAvg.tempRejectCount);
-    f.printf("  \"tempSampleInterval\":%lu\n", tempAvg.tempSampleInterval);
-    
-    f.print("}\n");
-    f.close();
-    
-    if (debugSerial) Serial.println("[saveSettings] Settings saved with direct streaming (low memory usage).");
-}
+// Settings functions - MOVED TO breadmaker_controller.ino
 
 void switchToProfile(const String& profileName) {
   for (const auto& profile : pid.profiles) {
@@ -466,33 +390,526 @@ void switchToProfile(const String& profileName) {
         pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
       }
       
-      Serial.printf("[switchToProfile] Switched to '%s': Kp=%.6f, Ki=%.6f, Kd=%.6f\n",
-                    profileName.c_str(), pid.Kp, pid.Ki, pid.Kd);
+      if (debugSerial) {
+        Serial.printf("[switchToProfile] Switched to '%s': Kp=%.6f, Ki=%.6f, Kd=%.6f\n",
+                      profileName.c_str(), pid.Kp, pid.Ki, pid.Kd);
+      }
       return;
     }
   }
-  Serial.printf("[switchToProfile] Profile '%s' not found!\n", profileName.c_str());
+  if (debugSerial) Serial.printf("[switchToProfile] Profile '%s' not found!\n", profileName.c_str());
+}
+
+// Calculate individual PID terms for monitoring
+void updatePIDTerms() {
+  static unsigned long lastSampleTime = 0;
+  unsigned long now = millis();
+  
+  if (now - lastSampleTime >= pid.sampleTime) {
+    double error = pid.Setpoint - pid.Input;
+    double dInput = pid.Input - pid.lastInput;
+    
+    // Calculate P term
+    pid.pidP = pid.Kp * error;
+    
+    // Calculate I term (accumulated integral)
+    pid.lastITerm += (pid.Ki * error);
+    if (pid.lastITerm > 1.0) pid.lastITerm = 1.0;  // Windup protection
+    else if (pid.lastITerm < 0.0) pid.lastITerm = 0.0;
+    pid.pidI = pid.lastITerm;
+    
+    // Calculate D term
+    pid.pidD = -pid.Kd * dInput;  // Negative because we use derivative on input
+    
+    // Store for next calculation
+    pid.lastInput = pid.Input;
+    lastSampleTime = now;
+  }
 }
 
 // Display message function used by OTA manager
 void displayMessage(const String& message) {
-  Serial.println("Display: " + message);
+  if (debugSerial) Serial.println("Display: " + message);
 }
 
-// Stream status JSON function - basic implementation
+// Stream status JSON function - comprehensive implementation
+// This function streams JSON directly without creating large strings in memory
 void streamStatusJson(Print& out) {
-  // Basic status JSON for web endpoints
-  out.print("{");
-  out.print("\"temperature\":" + String(getAveragedTemperature(), 1) + ",");
-  out.print("\"running\":" + String(programState.isRunning ? "true" : "false") + ",");
-  out.print("\"stage\":" + String(programState.customStageIdx) + ",");
+  // Update fermentation cache first (only recalculates when needed)
+  updateFermentationCache();
   
-  // Add current program name for frontend display
-  String currentProgramName = getProgramName(programState.activeProgramId);
-  if (currentProgramName.length() > 0) {
-    out.print("\"program\":\"" + currentProgramName + "\",");
+  // Start main JSON object
+  out.print("{");
+  
+  // === Core State ===
+  out.print("\"state\":\"");
+  out.print(programState.isRunning ? "on" : "off");
+  out.print("\",");
+  
+  out.print("\"running\":");
+  out.print(programState.isRunning ? "true" : "false");
+  out.print(",");
+  
+  // === Program Information ===
+  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+    Program* p = getActiveProgramMutable();
+    if (p) {
+      out.print("\"program\":\"");
+      out.print(p->name);
+      out.print("\",");
+      
+      out.printf("\"programId\":%d,", programState.activeProgramId);
+      
+      // === Stage Information ===
+      if (programState.customStageIdx < p->customStages.size()) {
+        CustomStage& stage = p->customStages[programState.customStageIdx];
+        
+        out.print("\"stage\":\"");
+        out.print(stage.label);
+        out.print("\",");
+        
+        out.printf("\"stageIdx\":%u,", (unsigned)programState.customStageIdx);
+        out.printf("\"setpoint\":%.1f,", stage.temp);
+        
+        // Calculate time left in current stage (fermentation-adjusted)
+        unsigned long timeLeft = 0;
+        unsigned long adjustedTimeLeft = 0;
+        if (programState.isRunning && programState.customStageStart > 0) {
+          unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
+          unsigned long baseStageDuration = stage.min * 60;
+          unsigned long adjustedStageDuration = getAdjustedStageTimeMs(baseStageDuration * 1000, stage.isFermentation) / 1000;
+          
+          // Original time left (non-adjusted)
+          timeLeft = (elapsed < baseStageDuration) ? (baseStageDuration - elapsed) : 0;
+          
+          // Fermentation-adjusted time left
+          adjustedTimeLeft = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
+        }
+        out.printf("\"timeLeft\":%lu,", timeLeft);
+        out.printf("\"adjustedTimeLeft\":%lu,", adjustedTimeLeft);
+        
+        // Stage ready time (using adjusted duration)
+        if (programState.isRunning && adjustedTimeLeft > 0) {
+          unsigned long readyAt = (time(nullptr) + adjustedTimeLeft) * 1000; // Convert to ms
+          out.printf("\"stage_ready_at\":%lu,", readyAt);
+          out.printf("\"stageReadyAt\":%lu", readyAt / 1000);
+        } else {
+          out.print("\"stage_ready_at\":0,");
+          out.print("\"stageReadyAt\":0");
+        }
+        out.print(",");
+      } else {
+        out.print("\"stage\":\"Idle\",");
+        out.print("\"stageIdx\":0,");
+        out.print("\"setpoint\":0,");
+        out.print("\"timeLeft\":0,");
+        out.print("\"adjustedTimeLeft\":0,");
+        out.print("\"stage_ready_at\":0,");
+        out.print("\"stageReadyAt\":0,");
+      }
+    } else {
+      out.print("\"program\":\"Unknown\",");
+      out.printf("\"programId\":%d,", programState.activeProgramId);
+      out.print("\"stage\":\"Idle\",");
+      out.print("\"stageIdx\":0,");
+      out.print("\"setpoint\":0,");
+      out.print("\"timeLeft\":0,");
+      out.print("\"adjustedTimeLeft\":0,");
+      out.print("\"stage_ready_at\":0,");
+      out.print("\"stageReadyAt\":0,");
+    }
+  } else {
+    out.print("\"program\":\"None\",");
+    out.print("\"programId\":-1,");
+    out.print("\"stage\":\"Idle\",");
+    out.print("\"stageIdx\":0,");
+    out.print("\"setpoint\":0,");
+    out.print("\"timeLeft\":0,");
+    out.print("\"adjustedTimeLeft\":0,");
+    out.print("\"stage_ready_at\":0,");
+    out.print("\"stageReadyAt\":0,");
   }
   
-  out.print("\"status\":\"ok\"");
+  // === Temperature and Outputs ===
+  float temp = getAveragedTemperature();
+  out.printf("\"temperature\":%.1f,", temp);
+  out.printf("\"temp\":%.1f,", temp);
+  out.printf("\"setTemp\":%.1f,", pid.Setpoint);
+  
+  out.print("\"heater\":");
+  out.print(outputStates.heater ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"motor\":");
+  out.print(outputStates.motor ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"light\":");
+  out.print(outputStates.light ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"buzzer\":");
+  out.print(outputStates.buzzer ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"manualMode\":");
+  out.print(programState.manualMode ? "true" : "false");
+  out.print(",");
+  
+  // === Mix and Timing ===
+  out.printf("\"mixIdx\":%u,", (unsigned)programState.customMixIdx);
+  
+  // === Program Completion Prediction ===
+  if (fermentState.predictedCompleteTime > 0) {
+    out.printf("\"program_ready_at\":%lu,", fermentState.predictedCompleteTime * 1000);
+    out.printf("\"programReadyAt\":%lu,", fermentState.predictedCompleteTime);
+    out.printf("\"predictedCompleteTime\":%lu,", fermentState.predictedCompleteTime * 1000);
+  } else {
+    out.print("\"program_ready_at\":0,");
+    out.print("\"programReadyAt\":0,");
+    out.print("\"predictedCompleteTime\":0,");
+  }
+  
+  // === Startup Delay ===
+  bool startupComplete = isStartupDelayComplete();
+  out.print("\"startupDelayComplete\":");
+  out.print(startupComplete ? "true" : "false");
+  out.print(",");
+  
+  if (!startupComplete) {
+    unsigned long remaining = STARTUP_DELAY_MS - (millis() - startupTime);
+    out.printf("\"startupDelayRemainingMs\":%lu,", remaining);
+  } else {
+    out.print("\"startupDelayRemainingMs\":0,");
+  }
+  
+  // === Fermentation Data ===
+  out.printf("\"fermentationFactor\":%.3f,", fermentState.fermentationFactor);
+  out.printf("\"initialFermentTemp\":%.1f,", fermentState.initialFermentTemp);
+  
+  // === Predicted Stage End Times (Fermentation-Adjusted) ===
+  out.print("\"predictedStageEndTimes\":[");
+  if (fermentCache.isValid && programState.activeProgramId >= 0) {
+    Program* p = getActiveProgramMutable();
+    if (p && p->customStages.size() > 0) {
+      for (size_t i = 0; i < p->customStages.size() && i < 20; i++) {
+        if (i > 0) out.print(",");
+        out.printf("%lu", fermentCache.cachedStageEndTimes[i]);
+      }
+    }
+  }
+  out.print("],");
+  
+  // === Predicted Program End Time ===
+  out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)fermentCache.cachedProgramEndTime);
+  
+  // === Additional timing data for UI (from cache) ===
+  out.printf("\"totalProgramDuration\":%lu,", fermentCache.cachedTotalDuration);
+  out.printf("\"elapsedTime\":%lu,", fermentCache.cachedElapsedTime);
+  out.printf("\"remainingTime\":%lu,", fermentCache.cachedRemainingTime);
+  
+  // === Stage Start Times Array ===
+  out.print("\"actualStageStartTimes\":[");
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) out.print(",");
+    out.printf("%lu", (unsigned long)programState.actualStageStartTimes[i]);
+  }
+  out.print("],");
+  
+  // === Health and System Data ===
+  out.printf("\"uptime_sec\":%lu,", millis() / 1000);
+  
+  out.print("\"firmware_version\":\"ESP32-WebServer\",");
+  
+  out.print("\"build_date\":\"");
+  out.print(FIRMWARE_BUILD_DATE);
+  out.print("\",");
+  
+  out.printf("\"free_heap\":%u,", ESP.getFreeHeap());
+  
+  out.print("\"connected\":");
+  out.print(wifiCache.isConnected() ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"ip\":\"");
+  out.print(wifiCache.getIPString());
+  out.print("\",");
+  
+  // === WiFi Details ===
+  out.print("\"wifi\":{");
+  if (wifiCache.isConnected()) {
+    out.print("\"connected\":true,");
+    out.print("\"ssid\":\"");
+    out.print(wifiCache.getSSID());
+    out.print("\",");
+    out.printf("\"rssi\":%d,", wifiCache.getRSSI());
+    out.print("\"ip\":\"");
+    out.print(wifiCache.getIPString());
+    out.print("\"");
+  } else {
+    out.print("\"connected\":false");
+  }
+  out.print("},");
+  
+  // === PID Information for debugging ===
+  out.printf("\"pid_kp\":%.6f,", pid.Kp);
+  out.printf("\"pid_ki\":%.6f,", pid.Ki);
+  out.printf("\"pid_kd\":%.6f,", pid.Kd);
+  out.printf("\"pid_output\":%.3f,", pid.Output);
+  out.printf("\"pid_input\":%.1f,", pid.Input);
+  
+  // === Safety System Status ===
+  out.print("\"safety\":{");
+  out.print("\"emergencyShutdown\":");
+  out.print(safetySystem.emergencyShutdown ? "true" : "false");
+  out.print(",");
+  
+  if (safetySystem.emergencyShutdown) {
+    out.print("\"shutdownReason\":\"");
+    out.print(safetySystem.shutdownReason);
+    out.print("\",");
+    out.printf("\"shutdownTime\":%lu,", safetySystem.shutdownTime);
+  }
+  
+  out.print("\"temperatureValid\":");
+  out.print(safetySystem.temperatureValid ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"heatingEffective\":");
+  out.print(safetySystem.heatingEffective ? "true" : "false");
+  out.print(",");
+  
+  out.print("\"pidSaturated\":");
+  out.print(safetySystem.pidSaturated ? "true" : "false");
+  out.print(",");
+  
+  out.printf("\"invalidTempCount\":%u,", safetySystem.invalidTempCount);
+  out.printf("\"zeroTempCount\":%u,", safetySystem.zeroTempCount);
+  
+  // Performance metrics
+  if (safetySystem.loopCount > 0) {
+    unsigned long avgLoopTime = safetySystem.totalLoopTime / safetySystem.loopCount;
+    out.printf("\"avgLoopTimeUs\":%lu,", avgLoopTime);
+    out.printf("\"maxLoopTimeUs\":%lu,", safetySystem.maxLoopTime);
+  } else {
+    out.print("\"avgLoopTimeUs\":0,");
+    out.print("\"maxLoopTimeUs\":0,");
+  }
+  
+  out.printf("\"maxSafeTemp\":%.1f,", SafetySystem::MAX_SAFE_TEMPERATURE);
+  out.printf("\"emergencyTemp\":%.1f", SafetySystem::EMERGENCY_TEMPERATURE);
+  out.print("},");
+  
+  // === Status ===
+  if (safetySystem.emergencyShutdown) {
+    out.print("\"status\":\"emergency_shutdown\"");
+  } else {
+    out.print("\"status\":\"ok\"");
+  }
+  
+  // Close main JSON object
   out.print("}");
+}
+
+// === Fermentation Calculations ===
+
+float calculateFermentationFactor(float actualTemp) {
+  // Get program parameters from active program instead of hardcoded values
+  float baselineTemp = 20.0;  // Default fallback
+  float q10 = 2.0;            // Default fallback
+  
+  // Get actual program parameters if available
+  if (getProgramCount() > 0 && programState.activeProgramId < getProgramCount()) {
+    Program *p = getActiveProgramMutable();
+    if (p) {
+      baselineTemp = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
+      q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
+    }
+  }
+  
+  if (debugSerial) Serial.printf("[FERMENT-CALC] Using program values: baseline=%.1f, Q10=%.1f\n", baselineTemp, q10);
+  
+  // Calculate fermentation factor using Q10 temperature coefficient
+  // Factor = Q10^((baseline - actual) / 10)
+  // If temp is lower than baseline, factor > 1 (slower fermentation, takes longer)
+  // If temp is higher than baseline, factor < 1 (faster fermentation, takes less time)
+  float tempDiff = baselineTemp - actualTemp;
+  float exponent = tempDiff / 10.0;
+  float factor = pow(q10, exponent);
+  
+  // Debug output - only when debug enabled
+  if (debugSerial) {
+    Serial.printf("[FERMENT] Calculation: actualTemp=%.1f, baseline=%.1f, Q10=%.1f\n", actualTemp, baselineTemp, q10);
+    Serial.printf("[FERMENT] TempDiff=%.1f, Exponent=%.2f, Factor=%.3f\n", tempDiff, exponent, factor);
+  }
+  
+  // Clamp to reasonable bounds (0.1x to 20x)
+  if (factor < 0.1) factor = 0.1;
+  if (factor > 20.0) factor = 20.0;
+  
+  return factor;
+}
+
+// REMOVED: updateFermentationFactor() - redundant function that conflicted with main fermentation logic
+// Main fermentation calculations are now handled in updateFermentationTiming() in breadmaker_controller.ino
+
+unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentation) {
+  if (!hasFermentation) {
+    return baseTimeMs; // No fermentation adjustment
+  }
+  
+  // Apply current fermentation factor
+  return (unsigned long)(baseTimeMs * fermentState.fermentationFactor);
+}
+
+// Update fermentation cache - only recalculate when program or stage changes
+void updateFermentationCache() {
+  // Check if cache is still valid
+  bool cacheValid = fermentCache.isValid && 
+                   fermentCache.cachedProgramId == programState.activeProgramId &&
+                   fermentCache.cachedStageIdx == programState.customStageIdx &&
+                   (millis() - fermentCache.lastCacheUpdate) < 5000; // Refresh every 5 seconds max
+  
+  if (cacheValid) {
+    return; // Use existing cache
+  }
+  
+  // Reset cache
+  fermentCache.cachedProgramId = programState.activeProgramId;
+  fermentCache.cachedStageIdx = programState.customStageIdx;
+  fermentCache.lastCacheUpdate = millis();
+  fermentCache.isValid = false;
+  
+  // Clear arrays
+  for (int i = 0; i < 20; i++) {
+    fermentCache.cachedStageEndTimes[i] = 0;
+  }
+  
+  if (programState.activeProgramId < 0 || programState.activeProgramId >= getProgramCount()) {
+    fermentCache.cachedProgramEndTime = 0;
+    fermentCache.cachedTotalDuration = 0;
+    fermentCache.cachedElapsedTime = 0;
+    fermentCache.cachedRemainingTime = 0;
+    fermentCache.isValid = true;
+    return;
+  }
+  
+  Program* p = getActiveProgramMutable();
+  if (!p || p->customStages.size() == 0) {
+    fermentCache.cachedProgramEndTime = 0;
+    fermentCache.cachedTotalDuration = 0;
+    fermentCache.cachedElapsedTime = 0;
+    fermentCache.cachedRemainingTime = 0;
+    fermentCache.isValid = true;
+    return;
+  }
+  
+  // Calculate stage end times
+  time_t currentTime = time(nullptr);
+  time_t runningTime = currentTime;
+  
+  if (programState.isRunning && programState.customStageStart > 0) {
+    // Running: calculate from current stage position
+    unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
+    CustomStage& currentStage = p->customStages[programState.customStageIdx];
+    unsigned long adjustedStageDuration = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation) / 1000;
+    unsigned long remaining = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
+    runningTime = currentTime + remaining;
+    
+    // Cache times for stages already completed
+    for (size_t i = 0; i < programState.customStageIdx && i < 20; i++) {
+      fermentCache.cachedStageEndTimes[i] = programState.actualStageStartTimes[i + 1];
+    }
+    
+    // Cache current stage end time
+    if (programState.customStageIdx < 20) {
+      fermentCache.cachedStageEndTimes[programState.customStageIdx] = runningTime;
+    }
+    
+    // Calculate remaining stages
+    for (size_t i = programState.customStageIdx + 1; i < p->customStages.size() && i < 20; i++) {
+      CustomStage& stage = p->customStages[i];
+      unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
+      runningTime += adjustedDuration;
+      fermentCache.cachedStageEndTimes[i] = runningTime;
+    }
+    
+    fermentCache.cachedProgramEndTime = runningTime;
+    
+    // Calculate timing data for UI
+    if (programState.actualStageStartTimes[0] > 0) {
+      time_t programStart = programState.actualStageStartTimes[0];
+      fermentCache.cachedTotalDuration = fermentCache.cachedProgramEndTime - programStart;
+      fermentCache.cachedElapsedTime = time(nullptr) - programStart;
+      fermentCache.cachedRemainingTime = (fermentCache.cachedProgramEndTime > time(nullptr)) ? 
+                                        (fermentCache.cachedProgramEndTime - time(nullptr)) : 0;
+    } else {
+      fermentCache.cachedTotalDuration = 0;
+      fermentCache.cachedElapsedTime = 0;
+      fermentCache.cachedRemainingTime = 0;
+    }
+  } else {
+    // Not running - calculate full program preview from now
+    for (size_t i = 0; i < p->customStages.size() && i < 20; i++) {
+      CustomStage& stage = p->customStages[i];
+      unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
+      runningTime += adjustedDuration;
+      fermentCache.cachedStageEndTimes[i] = runningTime;
+    }
+    
+    fermentCache.cachedProgramEndTime = runningTime;
+    fermentCache.cachedTotalDuration = 0;
+    fermentCache.cachedElapsedTime = 0;
+    fermentCache.cachedRemainingTime = 0;
+  }
+  
+  fermentCache.isValid = true;
+}
+
+// === WiFi Cache Implementation ===
+
+// Update WiFi cache if needed (low-impact check)
+void WiFiCache::updateIfNeeded() {
+    unsigned long now = millis();
+    if (now - lastCacheUpdate >= CACHE_UPDATE_INTERVAL) {
+        lastCacheUpdate = now;
+        
+        // Cache WiFi status
+        cachedConnected = (WiFi.status() == WL_CONNECTED);
+        
+        if (cachedConnected) {
+            // Only call expensive toString() when actually connected and cache is stale
+            cachedIPString = WiFi.localIP().toString();
+            cachedSSID = WiFi.SSID();
+            cachedRSSI = WiFi.RSSI();
+        } else {
+            cachedIPString = "0.0.0.0";
+            cachedSSID = "";
+            cachedRSSI = 0;
+        }
+    }
+}
+
+// Get cached IP string (always fast)
+const String& WiFiCache::getIPString() {
+    updateIfNeeded();
+    return cachedIPString;
+}
+
+// Get cached connection status
+bool WiFiCache::isConnected() {
+    updateIfNeeded();
+    return cachedConnected;
+}
+
+// Get cached SSID
+const String& WiFiCache::getSSID() {
+    updateIfNeeded();
+    return cachedSSID;
+}
+
+// Get cached RSSI
+int WiFiCache::getRSSI() {
+    updateIfNeeded();
+    return cachedRSSI;
 }

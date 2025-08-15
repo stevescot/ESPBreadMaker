@@ -150,19 +150,15 @@
           
           showStatus('Updating calibration point...', 'info');
           
-          // Use the new update endpoint
-          fetch('/api/calibration/update', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({index: i, raw: newRaw, temp: newTemp})
-          })
+          // Use GET-based endpoint to avoid POST crashes
+          fetch(`/api/calibration/update-get?index=${i}&raw=${newRaw}&temp=${newTemp}`)
           .then(response => {
             if (!response.ok) {
-              return response.text().then(text => {
-                throw new Error(`${response.status}: ${text}`);
+              return response.json().then(data => {
+                throw new Error(data.error || `HTTP ${response.status}`);
               });
             }
-            return response.text();
+            return response.json();
           })
           .then(result => {
             console.log('Update point result:', result);
@@ -182,19 +178,15 @@
           if (confirm(`Delete calibration point (${calibPoints[i].raw}, ${calibPoints[i].temp}°C)?`)) {
             showStatus('Deleting calibration point...', 'info');
             
-            // Use the new delete endpoint
-            fetch('/api/calibration/delete', {
-              method: 'POST',
-              headers: {'Content-Type':'application/json'},
-              body: JSON.stringify({index: i})
-            })
+            // Use GET-based endpoint to avoid POST crashes
+            fetch(`/api/calibration/delete-get?index=${i}`)
             .then(response => {
               if (!response.ok) {
-                return response.text().then(text => {
-                  throw new Error(`${response.status}: ${text}`);
+                return response.json().then(data => {
+                  throw new Error(data.error || `HTTP ${response.status}`);
                 });
               }
-              return response.text();
+              return response.json();
             })
             .then(result => {
               console.log('Delete point result:', result);
@@ -235,19 +227,15 @@
           console.log('Adding calibration point:', {raw: raw, temp: temp});
           showStatus('Adding calibration point...', 'info');
           
-          // Send just the new point to the server
-          fetch('/api/calibration/add', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({raw: raw, temp: temp})
-          })
+          // Use GET-based endpoint to avoid POST crashes
+          fetch(`/api/calibration/add-get?raw=${raw}&temp=${temp}`)
           .then(response => {
             if (!response.ok) {
-              return response.text().then(text => {
-                throw new Error(`${response.status}: ${text}`);
+              return response.json().then(data => {
+                throw new Error(data.error || `HTTP ${response.status}`);
               });
             }
-            return response.text();
+            return response.json();
           })
           .then(result => {
             console.log('Add point result:', result);
@@ -288,19 +276,15 @@
       console.log('Adding manual calibration point:', {raw: rawValue, temp: tempValue});
       showStatus('Adding manual calibration point...', 'info');
       
-      // Send the manual point to the server
-      fetch('/api/calibration/add', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({raw: rawValue, temp: tempValue})
-      })
+      // Use GET-based endpoint to avoid POST crashes
+      fetch(`/api/calibration/add-get?raw=${rawValue}&temp=${tempValue}`)
       .then(response => {
         if (!response.ok) {
-          return response.text().then(text => {
-            throw new Error(`${response.status}: ${text}`);
+          return response.json().then(data => {
+            throw new Error(data.error || `HTTP ${response.status}`);
           });
         }
-        return response.text();
+        return response.json();
       })
       .then(result => {
         console.log('Add manual point result:', result);
@@ -320,17 +304,15 @@
       
       showStatus('Clearing all calibration points...', 'info');
       
-      // Use the original bulk update endpoint to clear all points
-      fetch('/api/calibration', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({table: []})
-      })
+      // Use GET-based endpoint to avoid POST crashes
+      fetch('/api/calibration/clear-all')
       .then(response => {
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          return response.json().then(data => {
+            throw new Error(data.error || `HTTP ${response.status}`);
+          });
         }
-        return response.text();
+        return response.json();
       })
       .then(result => {
         console.log('Clear all result:', result);

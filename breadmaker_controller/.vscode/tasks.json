@@ -2,70 +2,262 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"label": "Build and Upload Breadmaker Controller",
+			"label": "Build Firmware",
 			"type": "shell",
-			"command": "pwsh.exe",
+			"command": "powershell",
 			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
 				"-File",
-				"build_and_upload.ps1"
+				"unified_build.ps1",
+				"-Build"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"isBackground": false,
+			"problemMatcher": ["$gcc"],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": false
+			}
+		},
+		{
+			"label": "Build and Upload (Web OTA)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"unified_build.ps1",
+				"-Build",
+				"-WebOTA"
 			],
 			"group": "build",
 			"isBackground": false,
 			"problemMatcher": [],
 			"options": {
 				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": false
 			}
 		},
 		{
-			"label": "Compile Only",
+			"label": "Full Deploy (Build + Upload All)",
 			"type": "shell",
-			"command": "pwsh.exe",
+			"command": "powershell",
 			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
 				"-File",
-				"build_and_upload.ps1",
-				"-SkipRom",
-				"-SkipFiles"
+				"unified_build.ps1",
+				"-Build",
+				"-WebOTA",
+				"-UploadData"
 			],
 			"group": "build",
 			"isBackground": false,
-			"problemMatcher": ["$gcc"],
+			"problemMatcher": [],
 			"options": {
 				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": false
 			}
 		},
 		{
 			"label": "Upload Web Files Only",
 			"type": "shell",
-			"command": "pwsh.exe",
+			"command": "powershell",
 			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
 				"-File",
-				"upload_files.ps1"
+				"unified_build.ps1",
+				"-UploadData"
 			],
 			"group": "build",
 			"isBackground": false,
 			"problemMatcher": [],
 			"options": {
 				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": false
 			}
 		},
 		{
-			"label": "Arduino CLI Compile",
+			"label": "Upload Specific Files",
 			"type": "shell",
-			"command": "arduino-cli",
+			"command": "powershell",
 			"args": [
-				"compile",
-				"--fqbn",
-				"esp8266:esp8266:nodemcuv2",
-				"--output-dir",
-				"build",
-				"breadmaker_controller.ino"
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"unified_build.ps1",
+				"-UploadData",
+				"-Files",
+				"${input:filesToUpload}"
 			],
 			"group": "build",
 			"isBackground": false,
-			"problemMatcher": ["$gcc"],
+			"problemMatcher": [],
 			"options": {
 				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": false
 			}
+		},
+		{
+			"label": "Clean Build",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"unified_build.ps1",
+				"-Clean"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": false
+			}
+		},
+		{
+			"label": "Test Device Connectivity",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"unified_build.ps1",
+				"-Test"
+			],
+			"group": "test",
+			"isBackground": false,
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": false
+			}
+		},
+		{
+			"label": "Build and Upload (Serial)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"unified_build.ps1",
+				"-Build",
+				"-Serial",
+				"${input:serialPort}"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": false
+			}
+		},
+		{
+			"label": "Show Build Help",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"unified_build.ps1",
+				"-Help"
+			],
+			"group": "build",
+			"isBackground": false,
+			"problemMatcher": [],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "shared",
+				"showReuseMessage": false,
+				"clear": false
+			}
+		}
+	],
+	"inputs": [
+		{
+			"id": "filesToUpload",
+			"description": "Files to upload (comma-separated)",
+			"default": "config.html,debug_serial.js,pid-tune.js",
+			"type": "promptString"
+		},
+		{
+			"id": "serialPort",
+			"description": "Serial port (e.g., COM3)",
+			"default": "COM3",
+			"type": "promptString"
 		}
 	]
 }

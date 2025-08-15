@@ -10,9 +10,24 @@
 #include <FFat.h>
 #include "ota_manager.h"
 #include <Update.h>  // For web-based firmware updates
+#include <algorithm>  // For std::sort
+#include "missing_stubs.h"  // For getAdjustedStageTimeMs and other functions
+#include "display_manager.h"  // For screensaver control
 
 // External OTA status for web integration
 extern OTAStatus otaStatus;
+
+// StringPrint helper class for streaming JSON to String buffers
+class StringPrint : public Print {
+  String& str;
+  public:
+    StringPrint(String& s) : str(s) {}
+    size_t write(uint8_t c) override { str += (char)c; return 1; }
+    size_t write(const uint8_t* buffer, size_t size) override {
+      for (size_t i = 0; i < size; i++) str += (char)buffer[i];
+      return size;
+    }
+};
 
 // Performance tracking variables
 static unsigned long loopCount = 0;
@@ -33,6 +48,11 @@ static const unsigned long HA_CACHE_MS = 3000;      // Cache HA for 3 seconds
 void invalidateStatusCache() {
   lastStatusUpdate = 0;
   lastHaUpdate = 0;
+}
+
+// Helper to track web activity for screensaver
+void trackWebActivity() {
+  updateActivityTime();
 }
 
 // Forward declarations for helpers and global variables used in endpoints
@@ -71,26 +91,18 @@ extern unsigned long windowStartTime;
 extern size_t getProgramCount();
 extern bool isProgramValid(int programId);
 extern void shortBeep();
+extern bool ensureProgramLoaded(int programId);
+extern Program* getActiveProgramMutable();
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 #endif
 
-// Helper function to get status JSON as string
+// Note: getStatusJsonString is deprecated - use direct streaming with streamStatusJson() instead
+// This function is kept for backward compatibility but creates strings in memory
 String getStatusJsonString() {
   String response;
   response.reserve(2048);
-  // ...existing code...
-  class StringPrint : public Print {
-    String& str;
-    public:
-      StringPrint(String& s) : str(s) {}
-      size_t write(uint8_t c) override { str += (char)c; return 1; }
-      size_t write(const uint8_t* buffer, size_t size) override {
-        for (size_t i = 0; i < size; i++) str += (char)buffer[i];
-        return size;
-      }
-  };
   
   StringPrint stringPrint(response);
   streamStatusJson(stringPrint);
@@ -177,19 +189,10 @@ void coreEndpoints(WebServer& server) {
     static File uploadFile;
     static bool uploadError = false;
     
-    server.on("/upload", HTTP_POST, [&](){
-        if (uploadError) {
-            server.send(500, "text/plain", "Upload failed");
-            uploadError = false;  // Reset for next upload
-        } else {
-            server.send(200, "text/plain", "Upload complete");
-        }
-    });
-    
     // Configure longer timeout for file uploads (60 seconds)
     server.setContentLength(50 * 1024 * 1024); // Allow up to 50MB uploads (increased for larger files)
     
-    // Shared file upload handler for both /upload and /api/upload
+    // File upload handler for /api/upload
     server.onFileUpload([&](){
         HTTPUpload& upload = server.upload();
         
@@ -275,22 +278,49 @@ void coreEndpoints(WebServer& server) {
     });
     
     server.on("/status", HTTP_GET, [&](){
+        trackWebActivity(); // Track web activity for screensaver
         if (debugSerial) Serial.println(F("[DEBUG] /status requested"));
-        server.send(200, "application/json", getStatusJsonString());
+        
+        // Use String buffer for status JSON (status is frequently accessed, needs fast response)
+        String statusBuffer;
+        statusBuffer.reserve(1200); // Reserve buffer to avoid reallocation
+        StringPrint stringPrint(statusBuffer);
+        streamStatusJson(stringPrint);
+        
+        server.send(200, "application/json", statusBuffer);
+    });
+    
+    // Add missing /api/status endpoint for frontend compatibility
+    server.on("/api/status", HTTP_GET, [&](){
+        trackWebActivity(); // Track web activity for screensaver
+        if (debugSerial) Serial.println(F("[DEBUG] /api/status requested"));
+        
+        // Use String buffer for status JSON (status is frequently accessed, needs fast response)
+        String statusBuffer;
+        statusBuffer.reserve(1200); // Reserve buffer to avoid reallocation
+        StringPrint stringPrint(statusBuffer);
+        streamStatusJson(stringPrint);
+        
+        server.send(200, "application/json", statusBuffer);
     });
     
     server.on("/api/firmware_info", HTTP_GET, [&](){
-        String response = "{";
-        response += "\"build\":\"" + String(FIRMWARE_BUILD_DATE) + "\",";
-        response += "\"version\":\"ESP32-WebServer\"";
-
-        response += "}";
-        server.send(200, "application/json", response);
+        // Use efficient streaming for consistency
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        
+        server.sendContent("{\"build\":\"");
+        server.sendContent(FIRMWARE_BUILD_DATE);
+        server.sendContent("\",\"version\":\"ESP32-WebServer\"}");
+        server.sendContent(""); // End chunked response
     });
     
     // Debug endpoint to check filesystem
     server.on("/debug/fs", HTTP_GET, [&](){
-        String response = "FATFS Debug:\n\n";
+        String response = "=== DEBUG TEST ===\n";
+        response += "This is a test line\n\n";
+        
+        response += "FATFS Debug:\n\n";
         
         // Check if FATFS is mounted
         if (!FFat.begin()) {
@@ -327,44 +357,6 @@ void coreEndpoints(WebServer& server) {
         }
         
         server.send(200, "text/plain", response);
-    });
-    
-    // File upload endpoint for debugging
-    server.on("/debug/upload", HTTP_POST, [&](){
-        if (server.hasArg("filename") && server.hasArg("content")) {
-            String filename = server.arg("filename");
-            String content = server.arg("content");
-            String debugMsg;
-            // Ensure filename starts with /
-            if (!filename.startsWith("/")) {
-                filename = "/" + filename;
-            }
-            debugMsg += "[UPLOAD] Filename: " + filename + " (" + String(filename.length()) + ")\n";
-            debugMsg += "[UPLOAD] Content length: " + String(content.length()) + "\n";
-            File file = FFat.open(filename, "w");
-            if (file) {
-                size_t written = file.print(content);
-                file.close();
-                bool exists = FFat.exists(filename);
-                debugMsg += String("[UPLOAD] Written: ") + String(written) + ", Exists after write: " + (exists ? "YES" : "NO") + "\n";
-                server.send(200, "text/plain", "File uploaded: " + filename + "\n" + debugMsg);
-                if (debugSerial) {
-                    Serial.printf("%s", debugMsg.c_str());
-                }
-            } else {
-                debugMsg += String("[UPLOAD] Failed to create file: ") + filename + "\n";
-                server.send(500, "text/plain", "Failed to create file: " + filename + "\n" + debugMsg);
-                if (debugSerial) {
-                    Serial.printf("%s", debugMsg.c_str());
-                }
-            }
-        } else {
-            String debugMsg = "[UPLOAD] Missing filename or content parameters\n";
-            server.send(400, "text/plain", "Missing filename or content parameters\n" + debugMsg);
-            if (debugSerial) {
-                Serial.printf("%s", debugMsg.c_str());
-            }
-        }
     });
     
     // Simple file upload interface
@@ -425,13 +417,14 @@ void coreEndpoints(WebServer& server) {
             
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
-                const content = await file.text();
                 
                 try {
-                    const response = await fetch('/debug/upload', {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    const response = await fetch('/api/upload', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: 'filename=' + encodeURIComponent(file.name) + '&content=' + encodeURIComponent(content)
+                        body: formData
                     });
                     
                     const result = await response.text();
@@ -464,10 +457,17 @@ void coreEndpoints(WebServer& server) {
         delay(1000);
         ESP.restart();
     });
+
+    // GET-based restart endpoint (crash workaround)
+    server.on("/api/restart-get", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/restart-get GET requested"));
+        server.send(200, "application/json", "{\"status\":\"restarting\"}");
+        delay(1000);
+        ESP.restart();
+    });
     
     server.on("/api/output_mode", HTTP_GET, [&](){
-        String response = "{\"mode\":\"" + String(outputMode) + "\"}";
-        server.send(200, "application/json", response);
+        server.send(200, "application/json", "{\"mode\":\"digital\"}");
     });
     
     server.on("/api/output_mode", HTTP_POST, [&](){
@@ -477,7 +477,7 @@ void coreEndpoints(WebServer& server) {
             if (!err && doc.containsKey("mode")) {
                 String mode = doc["mode"];
                 if (mode == "relay" || mode == "pwm") {
-                    outputMode = OUTPUT_DIGITAL; // Fix: use proper enum value
+                    // System is always digital - no need to change anything
                     saveSettings();
                     server.send(200, "application/json", "{\"status\":\"ok\"}");
                     return;
@@ -485,6 +485,23 @@ void coreEndpoints(WebServer& server) {
             }
         }
         sendJsonError(server, "invalid_request", "Invalid mode parameter", 400);
+    });
+
+    // GET-based output mode endpoint (crash workaround)
+    server.on("/api/output_mode/set", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/output_mode/set GET requested"));
+        
+        if (server.hasArg("mode")) {
+            String mode = server.arg("mode");
+            if (mode == "relay" || mode == "pwm") {
+                // System is always digital - no need to change anything
+                saveSettings();
+                server.send(200, "application/json", "{\"status\":\"ok\",\"mode\":\"" + mode + "\"}");
+                if (debugSerial) Serial.println("[DEBUG] Output mode changed via GET: " + mode);
+                return;
+            }
+        }
+        sendJsonError(server, "invalid_request", "Invalid or missing mode parameter", 400);
     });
 }
 
@@ -564,6 +581,57 @@ void stateMachineEndpoints(WebServer& server) {
         stopBreadmaker();
         server.send(200, "application/json", "{\"status\":\"stopped\"}");
     });
+    
+    server.on("/advance", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /advance called"));
+        
+        if (!programState.isRunning) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Program not running\"}");
+            return;
+        }
+        
+        Program* p = getActiveProgramMutable();
+        if (!p || p->customStages.empty()) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"No active program\"}");
+            return;
+        }
+        
+        if (programState.customStageIdx >= p->customStages.size() - 1) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Already at last stage\"}");
+            return;
+        }
+        
+        // Manually advance to next stage
+        programState.customStageIdx++;
+        programState.customStageStart = millis();
+        
+        // Update actual stage start times array
+        if (programState.customStageIdx < 20) {
+            programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
+        }
+        
+        resetFermentationTracking(getAveragedTemperature());
+        invalidateStatusCache();
+        saveResumeState();
+        
+        if (debugSerial) Serial.printf("[MANUAL ADVANCE] Advanced to stage %d\n", (int)programState.customStageIdx);
+        
+        // Create a string stream for the JSON output  
+        String jsonOutput = "";
+        class StringPrint : public Print {
+            String* str;
+        public:
+            StringPrint(String* s) : str(s) {}
+            size_t write(uint8_t c) override { *str += (char)c; return 1; }
+            size_t write(const uint8_t *buffer, size_t size) override {
+                for (size_t i = 0; i < size; i++) *str += (char)buffer[i];
+                return size;
+            }
+        };
+        StringPrint stringPrint(&jsonOutput);
+        streamStatusJson(stringPrint);
+        server.send(200, "application/json", jsonOutput);
+    });
 }
 
 // Manual Output Endpoints
@@ -602,15 +670,16 @@ void manualOutputEndpoints(WebServer& server) {
 // PID Control Endpoints
 void pidControlEndpoints(WebServer& server) {
     server.on("/api/pid", HTTP_GET, [&](){
-        String response = "{";
-        response += "\"kp\":" + String(pid.Kp, 6) + ",";
-        response += "\"ki\":" + String(pid.Ki, 6) + ",";
-        response += "\"kd\":" + String(pid.Kd, 6) + ",";
-        response += "\"setpoint\":" + String(pid.Setpoint, 1) + ",";
-        response += "\"input\":" + String(pid.Input, 1) + ",";
-        response += "\"output\":" + String(pid.Output, 3) + "";
-        response += "}";
-        server.send(200, "application/json", response);
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        server.sendContent("{");
+        server.sendContent("\"kp\":" + String(pid.Kp, 6) + ",");
+        server.sendContent("\"ki\":" + String(pid.Ki, 6) + ",");
+        server.sendContent("\"kd\":" + String(pid.Kd, 6) + ",");
+        server.sendContent("\"setpoint\":" + String(pid.Setpoint, 1) + ",");
+        server.sendContent("\"input\":" + String(pid.Input, 1) + ",");
+        server.sendContent("\"output\":" + String(pid.Output, 3) + "");
+        server.sendContent("}");
     });
     
     server.on("/api/pid", HTTP_POST, [&](){
@@ -643,15 +712,510 @@ void pidProfileEndpoints(WebServer& server) {
 }
 
 void homeAssistantEndpoint(WebServer& server) {
-    server.on("/api/home_assistant", HTTP_GET, [&](){
-        server.send(200, "application/json", getStatusJsonString());
+    // Home Assistant integration endpoint (matches template configuration.yaml)
+    server.on("/ha", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /ha requested"));
+        
+        // Use efficient streaming instead of string concatenation
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        
+        // Stream JSON directly to avoid memory allocation issues
+        server.sendContent("{");
+        
+        // Basic status - matches template expectations
+        server.sendContent("\"state\":\"");
+        server.sendContent(programState.isRunning ? "running" : "idle");
+        server.sendContent("\",\"temperature\":");
+        server.sendContent(String(getAveragedTemperature(), 1));
+        server.sendContent(",\"setpoint\":");
+        server.sendContent(String(pid.Setpoint, 1));
+        server.sendContent(",");
+        
+        // Output states (direct boolean values as expected)
+        server.sendContent("\"motor\":");
+        server.sendContent(outputStates.motor ? "true" : "false");
+        server.sendContent(",\"light\":");
+        server.sendContent(outputStates.light ? "true" : "false");
+        server.sendContent(",\"buzzer\":");
+        server.sendContent(outputStates.buzzer ? "true" : "false");
+        server.sendContent(",\"heater\":");
+        server.sendContent(outputStates.heater ? "true" : "false");
+        server.sendContent(",\"manual_mode\":");
+        server.sendContent(programState.manualMode ? "true" : "false");
+        server.sendContent(",");
+        
+        // Program and stage info
+        if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+            Program* p = getActiveProgramMutable();
+            if (p) {
+                server.sendContent("\"program\":\"");
+                server.sendContent(p->name.c_str());
+                server.sendContent("\",");
+                
+                if (programState.isRunning && programState.customStageIdx < p->customStages.size()) {
+                    server.sendContent("\"stage\":\"");
+                    server.sendContent(p->customStages[programState.customStageIdx].label.c_str());
+                    server.sendContent("\",");
+                    
+                    // Calculate total program remaining time (stage + all remaining stages)
+                    unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+                    unsigned long stageTimeMs = getAdjustedStageTimeMs(p->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                       p->customStages[programState.customStageIdx].isFermentation);
+                    unsigned long stageTimeLeft = (stageTimeMs / 1000) - elapsed;
+                    if (stageTimeLeft < 0) stageTimeLeft = 0;
+                    
+                    // Add time for all remaining stages
+                    unsigned long totalRemainingTime = stageTimeLeft;
+                    for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
+                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
+                                                                                  p->customStages[i].isFermentation);
+                        totalRemainingTime += adjustedDurationMs / 1000;
+                    }
+                    
+                    server.sendContent("\"stage_time_left\":");
+                    server.sendContent(String(totalRemainingTime / 60)); // Convert to minutes for Home Assistant
+                    server.sendContent(",");
+                } else if (!programState.isRunning) {
+                    // Not running - calculate total program time if started now
+                    server.sendContent("\"stage\":\"Idle\",");
+                    
+                    unsigned long totalProgramTime = 0;
+                    for (size_t i = 0; i < p->customStages.size(); ++i) {
+                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
+                                                                                  p->customStages[i].isFermentation);
+                        totalProgramTime += adjustedDurationMs / 1000;
+                    }
+                    server.sendContent("\"stage_time_left\":");
+                    server.sendContent(String(totalProgramTime / 60)); // Convert to minutes for Home Assistant
+                    server.sendContent(",");
+                } else {
+                    server.sendContent("\"stage\":\"Idle\",\"stage_time_left\":0,");
+                }
+            } else {
+                server.sendContent("\"program\":\"\",\"stage\":\"Idle\",\"stage_time_left\":0,");
+            }
+        } else {
+            server.sendContent("\"program\":\"\",\"stage\":\"Idle\",\"stage_time_left\":0,");
+        }
+        
+        // Timing information (Unix timestamps as expected)
+        time_t now = time(nullptr);
+        time_t stageReadyAt = 0;
+        time_t programReadyAt = 0;
+        
+        if (programState.isRunning && programState.activeProgramId >= 0) {
+            Program* p = getActiveProgramMutable();
+            if (p && programState.customStageIdx < p->customStages.size()) {
+                unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+                unsigned long stageTimeMs = getAdjustedStageTimeMs(p->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                   p->customStages[programState.customStageIdx].isFermentation);
+                int timeLeftSec = (stageTimeMs / 1000) - elapsed;
+                if (timeLeftSec < 0) timeLeftSec = 0;
+                
+                stageReadyAt = now + timeLeftSec;
+                
+                // Calculate total program time remaining using fermentation adjustments
+                programReadyAt = stageReadyAt;
+                for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
+                    unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
+                                                                              p->customStages[i].isFermentation);
+                    programReadyAt += adjustedDurationMs / 1000;
+                }
+            }
+        }
+        
+        server.sendContent("\"stage_ready_at\":");
+        server.sendContent(String((unsigned long)stageReadyAt));
+        server.sendContent(",\"program_ready_at\":");
+        server.sendContent(String((unsigned long)programReadyAt));
+        server.sendContent(",");
+        
+        // Health section (comprehensive system information as expected by template)
+        server.sendContent("\"health\":{");
+        
+        // System info
+        server.sendContent("\"uptime_sec\":");
+        server.sendContent(String(millis() / 1000));
+        server.sendContent(",\"firmware_version\":\"ESP32-WebServer\",\"build_date\":\"");
+        server.sendContent(__DATE__);
+        server.sendContent(" ");
+        server.sendContent(__TIME__);
+        server.sendContent("\",\"reset_reason\":\"");
+        server.sendContent(String(esp_reset_reason()));
+        server.sendContent("\",\"chip_id\":\"");
+        server.sendContent(String((uint32_t)ESP.getEfuseMac(), HEX));
+        server.sendContent("\",");
+        
+        // Performance metrics
+        server.sendContent("\"performance\":{\"loop_count\":");
+        server.sendContent(String(getLoopCount()));
+        server.sendContent(",\"max_loop_time_us\":");
+        server.sendContent(String(getMaxLoopTime()));
+        server.sendContent(",\"avg_loop_time_us\":");
+        server.sendContent(String(getAverageLoopTime()));
+        server.sendContent(",\"current_loop_time_us\":");
+        server.sendContent(String(safetySystem.totalLoopTime / max(1UL, (unsigned long)safetySystem.loopCount))); // Current average
+        server.sendContent(",\"cpu_usage\":");
+        // Calculate approximate CPU usage based on loop timing
+        unsigned long avgLoopTime = getAverageLoopTime();
+        float cpuUsage = avgLoopTime > 0 ? min(100.0f, (avgLoopTime / 100000.0f) * 100.0f) : 0.0f; // Rough estimate
+        server.sendContent(String(cpuUsage, 1));
+        server.sendContent(",\"wifi_reconnects\":");
+        server.sendContent(String(getWifiReconnectCount()));
+        server.sendContent("},");
+        
+        // Memory information with fragmentation
+        server.sendContent("\"memory\":{\"free_heap\":");
+        server.sendContent(String(ESP.getFreeHeap()));
+        server.sendContent(",\"max_free_block\":");
+        server.sendContent(String(ESP.getMaxAllocHeap()));
+        server.sendContent(",\"heap_size\":");
+        server.sendContent(String(ESP.getHeapSize()));
+        server.sendContent(",\"min_free_heap\":");
+        server.sendContent(String(getMinFreeHeap()));
+        server.sendContent(",\"fragmentation\":");
+        server.sendContent(String(getHeapFragmentation(), 1));
+        server.sendContent("},");
+        
+        // PID controller information
+        server.sendContent("\"pid\":{\"kp\":");
+        server.sendContent(String(pid.Kp, 6));
+        server.sendContent(",\"ki\":");
+        server.sendContent(String(pid.Ki, 6));
+        server.sendContent(",\"kd\":");
+        server.sendContent(String(pid.Kd, 6));
+        server.sendContent(",\"output\":");
+        server.sendContent(String(pid.Output, 2));
+        server.sendContent(",\"input\":");
+        server.sendContent(String(pid.Input, 2));
+        server.sendContent(",\"setpoint\":");
+        server.sendContent(String(pid.Setpoint, 2));
+        server.sendContent(",\"sample_time_ms\":");
+        server.sendContent(String(pid.sampleTime));
+        server.sendContent(",\"active_profile\":\"");
+        server.sendContent(pid.activeProfile);
+        server.sendContent("\",\"auto_switching\":");
+        server.sendContent(pid.autoSwitching ? "true" : "false");
+        server.sendContent("},");
+        
+        // Flash information
+        server.sendContent("\"flash\":{\"size\":");
+        server.sendContent(String(ESP.getFlashChipSize()));
+        server.sendContent(",\"speed\":");
+        server.sendContent(String(ESP.getFlashChipSpeed()));
+        server.sendContent(",\"mode\":");
+        server.sendContent(String(ESP.getFlashChipMode()));
+        server.sendContent("},");
+        
+        // File System information
+        server.sendContent("\"filesystem\":{\"usedBytes\":");
+        server.sendContent(String(FFat.usedBytes()));
+        server.sendContent(",\"totalBytes\":");
+        server.sendContent(String(FFat.totalBytes()));
+        server.sendContent(",\"freeBytes\":");
+        server.sendContent(String(FFat.totalBytes() - FFat.usedBytes()));
+        float utilization = FFat.totalBytes() > 0 ? ((float)FFat.usedBytes() / FFat.totalBytes()) * 100.0 : 0.0;
+        server.sendContent(",\"utilization\":");
+        server.sendContent(String(utilization, 1));
+        server.sendContent("},");
+        
+        // Error monitoring (placeholder values - implement actual error tracking if needed)
+        server.sendContent("\"error_counts\":[0,0,0,0,0,0],");
+        
+        // Watchdog monitoring (placeholder values - implement actual watchdog if needed)
+        server.sendContent("\"watchdog_enabled\":false,");
+        server.sendContent("\"startup_complete\":true,");
+        server.sendContent("\"watchdog_last_feed\":0,");
+        server.sendContent("\"watchdog_timeout_ms\":0,");
+        
+        // Temperature control system detailed information
+        server.sendContent("\"temperature_control\":{");
+        server.sendContent("\"input\":");
+        server.sendContent(String(getAveragedTemperature(), 1));
+        server.sendContent(",\"pid_input\":");
+        server.sendContent(String(pid.Input, 1));
+        server.sendContent(",\"output\":");
+        server.sendContent(String(pid.Output, 2));
+        server.sendContent(",\"pid_output\":");
+        server.sendContent(String(pid.Output, 2));
+        server.sendContent(",\"kp\":");
+        server.sendContent(String(pid.Kp, 6));
+        server.sendContent(",\"ki\":");
+        server.sendContent(String(pid.Ki, 6));
+        server.sendContent(",\"kd\":");
+        server.sendContent(String(pid.Kd, 6));
+        server.sendContent(",\"pid_p\":");
+        server.sendContent(String(pid.pidP, 3));
+        server.sendContent(",\"pid_i\":");
+        server.sendContent(String(pid.pidI, 3));
+        server.sendContent(",\"pid_d\":");
+        server.sendContent(String(pid.pidD, 3));
+        server.sendContent(",\"sample_time_ms\":");
+        server.sendContent(String(pid.sampleTime));
+        server.sendContent(",\"raw_temp\":");
+        server.sendContent(String(readTemperature(), 1));
+        server.sendContent(",\"thermal_runaway\":");
+        server.sendContent(thermalRunawayDetected ? "true" : "false");
+        server.sendContent(",\"sensor_fault\":");
+        server.sendContent(sensorFaultDetected ? "true" : "false");
+        server.sendContent(",\"window_elapsed_ms\":");
+        server.sendContent(String((millis() - windowStartTime) % windowSize));
+        server.sendContent(",\"window_size_ms\":");
+        server.sendContent(String(windowSize));
+        server.sendContent(",\"on_time_ms\":");
+        server.sendContent(String(onTime));
+        server.sendContent(",\"duty_cycle_percent\":");
+        server.sendContent(String(windowSize > 0 ? (onTime * 100.0) / windowSize : 0.0, 1));
+        server.sendContent("},");
+        
+        // Network information
+        server.sendContent("\"network\":{\"connected\":");
+        server.sendContent(WiFi.status() == WL_CONNECTED ? "true" : "false");
+        server.sendContent(",\"ssid\":\"");
+        server.sendContent(wifiCache.getSSID());
+        server.sendContent("\",\"rssi\":");
+        server.sendContent(String(wifiCache.getRSSI()));
+        server.sendContent(",\"ip\":\"");
+        server.sendContent(wifiCache.getIPString());
+        server.sendContent("\",\"reconnect_count\":");
+        server.sendContent(String(getWifiReconnectCount()));
+        server.sendContent("}");
+        
+        server.sendContent("}"); // Close health section
+        server.sendContent("}"); // Close main object
+        server.sendContent(""); // End chunked response
     });
 }
 
 void calibrationEndpoints(WebServer& server) {
     server.on("/api/calibration", HTTP_GET, [&](){
-        String response = "{\"points\":[]}";
-        server.send(200, "application/json", response);
+        // Get current raw ADC reading and temperature
+        int currentRaw = analogRead(PIN_RTD);
+        float currentTemp = readTemperature();
+        
+        // Use efficient streaming instead of string concatenation
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        
+        server.sendContent("{\"raw\":");
+        server.sendContent(String(currentRaw));
+        server.sendContent(",\"temp\":");
+        server.sendContent(String(currentTemp, 1));
+        server.sendContent(",\"table\":[");
+        
+        for(size_t i = 0; i < rtdCalibTable.size(); i++) {
+            if(i > 0) server.sendContent(",");
+            server.sendContent("{\"raw\":");
+            server.sendContent(String(rtdCalibTable[i].raw));
+            server.sendContent(",\"temp\":");
+            server.sendContent(String(rtdCalibTable[i].temp));
+            server.sendContent("}");
+        }
+        server.sendContent("]}");
+        server.sendContent(""); // End chunked response
+    });
+    
+    // Add calibration point endpoint
+    server.on("/api/calibration/add", HTTP_POST, [&](){
+        if (server.hasArg("raw") && server.hasArg("temp")) {
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            // Add point to calibration table
+            CalibPoint newPoint = {raw, temp};
+            rtdCalibTable.push_back(newPoint);
+            
+            // Sort by raw value
+            std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                     [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+            
+            // Save to file
+            saveCalibration();
+            
+            server.send(200, "application/json", "{\"status\":\"ok\"}");
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        }
+    });
+    
+    // Update calibration point endpoint
+    server.on("/api/calibration/update", HTTP_POST, [&](){
+        if (server.hasArg("index") && server.hasArg("raw") && server.hasArg("temp")) {
+            int index = server.arg("index").toInt();
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                rtdCalibTable[index].raw = raw;
+                rtdCalibTable[index].temp = temp;
+                
+                // Sort by raw value after update
+                std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                         [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+                
+                // Save to file
+                saveCalibration();
+                
+                server.send(200, "application/json", "{\"status\":\"ok\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        }
+    });
+    
+    // Delete calibration point endpoint
+    server.on("/api/calibration/delete", HTTP_POST, [&](){
+        if (server.hasArg("index")) {
+            int index = server.arg("index").toInt();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                rtdCalibTable.erase(rtdCalibTable.begin() + index);
+                
+                // Save to file
+                saveCalibration();
+                
+                server.send(200, "application/json", "{\"status\":\"ok\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing index parameter\"}");
+        }
+    });
+    
+    // Clear all calibration points endpoint
+    server.on("/api/calibration", HTTP_DELETE, [&](){
+        rtdCalibTable.clear();
+        saveCalibration();
+        server.send(200, "application/json", "{\"status\":\"ok\"}");
+    });
+
+    // GET-based alternatives for calibration (to avoid POST crash issues)
+    
+    // Add calibration point via GET
+    server.on("/api/calibration/add-get", HTTP_GET, [&](){
+        if (server.hasArg("raw") && server.hasArg("temp")) {
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            // Validate inputs
+            if (raw < 0 || temp < -50 || temp > 200) {
+                server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
+                return;
+            }
+            
+            // Check for duplicate raw values
+            for (const auto& point : rtdCalibTable) {
+                if (point.raw == raw) {
+                    server.send(400, "application/json", "{\"error\":\"Raw value already exists\"}");
+                    return;
+                }
+            }
+            
+            // Add point to calibration table
+            CalibPoint newPoint = {raw, temp};
+            rtdCalibTable.push_back(newPoint);
+            
+            // Sort by raw value
+            std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                     [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+            
+            // Save to file
+            saveCalibration();
+            
+            if (debugSerial) {
+                Serial.printf("[CALIB] Added point: raw=%d, temp=%.2f\n", raw, temp);
+            }
+            
+            server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"added\"}");
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing raw or temp parameter\"}");
+        }
+    });
+    
+    // Update calibration point via GET
+    server.on("/api/calibration/update-get", HTTP_GET, [&](){
+        if (server.hasArg("index") && server.hasArg("raw") && server.hasArg("temp")) {
+            int index = server.arg("index").toInt();
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                // Validate inputs
+                if (raw < 0 || temp < -50 || temp > 200) {
+                    server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
+                    return;
+                }
+                
+                // Check for duplicate raw values (excluding current index)
+                for (size_t i = 0; i < rtdCalibTable.size(); i++) {
+                    if (i != index && rtdCalibTable[i].raw == raw) {
+                        server.send(400, "application/json", "{\"error\":\"Raw value already exists\"}");
+                        return;
+                    }
+                }
+                
+                // Update the point
+                rtdCalibTable[index].raw = raw;
+                rtdCalibTable[index].temp = temp;
+                
+                // Sort by raw value
+                std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                         [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+                
+                // Save to file
+                saveCalibration();
+                
+                if (debugSerial) {
+                    Serial.printf("[CALIB] Updated point %d: raw=%d, temp=%.2f\n", index, raw, temp);
+                }
+                
+                server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"updated\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        }
+    });
+    
+    // Delete calibration point via GET
+    server.on("/api/calibration/delete-get", HTTP_GET, [&](){
+        if (server.hasArg("index")) {
+            int index = server.arg("index").toInt();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                if (debugSerial) {
+                    Serial.printf("[CALIB] Deleting point %d: raw=%d, temp=%.2f\n", 
+                                  index, rtdCalibTable[index].raw, rtdCalibTable[index].temp);
+                }
+                
+                rtdCalibTable.erase(rtdCalibTable.begin() + index);
+                
+                // Save to file
+                saveCalibration();
+                
+                server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"deleted\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing index parameter\"}");
+        }
+    });
+    
+    // Clear all calibration points via GET
+    server.on("/api/calibration/clear-all", HTTP_GET, [&](){
+        if (debugSerial) {
+            Serial.printf("[CALIB] Clearing all %zu calibration points\n", rtdCalibTable.size());
+        }
+        
+        rtdCalibTable.clear();
+        saveCalibration();
+        server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"cleared\"}");
     });
 }
 
@@ -662,36 +1226,46 @@ void fileEndPoints(WebServer& server) {
         if (!folder.startsWith("/")) folder = "/" + folder;
         if (!folder.endsWith("/") && folder != "/") folder += "/";
         
-        String response = "{\"files\":[],\"folders\":[]}";
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
         
         File root = FFat.open(folder);
         if (root && root.isDirectory()) {
-            response = "{\"files\":[";
-            String folders = "\"folders\":[";
+            server.sendContent("{\"files\":[");
             
-            bool firstFile = true, firstFolder = true;
+            bool firstFile = true;
             File file = root.openNextFile();
             while (file) {
-                if (file.isDirectory()) {
-                    if (!firstFolder) folders += ",";
-                    folders += "\"" + String(file.name()) + "\"";
-                    firstFolder = false;
-                } else {
-                    if (!firstFile) response += ",";
-                    response += "{";
-                    response += "\"name\":\"" + String(file.name()) + "\",";
-                    response += "\"size\":" + String(file.size());
-                    response += "}";
+                if (!file.isDirectory()) {
+                    if (!firstFile) server.sendContent(",");
+                    server.sendContent("{\"name\":\"" + String(file.name()) + "\",");
+                    server.sendContent("\"size\":" + String(file.size()) + "}");
                     firstFile = false;
                 }
                 file = root.openNextFile();
             }
             root.close();
             
-            response += "]," + folders + "]}";
+            // Second pass for folders
+            root = FFat.open(folder);
+            server.sendContent("],\"folders\":[");
+            bool firstFolder = true;
+            if (root && root.isDirectory()) {
+                file = root.openNextFile();
+                while (file) {
+                    if (file.isDirectory()) {
+                        if (!firstFolder) server.sendContent(",");
+                        server.sendContent("\"" + String(file.name()) + "\"");
+                        firstFolder = false;
+                    }
+                    file = root.openNextFile();
+                }
+                root.close();
+            }
+            server.sendContent("]}");
+        } else {
+            server.sendContent("{\"files\":[],\"folders\":[]}");
         }
-        
-        server.send(200, "application/json", response);
     });
     
     // Delete file endpoint
@@ -765,17 +1339,14 @@ void fileEndPoints(WebServer& server) {
 
 void programsEndpoints(WebServer& server) {
     server.on("/api/programs", HTTP_GET, [&](){
-        String response = "{\"count\":" + String(getProgramCount()) + "}";
-        server.send(200, "application/json", response);
+        server.send(200, "application/json", "{\"count\":" + String(getProgramCount()) + "}");
     });
     
     server.on("/api/program", HTTP_GET, [&](){
         if (server.hasArg("id")) {
             int id = server.arg("id").toInt();
             if (id >= 0 && id < getProgramCount()) {
-                // Basic program info - could be expanded
-                String response = "{\"id\":" + String(id) + ",\"valid\":" + String(isProgramValid(id) ? "true" : "false") + "}";
-                server.send(200, "application/json", response);
+                server.send(200, "application/json", "{\"id\":" + String(id) + ",\"valid\":" + String(isProgramValid(id) ? "true" : "false") + "}");
                 return;
             }
         }
@@ -790,27 +1361,28 @@ void otaEndpoints(WebServer& server) {
     
     // OTA status endpoint - provides current OTA state
     server.on("/api/ota/status", HTTP_GET, [&](){
-        // Use actual OTA manager state
-        String json = "{";
-        json += "\"enabled\":" + String(isOTAEnabled() ? "true" : "false") + ",";
-        json += "\"inProgress\":" + String(otaStatus.inProgress ? "true" : "false") + ",";
-        json += "\"progress\":" + String(otaStatus.progress) + ",";
-        json += "\"hostname\":\"" + getOTAHostname() + "\",";
-        json += "\"error\":" + (otaStatus.error.length() > 0 ? "\"" + otaStatus.error + "\"" : "null");
-        json += "}";
-        server.send(200, "application/json", json);
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        server.sendContent("{");
+        server.sendContent("\"enabled\":" + String(isOTAEnabled() ? "true" : "false") + ",");
+        server.sendContent("\"inProgress\":" + String(otaStatus.inProgress ? "true" : "false") + ",");
+        server.sendContent("\"progress\":" + String(otaStatus.progress) + ",");
+        server.sendContent("\"hostname\":\"" + getOTAHostname() + "\",");
+        server.sendContent("\"error\":" + (otaStatus.error.length() > 0 ? "\"" + otaStatus.error + "\"" : "null"));
+        server.sendContent("}");
     });
     
     // OTA info endpoint - provides device information
     server.on("/api/ota/info", HTTP_GET, [&](){
-        String json = "{";
-        json += "\"hostname\":\"" + String(WiFi.getHostname()) + "\",";
-        json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
-        json += "\"version\":\"1.0.0\",";
-        json += "\"freeSpace\":" + String(FFat.freeBytes()) + ",";
-        json += "\"totalSpace\":" + String(FFat.totalBytes());
-        json += "}";
-        server.send(200, "application/json", json);
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        server.sendContent("{");
+        server.sendContent("\"hostname\":\"" + String(WiFi.getHostname()) + "\",");
+        server.sendContent("\"ip\":\"" + wifiCache.getIPString() + "\",");
+        server.sendContent("\"version\":\"1.0.0\",");
+        server.sendContent("\"freeSpace\":" + String(FFat.freeBytes()) + ",");
+        server.sendContent("\"totalSpace\":" + String(FFat.totalBytes()));
+        server.sendContent("}");
     });
     
     // Web-based firmware update endpoint
@@ -850,6 +1422,254 @@ void otaEndpoints(WebServer& server) {
             } else {
                 if (debugSerial) Serial.printf("[UPDATE] End failed: %s\n", Update.errorString());
             }
+        }
+    });
+    
+    // OTA firmware upload endpoint (alias for /api/update for script compatibility)
+    server.on("/api/ota/upload", HTTP_POST, [&](){
+        server.sendHeader("Connection", "close");
+        if (Update.hasError()) {
+            server.send(500, "text/plain", "OTA Update failed: " + String(Update.getError()));
+        } else {
+            server.send(200, "text/plain", "OTA Update successful! Rebooting...");
+            delay(100);
+            ESP.restart();
+        }
+    }, [&](){
+        // Handle firmware upload (same as /api/update)
+        HTTPUpload& upload = server.upload();
+        
+        if (upload.status == UPLOAD_FILE_START) {
+            if (debugSerial) Serial.printf("[OTA] Starting firmware update: %s\n", upload.filename.c_str());
+            
+            // Begin firmware update
+            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+                if (debugSerial) Serial.printf("[OTA] Begin failed: %s\n", Update.errorString());
+                return;
+            }
+            
+        } else if (upload.status == UPLOAD_FILE_WRITE) {
+            // Write firmware data
+            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+                if (debugSerial) Serial.printf("[OTA] Write failed: %s\n", Update.errorString());
+                return;
+            }
+            
+        } else if (upload.status == UPLOAD_FILE_END) {
+            // Complete firmware update
+            if (Update.end(true)) {
+                if (debugSerial) Serial.printf("[OTA] Firmware update completed: %u bytes\n", upload.totalSize);
+            } else {
+                if (debugSerial) Serial.printf("[OTA] End failed: %s\n", Update.errorString());
+            }
+        }
+    });
+    
+    // Missing /api/settings endpoint for debug serial configuration
+    server.on("/api/settings", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/settings GET requested"));
+        String json = "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + 
+                     ",\"safetyEnabled\":" + String(safetySystem.safetyEnabled ? "true" : "false") + "}";
+        server.send(200, "application/json", json);
+    });
+    
+    server.on("/api/settings", HTTP_POST, [&](){
+        // Immediate response before any processing
+        server.send(200, "text/plain", "OK");
+        
+        // Minimal logging without any request body access
+        if (debugSerial) Serial.println(F("[POST] Received"));
+    });
+
+    // Alternative GET-based settings change (workaround for POST issues)
+    server.on("/api/settings/debug", HTTP_GET, [&](){
+        if (server.hasArg("enabled")) {
+            String enabledVal = server.arg("enabled");
+            if (enabledVal == "true") {
+                debugSerial = true;
+                Serial.println(F("[DEBUG] Debug serial ENABLED via GET"));
+            } else if (enabledVal == "false") {
+                debugSerial = false;
+                Serial.println(F("[DEBUG] Debug serial DISABLED via GET"));
+            }
+            
+            // Schedule save
+            pendingSettingsSaveTime = millis() + 1000;
+            
+            server.send(200, "application/json", "{\"debugSerial\":" + String(debugSerial ? "true" : "false") + ",\"saved\":\"scheduled\"}");
+        } else {
+            server.send(400, "text/plain", "Missing 'enabled' parameter");
+        }
+    });
+
+    // Test endpoint that does try to save settings
+    server.on("/api/settings/force-save", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] Force save requested"));
+        
+        server.send(200, "text/plain", "SAVING");
+        
+        // Try the save operation that might be causing crashes
+        pendingSettingsSaveTime = millis() + 1000; // Schedule save in 1 second
+        
+        if (debugSerial) Serial.println(F("[DEBUG] Save scheduled"));
+    });
+    
+    // Minimal debug endpoint to test file system - temporarily disabled
+    /*
+    server.on("/api/settings/test-fs", HTTP_GET, [&](){
+        // Commented out for debugging
+    });
+    */
+
+    // Simple safety toggle endpoint
+    server.on("/api/safety/toggle", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/safety/toggle POST requested"));
+        
+        // Toggle safety state
+        safetySystem.safetyEnabled = !safetySystem.safetyEnabled;
+        
+        // Clear emergency shutdown when safety is disabled
+        if (!safetySystem.safetyEnabled) {
+            safetySystem.emergencyShutdown = false;
+            safetySystem.shutdownReason = "";
+            if (debugSerial) Serial.println("[SAFETY] Emergency shutdown cleared (safety disabled)");
+        }
+        
+        if (debugSerial) Serial.printf("[SAFETY] Safety system toggled to: %s\n", safetySystem.safetyEnabled ? "enabled" : "DISABLED");
+        
+        // Send response immediately
+        String json = "{\"safetyEnabled\":" + String(safetySystem.safetyEnabled ? "true" : "false") + "}";
+        server.send(200, "application/json", json);
+        
+        // Schedule deferred save
+        pendingSettingsSaveTime = millis() + 500;
+        if (debugSerial) Serial.println("[DEBUG] Settings save scheduled for safety toggle");
+    });
+
+    // GET-based safety toggle endpoint (crash workaround)
+    server.on("/api/safety/toggle-get", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/safety/toggle-get GET requested"));
+        
+        // Toggle safety state
+        safetySystem.safetyEnabled = !safetySystem.safetyEnabled;
+        
+        // Clear emergency shutdown when safety is disabled
+        if (!safetySystem.safetyEnabled) {
+            safetySystem.emergencyShutdown = false;
+            safetySystem.shutdownReason = "";
+            if (debugSerial) Serial.println("[SAFETY] Emergency shutdown cleared (safety disabled)");
+        }
+        
+        if (debugSerial) Serial.printf("[SAFETY] Safety system toggled to: %s\n", safetySystem.safetyEnabled ? "enabled" : "DISABLED");
+        
+        // Send response immediately
+        String json = "{\"safetyEnabled\":" + String(safetySystem.safetyEnabled ? "true" : "false") + "}";
+        server.send(200, "application/json", json);
+        
+        // Schedule deferred save
+        pendingSettingsSaveTime = millis() + 500;
+        if (debugSerial) Serial.println("[DEBUG] Settings save scheduled for safety toggle");
+    });
+    
+    // Display screensaver control endpoints
+    server.on("/api/display/screensaver/status", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/display/screensaver/status requested"));
+        String json = "{\"active\":" + String(isScreensaverActive() ? "true" : "false") + "}";
+        server.send(200, "application/json", json);
+    });
+    
+    server.on("/api/display/screensaver/enable", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/display/screensaver/enable requested"));
+        enableScreensaver();
+        server.send(200, "application/json", "{\"status\":\"screensaver_enabled\"}");
+    });
+    
+    server.on("/api/display/screensaver/disable", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/display/screensaver/disable requested"));
+        disableScreensaver();
+        server.send(200, "application/json", "{\"status\":\"screensaver_disabled\"}");
+    });
+    
+    server.on("/api/display/activity", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/display/activity requested"));
+        updateActivityTime();
+        server.send(200, "application/json", "{\"status\":\"activity_updated\"}");
+    });
+    
+    // Missing /api/pid_profile endpoint for PID profile management
+    server.on("/api/pid_profile", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile GET requested"));
+        
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        server.sendContent("{\"profiles\":[");
+        server.sendContent("{\"key\":\"default\",\"kp\":" + String(pid.Kp) + ",");
+        server.sendContent("\"ki\":" + String(pid.Ki) + ",");
+        server.sendContent("\"kd\":" + String(pid.Kd) + ",");
+        server.sendContent("\"windowMs\":" + String(pid.sampleTime) + "}");
+        server.sendContent("]}");
+    });
+    
+    server.on("/api/pid_profile", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile POST requested"));
+        
+        if (server.hasArg("plain")) {
+            String body = server.arg("plain");
+            DynamicJsonDocument doc(1024);
+            DeserializationError error = deserializeJson(doc, body);
+            
+            if (!error && doc.containsKey("kp") && doc.containsKey("ki") && doc.containsKey("kd")) {
+                double kp = doc["kp"].as<double>();
+                double ki = doc["ki"].as<double>();
+                double kd = doc["kd"].as<double>();
+                
+                // Update PID parameters
+                pid.Kp = kp;
+                pid.Ki = ki;
+                pid.Kd = kd;
+                
+                // Update controller if it exists
+                if (pid.controller) {
+                    pid.controller->SetTunings(kp, ki, kd);
+                }
+                
+                // savePIDProfiles(); // TODO: Implement savePIDProfiles() function
+                
+                server.send(200, "application/json", "{\"status\":\"ok\",\"kp\":" + String(kp) + ",\"ki\":" + String(ki) + ",\"kd\":" + String(kd) + "}");
+                if (debugSerial) Serial.printf("[DEBUG] PID parameters updated: Kp=%.3f, Ki=%.3f, Kd=%.3f\n", kp, ki, kd);
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid JSON or missing PID parameters\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing request body\"}");
+        }
+    });
+
+    // GET-based PID profile endpoint (crash workaround)
+    server.on("/api/pid_profile/set", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile/set GET requested"));
+        
+        if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
+            double kp = server.arg("kp").toDouble();
+            double ki = server.arg("ki").toDouble();
+            double kd = server.arg("kd").toDouble();
+            
+            // Update PID parameters
+            pid.Kp = kp;
+            pid.Ki = ki;
+            pid.Kd = kd;
+            
+            // Update controller if it exists
+            if (pid.controller) {
+                pid.controller->SetTunings(kp, ki, kd);
+            }
+            
+            // savePIDProfiles(); // TODO: Implement savePIDProfiles() function
+            
+            server.send(200, "application/json", "{\"status\":\"ok\",\"kp\":" + String(kp) + ",\"ki\":" + String(ki) + ",\"kd\":" + String(kd) + "}");
+            if (debugSerial) Serial.printf("[DEBUG] PID parameters updated via GET: Kp=%.3f, Ki=%.3f, Kd=%.3f\n", kp, ki, kd);
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing PID parameters (kp, ki, kd required)\"}");
         }
     });
 }
@@ -916,8 +1736,12 @@ void registerWebEndpoints(WebServer& server) {
             // 3. Set programState.activeProgramId = programId
             programState.activeProgramId = programId;
             
-            // 4. Call updateActiveProgramVars() if it exists
-            // TODO: Add updateActiveProgramVars() call when function is available
+            // 4. Call updateActiveProgramVars() to refresh program state
+            updateActiveProgramVars();
+            
+            // 5. Invalidate status cache and save state
+            invalidateStatusCache();
+            saveResumeState();
             
             if (debugSerial) {
                 Serial.printf("[DEBUG] Successfully selected program ID %d: %s\n", 
@@ -937,8 +1761,50 @@ void registerWebEndpoints(WebServer& server) {
             if (debugSerial) {
                 Serial.printf("[DEBUG] Start at stage: %d\n", stage);
             }
-            // TODO: Add actual start at stage logic here
-            // For now, return success
+            
+            if (programState.activeProgramId >= getProgramCount()) { 
+                stopBreadmaker();
+                server.send(400, "application/json", "{\"error\":\"No valid program selected\"}");
+                return; 
+            }
+            
+            Program *p = getActiveProgramMutable();
+            if (!p) {
+                Serial.printf_P(PSTR("[ERROR] /start_at_stage: Unable to get active program\n"));
+                stopBreadmaker();
+                server.send(400, "application/json", "{\"error\":\"Cannot access active program\"}");
+                return;
+            }
+            
+            size_t numStages = p->customStages.size();
+            if (numStages == 0) {
+                Serial.printf_P(PSTR("[ERROR] /start_at_stage: Program has zero stages\n"));
+                stopBreadmaker();
+                server.send(400, "application/json", "{\"error\":\"Program has no stages\"}");
+                return;
+            }
+            
+            if (stage < 0 || stage >= (int)numStages) {
+                server.send(400, "application/json", "{\"error\":\"Invalid stage number\"}");
+                return;
+            }
+            
+            // Set the starting stage
+            programState.customStageIdx = stage;
+            programState.customStageStart = millis();
+            programState.customMixStepStart = 0;
+            programState.isRunning = true;
+            if (stage == 0) {
+                programState.programStartTime = time(nullptr);
+            }
+            invalidateStatusCache();
+            
+            // Record actual start time of this stage
+            if (stage < (int)numStages && stage < MAX_PROGRAM_STAGES) {
+                programState.actualStageStartTimes[stage] = time(nullptr);
+            }
+            
+            saveResumeState();
             server.send(200, "application/json", "{\"status\":\"ok\",\"stage\":" + String(stage) + "}");
         } else {
             server.send(400, "application/json", "{\"error\":\"Missing stage parameter\"}");
@@ -950,7 +1816,12 @@ void registerWebEndpoints(WebServer& server) {
         if (debugSerial) {
             Serial.println("[DEBUG] Pause requested");
         }
-        // TODO: Add actual pause logic here (set programState.isRunning = false)
+        programState.isRunning = false;
+        invalidateStatusCache();
+        setMotor(false);
+        setHeater(false);
+        setLight(false);
+        saveResumeState();
         server.send(200, "application/json", "{\"status\":\"paused\"}");
     });
     
@@ -959,7 +1830,15 @@ void registerWebEndpoints(WebServer& server) {
         if (debugSerial) {
             Serial.println("[DEBUG] Resume requested");
         }
-        // TODO: Add actual resume logic here (set programState.isRunning = true)
+        programState.isRunning = true;
+        invalidateStatusCache();
+        // Do NOT reset actualStageStartTimes[customStageIdx] on resume if it was already set.
+        // Only set it if it was never set (i.e., just started this stage for the first time).
+        if (programState.customStageIdx < MAX_PROGRAM_STAGES && 
+            programState.actualStageStartTimes[programState.customStageIdx] == 0) {
+            programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
+        }
+        saveResumeState();
         server.send(200, "application/json", "{\"status\":\"running\"}");
     });
     
@@ -968,8 +1847,53 @@ void registerWebEndpoints(WebServer& server) {
         if (debugSerial) {
             Serial.println("[DEBUG] Back/previous stage requested");
         }
-        // TODO: Add actual back logic here (decrement stage index)
-        server.send(200, "application/json", "{\"status\":\"ok\"}");
+        
+        if (programState.activeProgramId >= getProgramCount()) { 
+            stopBreadmaker();
+            server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"No valid program\"}");
+            return; 
+        }
+        
+        Program *p = getActiveProgramMutable();
+        if (!p) {
+            Serial.printf_P(PSTR("[ERROR] /back: Unable to get active program\n"));
+            stopBreadmaker();
+            server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"Cannot access active program\"}");
+            return;
+        }
+        
+        size_t numStages = p->customStages.size();
+        if (numStages == 0) {
+            Serial.printf_P(PSTR("[ERROR] /back: Program at id %u has zero stages\n"), 
+                           (unsigned)programState.activeProgramId);
+            stopBreadmaker();
+            server.send(200, "application/json", "{\"status\":\"error\",\"message\":\"Program has no stages\"}");
+            return;
+        }
+        
+        // Go to previous stage (wrap to last stage if at beginning)
+        if (programState.customStageIdx > 0) {
+            programState.customStageIdx--;
+        } else {
+            programState.customStageIdx = numStages - 1;
+        }
+        
+        programState.customStageStart = millis();
+        programState.customMixStepStart = 0;
+        programState.isRunning = true;
+        if (programState.customStageIdx == 0) {
+            programState.programStartTime = time(nullptr);
+        }
+        invalidateStatusCache();
+        
+        // Record actual start time of this stage when going back
+        if (programState.customStageIdx < numStages && 
+            programState.customStageIdx < MAX_PROGRAM_STAGES) {
+            programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
+        }
+        
+        saveResumeState();
+        server.send(200, "application/json", "{\"status\":\"ok\",\"stage\":" + String(programState.customStageIdx) + "}");
     });
     
     server.on("/api/manual_mode", HTTP_GET, [&](){
@@ -979,12 +1903,13 @@ void registerWebEndpoints(WebServer& server) {
             if (debugSerial) {
                 Serial.printf("[DEBUG] Manual mode: %s\n", manualMode ? "ON" : "OFF");
             }
-            // TODO: Add actual manual mode logic here (set programState.manualMode)
+            programState.manualMode = manualMode;
+            invalidateStatusCache();
+            saveSettings();
             server.send(200, "application/json", "{\"status\":\"ok\",\"manual_mode\":" + String(manualMode ? "true" : "false") + "}");
         } else {
             // Return current manual mode status
-            // TODO: Return actual manual mode state from programState.manualMode
-            server.send(200, "application/json", "{\"manual_mode\":false}");
+            server.send(200, "application/json", "{\"manual_mode\":" + String(programState.manualMode ? "true" : "false") + "}");
         }
     });
     
@@ -995,12 +1920,60 @@ void registerWebEndpoints(WebServer& server) {
             if (debugSerial) {
                 Serial.printf("[DEBUG] Temperature setpoint: %.1f\n", setpoint);
             }
-            // TODO: Add actual temperature setpoint logic here (set PID setpoint)
+            // Set PID setpoint for manual temperature control
+            pid.Setpoint = setpoint;
+            invalidateStatusCache();
             server.send(200, "application/json", "{\"status\":\"ok\",\"setpoint\":" + String(setpoint) + "}");
         } else {
-            // Return current temperature - this should work with existing code
-            float currentTemp = readTemperature();
-            server.send(200, "application/json", "{\"temperature\":" + String(currentTemp) + "}");
+            // Return current temperature and setpoint
+            float currentTemp = getAveragedTemperature();
+            server.send(200, "application/json", "{\"temperature\":" + String(currentTemp) + ",\"setpoint\":" + String(pid.Setpoint) + "}");
+        }
+    });
+    
+    // Missing API endpoints for output control (expected by script.js)
+    server.on("/api/heater", HTTP_GET, [&](){
+        if (server.hasArg("on")) {
+            bool on = server.arg("on") == "1";
+            setHeater(on);
+            invalidateStatusCache();
+            server.send(200, "application/json", "{\"heater\":" + String(on ? "true" : "false") + "}");
+        } else {
+            server.send(200, "application/json", "{\"heater\":" + String(outputStates.heater ? "true" : "false") + "}");
+        }
+    });
+    
+    server.on("/api/motor", HTTP_GET, [&](){
+        if (server.hasArg("on")) {
+            bool on = server.arg("on") == "1";
+            setMotor(on);
+            invalidateStatusCache();
+            server.send(200, "application/json", "{\"motor\":" + String(on ? "true" : "false") + "}");
+        } else {
+            server.send(200, "application/json", "{\"motor\":" + String(outputStates.motor ? "true" : "false") + "}");
+        }
+    });
+    
+    server.on("/api/light", HTTP_GET, [&](){
+        if (server.hasArg("on")) {
+            bool on = server.arg("on") == "1";
+            setLight(on);
+            if (on) lightOnTime = millis();
+            invalidateStatusCache();
+            server.send(200, "application/json", "{\"light\":" + String(on ? "true" : "false") + "}");
+        } else {
+            server.send(200, "application/json", "{\"light\":" + String(outputStates.light ? "true" : "false") + "}");
+        }
+    });
+    
+    server.on("/api/buzzer", HTTP_GET, [&](){
+        if (server.hasArg("on")) {
+            bool on = server.arg("on") == "1";
+            setBuzzer(on);
+            invalidateStatusCache();
+            server.send(200, "application/json", "{\"buzzer\":" + String(on ? "true" : "false") + "}");
+        } else {
+            server.send(200, "application/json", "{\"buzzer\":" + String(outputStates.buzzer ? "true" : "false") + "}");
         }
     });
     
