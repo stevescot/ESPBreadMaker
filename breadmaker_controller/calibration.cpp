@@ -59,6 +59,17 @@ float tempFromRaw(int raw) {
 
 float readTemperature() {
   int raw = analogRead(PIN_RTD);  // RTD on ESP32 analog pin
+  
+  // CRITICAL SAFETY CHECK: If raw reading is zero, immediately turn off heater
+  if (raw == 0) {
+    Serial.println("CRITICAL SAFETY ALERT: Raw temperature reading is ZERO - sensor failure detected!");
+    Serial.println("Immediately shutting off heater for safety");
+    // Turn off heater immediately for safety
+    extern void setHeater(bool);  // Forward declaration
+    setHeater(false);
+    return -999.0f;  // Return error value to indicate sensor failure
+  }
+  
   float temp = tempFromRaw(raw);
   
   // Temperature sensor fault detection

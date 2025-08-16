@@ -12,6 +12,9 @@
 #include <WiFi.h>
 #endif
 
+// External function declarations
+extern float readTemperature(); // Raw temperature reading from calibration.cpp
+
 // Define build date if not already defined - force rebuild each time
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
@@ -549,6 +552,12 @@ void streamStatusJson(Print& out) {
   float temp = getAveragedTemperature();
   out.printf("\"temperature\":%.1f,", temp);
   out.printf("\"temp\":%.1f,", temp);
+  
+  // Add raw (unfiltered) temperature reading
+  float rawTemp = readTemperature();
+  out.printf("\"rawTemperature\":%.1f,", rawTemp);
+  out.printf("\"tempRaw\":%.1f,", rawTemp);
+  
   out.printf("\"setTemp\":%.1f,", pid.Setpoint);
   
   out.print("\"heater\":");

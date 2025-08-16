@@ -21,6 +21,16 @@ bool lightState = false;
 bool buzzerState = false;
 
 void setHeater(bool on) {
+  // CRITICAL SAFETY CHECK: Don't allow heater to turn on if temperature sensor is failed
+  if (on) {
+    extern float readTemperature();  // Forward declaration
+    float currentTemp = readTemperature();
+    if (currentTemp <= -999.0f) {  // Error value indicating sensor failure
+      if (debugSerial) Serial.println("[SAFETY] Heater turn-on BLOCKED - temperature sensor failure detected!");
+      on = false;  // Force heater off for safety
+    }
+  }
+  
   if (heaterState == on) return;
   heaterState = on;
   outputStates.heater = on;  // Keep struct in sync

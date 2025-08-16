@@ -1179,6 +1179,20 @@ void calibrationEndpoints(WebServer& server) {
             int raw = server.arg("raw").toInt();
             float temp = server.arg("temp").toFloat();
             
+            // Validate inputs - allow raw=0 for high temperature calibration points (updated limit: 250°C)
+            if (raw < 0 || temp < -50 || temp > 250) {
+                server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
+                return;
+            }
+            
+            // Check for duplicate raw values
+            for (const auto& point : rtdCalibTable) {
+                if (point.raw == raw) {
+                    server.send(400, "application/json", "{\"error\":\"Raw value already exists\"}");
+                    return;
+                }
+            }
+            
             // Add point to calibration table
             CalibPoint newPoint = {raw, temp};
             rtdCalibTable.push_back(newPoint);
@@ -1258,7 +1272,7 @@ void calibrationEndpoints(WebServer& server) {
             int raw = server.arg("raw").toInt();
             float temp = server.arg("temp").toFloat();
             
-            // Validate inputs
+            // Validate inputs - allow raw=0 for high temperature calibration points (updated limit: 250°C)
             if (raw < 0 || temp < -50 || temp > 250) {
                 server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
                 return;
@@ -1301,7 +1315,7 @@ void calibrationEndpoints(WebServer& server) {
             float temp = server.arg("temp").toFloat();
             
             if (index >= 0 && index < rtdCalibTable.size()) {
-                // Validate inputs
+                // Validate inputs (updated limit: 250°C)
                 if (raw < 0 || temp < -50 || temp > 250) {
                     server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
                     return;

@@ -25,6 +25,21 @@ async function updateStatus() {
     const response = await fetchWithTimeout('/api/status', 5000);
     if (!response.ok) throw new Error('Failed to fetch status');
     const data = await response.json();
+    
+    // Fetch raw temperature from calibration endpoint
+    let rawTemperature = data.temperature || data.temp; // fallback to averaged
+    try {
+      const calibResponse = await fetchWithTimeout('/api/calibration', 3000);
+      if (calibResponse.ok) {
+        const calibData = await calibResponse.json();
+        // Use the 'temp' field from calibration which is the raw reading
+        if (calibData.temp !== undefined) {
+          rawTemperature = calibData.temp;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to fetch raw temperature from calibration endpoint:', err);
+    }
 
     // PID P, I, D terms - use available data from status API
     if (document.getElementById('pidPTerm')) {
@@ -50,8 +65,8 @@ async function updateStatus() {
     // Averaged temp (map from temperature field)
     chartData.datasets[0].data.push(data.temperature || data.temp);
     if (chartData.datasets[0].data.length > 300) chartData.datasets[0].data.shift();
-    // Raw temp (use same as averaged since raw_temp not available)
-    chartData.datasets[1].data.push(data.temperature || data.temp);
+    // Raw temp (use raw temperature from calibration endpoint)
+    chartData.datasets[1].data.push(rawTemperature);
     if (chartData.datasets[1].data.length > 300) chartData.datasets[1].data.shift();
     // Setpoint
     chartData.datasets[2].data.push(data.setpoint);
