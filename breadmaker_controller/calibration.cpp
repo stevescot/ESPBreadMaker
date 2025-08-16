@@ -62,7 +62,7 @@ float readTemperature() {
   float temp = tempFromRaw(raw);
   
   // Temperature sensor fault detection
-  if (temp > 200.0f || temp < -40.0f) {
+  if (temp > 250.0f || temp < -40.0f) {
     Serial.println("WARNING: Temperature sensor fault detected - extreme reading: " + String(temp) + "°C");
     Serial.println("Raw ADC value: " + String(raw));
     return 25.0f;  // Return safe room temperature default

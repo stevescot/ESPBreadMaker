@@ -1259,7 +1259,7 @@ void calibrationEndpoints(WebServer& server) {
             float temp = server.arg("temp").toFloat();
             
             // Validate inputs
-            if (raw < 0 || temp < -50 || temp > 200) {
+            if (raw < 0 || temp < -50 || temp > 250) {
                 server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
                 return;
             }
@@ -1302,7 +1302,7 @@ void calibrationEndpoints(WebServer& server) {
             
             if (index >= 0 && index < rtdCalibTable.size()) {
                 // Validate inputs
-                if (raw < 0 || temp < -50 || temp > 200) {
+                if (raw < 0 || temp < -50 || temp > 250) {
                     server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
                     return;
                 }

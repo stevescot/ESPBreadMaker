@@ -37,13 +37,13 @@
     <div style="margin-top: 1em;">
       <div style="margin-bottom: 1em;">
         <h3 style="margin: 0.5em 0;">Add Current Reading</h3>
-        <input type="number" id="newTemp" step="0.01" placeholder="Measured °C">
+        <input type="number" id="newTemp" step="0.01" min="-50" max="250" placeholder="Measured °C (up to 250°C)">
         <button id="addPoint">Add Current Reading</button>
       </div>
       <div style="margin-bottom: 1em; padding: 1em; border: 1px solid #555; border-radius: 4px; background: #2a2a2a;">
         <h3 style="margin: 0.5em 0;">Add Manual Point</h3>
         <input type="number" id="manualRaw" placeholder="Raw value" style="width: 80px; margin-right: 0.5em;">
-        <input type="number" id="manualTemp" step="0.01" placeholder="Temperature °C" style="width: 100px; margin-right: 0.5em;">
+        <input type="number" id="manualTemp" step="0.01" min="-50" max="250" placeholder="Temperature °C (up to 250°C)" style="width: 140px; margin-right: 0.5em;">
         <button id="addManual">Add Manual Point</button>
       </div>
       <button id="clearAll" style="background: #f44336;">Clear All</button>

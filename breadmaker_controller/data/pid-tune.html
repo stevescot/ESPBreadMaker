@@ -13,7 +13,7 @@
     <a href="/">🏠 Home</a>
     <a href="/config.html">⚙️ Config</a>
     <a href="/programs.html">📝 Programs</a>
-    <a href="/calibration.html">🌡️ Calibration</a>
+    <a href="/calibration.html">🌡️ Calibrati      document.getElementById('liveTempSampleInterval').textContent = data.temp_sample_interval ?? '--';</a>
     <a href="/pid-tune.html" class="active">🔥 PID Tuning</a>
     <a href="/update.html">⬆️ Update</a>
   </nav>
@@ -209,15 +209,7 @@
             0.01 = very smooth/slow, 0.1 = balanced, 0.5 = very responsive/noisy.
           </div>
           
-          <div class="param-row">
-            <label class="param-label">Spike Threshold:</label>
-            <input type="number" id="tempSpikeThreshold" class="param-input" step="0.5" min="1.0" max="10.0" value="5.0">
-            <span class="param-unit">°C</span>
-          </div>
-          <div class="param-desc">
-            <strong>Spike Detection:</strong> Ignore temperature readings that change by more than this amount. 
-            Protects against sensor glitches and noise spikes.
-          </div>
+
           
           <div class="param-row">
             <label class="param-label">Update Interval:</label>
@@ -464,10 +456,6 @@
               <span class="status-value" id="currentTempAlpha">--</span>
             </div>
             <div class="status-row">
-              <span class="status-label">Spike Threshold:</span>
-              <span class="status-value" id="currentTempSpikeThreshold">-- °C</span>
-            </div>
-            <div class="status-row">
               <span class="status-label">Update Rate:</span>
               <span class="status-value" id="currentTempInterval">-- ms</span>
             </div>
@@ -540,7 +528,6 @@
       document.getElementById('liveWindowSize').textContent = data.window_size_ms ?? '--';
       document.getElementById('liveOnTime').textContent = data.on_time ?? '--';
       document.getElementById('liveTempAlpha').textContent = data.temp_alpha ?? '--';
-      document.getElementById('liveTempSpikeThreshold').textContent = data.temp_spike_threshold ?? '--';
       document.getElementById('liveTempInterval').textContent = data.temp_sample_interval ?? '--';
       document.getElementById('liveManualMode').textContent = data.manualMode ?? '--';
       document.getElementById('livePhase').textContent = data.phase ?? '--';

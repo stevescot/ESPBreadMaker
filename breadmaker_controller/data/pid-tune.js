@@ -425,7 +425,6 @@ function initChart() {
 // Update EWMA temperature parameters only
 async function updateTempEWMA() {
   const tempAlpha = parseFloat(document.getElementById('tempAlpha').value);
-  const tempSpikeThreshold = parseFloat(document.getElementById('tempSpikeThreshold').value);
   const tempUpdateInterval = parseInt(document.getElementById('tempUpdateInterval').value);
 
   // Validate EWMA parameters
@@ -433,15 +432,10 @@ async function updateTempEWMA() {
     showMessage('Invalid alpha: must be between 0.01 and 0.5', 'error');
     return;
   }
-  
-  if (tempSpikeThreshold < 1.0 || tempSpikeThreshold > 10.0) {
-    showMessage('Invalid spike threshold: must be between 1.0°C and 10.0°C', 'error');
-    return;
-  }
 
   try {
-    const url = `/api/pid_params?temp_alpha=${tempAlpha}&temp_spike_threshold=${tempSpikeThreshold}&temp_interval=${tempUpdateInterval}`;
-    console.log('Updating EWMA parameters:', { tempAlpha, tempSpikeThreshold, tempUpdateInterval });
+    const url = `/api/pid_params?temp_alpha=${tempAlpha}&temp_interval=${tempUpdateInterval}`;
+    console.log('Updating EWMA parameters:', { tempAlpha, tempUpdateInterval });
     
     const response = await fetchWithTimeout(url, 10000);
     const result = await response.json();
@@ -460,15 +454,13 @@ async function updateTempEWMA() {
         
         // Check if the values were actually updated
         const currentAlpha = document.getElementById('currentTempAlpha').textContent;
-        const currentThreshold = document.getElementById('currentTempSpikeThreshold').textContent;
         const currentInterval = document.getElementById('currentTempInterval').textContent;
         
         const alphaMatch = currentAlpha.includes(tempAlpha.toString());
-        const thresholdMatch = currentThreshold.includes(tempSpikeThreshold.toString());
         const intervalMatch = currentInterval.includes(tempUpdateInterval.toString());
         
-        if (!alphaMatch || !thresholdMatch || !intervalMatch) {
-          console.log(`EWMA values not yet updated (attempt ${attempt}): alpha=${alphaMatch}, threshold=${thresholdMatch}, interval=${intervalMatch}`);
+        if (!alphaMatch || !intervalMatch) {
+          console.log(`EWMA values not yet updated (attempt ${attempt}): alpha=${alphaMatch}, interval=${intervalMatch}`);
           if (attempt < maxAttempts) {
             setTimeout(() => refreshWithRetry(attempt + 1, maxAttempts), 1500);
           } else {
@@ -504,7 +496,6 @@ async function updatePIDParams() {
   const sampleTime = parseInt(document.getElementById('sampleTimeInput').value);
   const windowSize = parseInt(document.getElementById('windowSizeInput').value);
   const tempAlpha = parseFloat(document.getElementById('tempAlpha').value);
-  const tempSpikeThreshold = parseFloat(document.getElementById('tempSpikeThreshold').value);
   const tempUpdateInterval = parseInt(document.getElementById('tempUpdateInterval').value);
 
   // Validate EWMA parameters
@@ -512,13 +503,8 @@ async function updatePIDParams() {
     showMessage('Invalid alpha: must be between 0.01 and 0.5', 'error');
     return;
   }
-  
-  if (tempSpikeThreshold < 1.0 || tempSpikeThreshold > 10.0) {
-    showMessage('Invalid spike threshold: must be between 1.0°C and 10.0°C', 'error');
-    return;
-  }
 
-  console.log('Updating PID params:', { kp, ki, kd, sampleTime, windowSize, tempAlpha, tempSpikeThreshold, tempUpdateInterval });
+  console.log('Updating PID params:', { kp, ki, kd, sampleTime, windowSize, tempAlpha, tempUpdateInterval });
 
   try {
     // Use POST request with JSON body for PID parameter updates
@@ -620,9 +606,6 @@ async function loadCurrentParams() {
     if (ewmaData.temp_alpha !== undefined) {
       document.getElementById('tempAlpha').value = ewmaData.temp_alpha.toFixed(4);
     }
-    if (ewmaData.temp_spike_threshold !== undefined) {
-      document.getElementById('tempSpikeThreshold').value = ewmaData.temp_spike_threshold.toFixed(1);
-    }
     if (ewmaData.temp_sample_interval !== undefined) {
       document.getElementById('tempUpdateInterval').value = ewmaData.temp_sample_interval.toString();
     }
@@ -636,9 +619,6 @@ async function loadCurrentParams() {
     // Update current EWMA display
     if (ewmaData.temp_alpha !== undefined) {
       document.getElementById('currentTempAlpha').textContent = ewmaData.temp_alpha.toFixed(4);
-    }
-    if (ewmaData.temp_spike_threshold !== undefined) {
-      document.getElementById('currentTempSpikeThreshold').textContent = ewmaData.temp_spike_threshold.toFixed(1) + ' °C';
     }
     if (ewmaData.temp_sample_interval !== undefined) {
       document.getElementById('currentTempInterval').textContent = ewmaData.temp_sample_interval + ' ms';
@@ -663,16 +643,10 @@ async function loadCurrentParams() {
 // Validate EWMA parameters (simplified since EWMA has fewer constraints)
 function validateEWMAParams() {
   const alpha = parseFloat(document.getElementById('tempAlpha').value);
-  const spikeThreshold = parseFloat(document.getElementById('tempSpikeThreshold').value);
   
   if (alpha < 0.01 || alpha > 0.5) {
     document.getElementById('tempAlpha').value = Math.max(0.01, Math.min(0.5, alpha));
     showMessage('Alpha constrained to valid range (0.01 - 0.5)', 'warning');
-  }
-  
-  if (spikeThreshold < 1.0 || spikeThreshold > 10.0) {
-    document.getElementById('tempSpikeThreshold').value = Math.max(1.0, Math.min(10.0, spikeThreshold));
-    showMessage('Spike threshold constrained to valid range (1.0°C - 10.0°C)', 'warning');
   }
 }
 
@@ -786,7 +760,6 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Add temperature averaging validation handlers
   document.getElementById('tempAlpha').addEventListener('change', validateEWMAParams);
-  document.getElementById('tempSpikeThreshold').addEventListener('change', validateEWMAParams);
   
   // Initialize method description
   updateAutoTuneMethodDescription();
