@@ -43,8 +43,8 @@
     },
     {
       "label": "Bake",
-      "min": 40,
-      "temp": 190,
+      "min": 50,
+      "temp": 175,
       "noMix": true
     },
     {

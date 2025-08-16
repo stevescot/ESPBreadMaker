@@ -422,6 +422,33 @@ curl -X POST http://192.168.250.125/api/restart
 - **Temperature accuracy**: ±1°C with EWMA smoothing
 - **System uptime**: 24/7 operation without restarts
 
+### Timing Display Fix
+Fixed inconsistency between main "Time Left" display and completion timestamps.
+
+#### Problem Identified
+- **Main display showed**: Stage time remaining (7.6 hours)
+- **Completion timestamp showed**: 18:12 (39 minutes from 16:33)
+- **Actual program remaining**: 6.5 hours (23,554 seconds)
+
+#### Root Cause
+JavaScript was using `timeLeft`/`adjustedTimeLeft` (stage-specific) instead of `remainingTime` (total program) for main display.
+
+#### Solution
+```javascript
+// FIXED: Use total program remaining time for main display
+if (s.running && typeof s.remainingTime === 'number' && s.remainingTime > 0) {
+  timeLeft = s.remainingTime;  // Total program time
+} else if (stageReadyAt > 0) {
+  timeLeft = Math.max(0, Math.round(stageReadyAt - (now / 1000)));  // Fallback to stage time
+}
+```
+
+#### API Fields Clarification
+- **`timeLeft`** - Time remaining in current stage only
+- **`adjustedTimeLeft`** - Fermentation-adjusted time remaining in current stage
+- **`remainingTime`** - Total program time remaining (use for main display)
+- **`programReadyAt`** - Absolute timestamp when program completes
+
 ---
 
 ## How to Add Documentation

@@ -243,4 +243,171 @@ int findProgramIdByName(const String& name) {
   return -1;
 }
 
+bool splitProgramsJson() {
+  // Split main programs.json into individual program files and metadata index
+  // MEMORY OPTIMIZED: Process programs one at a time instead of loading entire array
+  Serial.println("[INFO] Starting programs.json split operation (memory optimized)");
+  
+  // Read the main programs.json file
+  File mainFile = FFat.open("/programs.json", "r");
+  if (!mainFile || mainFile.size() == 0) {
+    if (mainFile) mainFile.close();
+    Serial.println("[ERROR] programs.json not found or empty");
+    return false;
+  }
+  
+  Serial.printf("[INFO] programs.json found, size: %zu bytes (Free heap: %u bytes)\n", 
+                mainFile.size(), ESP.getFreeHeap());
+  
+  // Create programs directory if it doesn't exist
+  if (!FFat.exists("/programs")) {
+    FFat.mkdir("/programs");
+    Serial.println("[INFO] Created /programs directory");
+  }
+  
+  // Use smaller buffer and parse the array manually
+  // Read just enough to get the array structure
+  String content;
+  content.reserve(mainFile.size() + 100); // Reserve space to avoid reallocations
+  
+  while (mainFile.available()) {
+    content += mainFile.readString();
+  }
+  mainFile.close();
+  
+  Serial.printf("[INFO] File content loaded (Free heap: %u bytes)\n", ESP.getFreeHeap());
+  
+  // Quick validation
+  if (!content.startsWith("[") || !content.endsWith("]")) {
+    Serial.println("[ERROR] programs.json is not a valid array");
+    return false;
+  }
+  
+  // Remove outer brackets and whitespace
+  content = content.substring(1, content.length() - 1);
+  content.trim();
+  
+  // Prepare metadata collection (smaller buffer)
+  DynamicJsonDocument metaDoc(1024);
+  JsonArray metaArray = metaDoc.to<JsonArray>();
+  
+  int successCount = 0;
+  int startPos = 0;
+  
+  // Split on top-level commas (between program objects)
+  while (startPos < content.length()) {
+    int nextComma = -1;
+    int braceDepth = 0;
+    bool inString = false;
+    bool escaped = false;
+    
+    // Find the next top-level comma or end of content
+    for (int i = startPos; i < content.length(); i++) {
+      char c = content[i];
+      
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      
+      if (c == '\\') {
+        escaped = true;
+        continue;
+      }
+      
+      if (c == '"') {
+        inString = !inString;
+        continue;
+      }
+      
+      if (!inString) {
+        if (c == '{') {
+          braceDepth++;
+        } else if (c == '}') {
+          braceDepth--;
+        } else if (c == ',' && braceDepth == 0) {
+          nextComma = i;
+          break;
+        }
+      }
+    }
+    
+    // Extract program JSON
+    String programJson;
+    if (nextComma != -1) {
+      programJson = content.substring(startPos, nextComma);
+      startPos = nextComma + 1;
+    } else {
+      programJson = content.substring(startPos);
+      startPos = content.length(); // End the loop
+    }
+    
+    programJson.trim();
+    if (programJson.length() == 0) continue;
+    
+    // Parse individual program with minimal memory
+    DynamicJsonDocument programDoc(1024); // Smaller buffer per program
+    DeserializationError err = deserializeJson(programDoc, programJson);
+    
+    if (err) {
+      Serial.printf("[WARNING] Failed to parse program: %s\n", err.c_str());
+      continue;
+    }
+    
+    JsonObject program = programDoc.as<JsonObject>();
+    
+    if (!program.containsKey("id")) {
+      Serial.println("[WARNING] Skipping program without id");
+      continue;
+    }
+    
+    int programId = program["id"];
+    String filename = "/programs/program_" + String(programId) + ".json";
+    
+    // Write individual program file
+    File progFile = FFat.open(filename, "w");
+    if (!progFile) {
+      Serial.printf("[ERROR] Failed to create %s\n", filename.c_str());
+      continue;
+    }
+    
+    serializeJson(program, progFile);
+    progFile.close();
+    
+    Serial.printf("[INFO] Created %s (Free heap: %u bytes)\n", filename.c_str(), ESP.getFreeHeap());
+    successCount++;
+    
+    // Create metadata object for index
+    JsonObject meta = metaArray.createNestedObject();
+    meta["id"] = program["id"];
+    meta["name"] = program["name"];
+    if (program.containsKey("notes")) meta["notes"] = program["notes"];
+    if (program.containsKey("icon")) meta["icon"] = program["icon"];
+    if (program.containsKey("fermentBaselineTemp")) meta["fermentBaselineTemp"] = program["fermentBaselineTemp"];
+    if (program.containsKey("fermentQ10")) meta["fermentQ10"] = program["fermentQ10"];
+    
+    // Force garbage collection between programs
+    programDoc.clear();
+  }
+  
+  // Create programs_index.json with metadata
+  File indexFile = FFat.open("/programs_index.json", "w");
+  if (!indexFile) {
+    Serial.println("[ERROR] Failed to create programs_index.json");
+    return false;
+  }
+  
+  serializeJson(metaDoc, indexFile);
+  indexFile.close();
+  
+  Serial.printf("[INFO] Created programs_index.json with %d programs\n", metaArray.size());
+  Serial.printf("[INFO] Split operation complete: %d programs processed successfully (Free heap: %u bytes)\n", 
+                successCount, ESP.getFreeHeap());
+  
+  // Reload metadata to reflect changes
+  loadProgramMetadata();
+  
+  return successCount > 0;
+}
+
 

@@ -55,6 +55,7 @@ extern Program activeProgram; // Only the currently active program is fully load
 // --- Program management functions ---
 void loadProgramMetadata(); // Load only names and basic info
 bool loadSpecificProgram(int programId); // Load full program data for specific program
+bool splitProgramsJson(); // Split main programs.json into individual files and index
 
 // --- Helper functions ---
 bool isProgramLoaded(int programId); // Check if a program is currently loaded

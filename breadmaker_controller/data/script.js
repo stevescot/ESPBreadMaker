@@ -69,6 +69,37 @@ function toGCalDate(date) {
     pad(date.getUTCSeconds()) + 'Z';
 }
 
+// ---- Program Selection Management ----
+function populateProgramSelect() {
+  const programSelect = document.getElementById('programSelect');
+  if (!programSelect || !window.cachedPrograms) return;
+
+  // Clear existing options
+  programSelect.innerHTML = '<option value="">Select a program...</option>';
+  
+  // Add programs as options
+  window.cachedPrograms.forEach(program => {
+    if (program.valid !== false) { // Only show valid programs
+      const option = document.createElement('option');
+      option.value = program.id;
+      option.textContent = program.name;
+      programSelect.appendChild(option);
+    }
+  });
+  
+  // Add change event listener
+  programSelect.onchange = function() {
+    const selectedProgramId = parseInt(this.value);
+    if (selectedProgramId >= 0) {
+      populateStageDropdown(selectedProgramId);
+    } else {
+      // Hide stage selection if no program selected
+      const startAtStageRow = document.getElementById('startAtStageRow');
+      if (startAtStageRow) startAtStageRow.style.display = 'none';
+    }
+  };
+}
+
 // ---- Stage Dropdown Population ----
 function populateStageDropdown(programIdx) {
   const stageSelect = document.getElementById('stageSelect');
@@ -690,10 +721,15 @@ function updateCountdownDisplay() {
     return;
   }
 
-  if (stageReadyAt > 0) {
+  // FIXED: Use total program remaining time instead of stage time for main display
+  if (s.running && typeof s.remainingTime === 'number' && s.remainingTime > 0) {
+    // Use total program remaining time for main "Time Left" display
+    timeLeft = s.remainingTime;
+  } else if (stageReadyAt > 0) {
+    // Fallback to stage time if program time not available
     timeLeft = Math.max(0, Math.round(stageReadyAt - (now / 1000)));
   } else if (typeof s.timeLeft === 'number') {
-    // fallback if stageReadyAt missing - use adjustedTimeLeft for fermentation stages
+    // Further fallback if stageReadyAt missing - use adjustedTimeLeft for fermentation stages
     let elapsed = Math.floor((now - lastStatusTime) / 1000);
     
     // For fermentation stages, use adjustedTimeLeft (real clock time)
@@ -1197,6 +1233,8 @@ window.updateStatus = function(s) {
 window.addEventListener('DOMContentLoaded', () => {
   // Fetch programs first, then initialize UI
   fetchProgramsOnce(() => {
+    // Populate program selector after programs are loaded
+    populateProgramSelect();
     // Immediately update status after programs are loaded
     window.updateStatus();
     // Set up periodic status updates to keep everything in sync

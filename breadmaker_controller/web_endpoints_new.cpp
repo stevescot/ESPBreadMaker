@@ -242,6 +242,13 @@ void coreEndpoints(WebServer& server) {
                         Serial.printf("[UPLOAD] Failed: %s\n", upload.filename.c_str());
                     } else {
                         Serial.printf("[UPLOAD] Success: %s (%u bytes)\n", upload.filename.c_str(), upload.totalSize);
+                        
+                        // Check if main programs.json was uploaded - trigger split
+                        String filename = upload.filename;
+                        if (filename == "/programs.json") {
+                            if (debugSerial) Serial.println("[UPLOAD] Main programs.json detected - triggering split to individual files");
+                            splitProgramsJson();
+                        }
                     }
                 }
             }
@@ -726,7 +733,7 @@ void pidControlEndpoints(WebServer& server) {
     
     // PID parameters endpoint for EMA temperature averaging and other settings
     server.on("/api/pid_params", HTTP_GET, [&](){
-        if (server.hasArg("temp_alpha") || server.hasArg("temp_interval") || server.hasArg("temp_spike_threshold") || 
+        if (server.hasArg("temp_alpha") || server.hasArg("temp_interval") || 
             server.hasArg("temp_samples") || server.hasArg("temp_reject")) {
             bool updated = false;
             
@@ -752,7 +759,8 @@ void pidControlEndpoints(WebServer& server) {
                 }
             }
             
-            // Legacy temp_reject - convert to spike threshold
+            /*
+            // Legacy temp_reject - convert to spike threshold (DISABLED)
             if (server.hasArg("temp_reject")) {
                 int reject = server.arg("temp_reject").toInt();
                 if (reject >= 0 && reject <= 10) {
@@ -764,7 +772,7 @@ void pidControlEndpoints(WebServer& server) {
                 }
             }
             
-            // Direct spike threshold parameter (preferred)
+            // Direct spike threshold parameter (DISABLED)
             if (server.hasArg("temp_spike_threshold")) {
                 float threshold = server.arg("temp_spike_threshold").toFloat();
                 if (threshold >= 0.5 && threshold <= 20.0) {
@@ -773,6 +781,7 @@ void pidControlEndpoints(WebServer& server) {
                     if (debugSerial) Serial.printf("[TEMP-EMA] Spike threshold updated to %.1f°C\n", threshold);
                 }
             }
+            */
             
             // Update temperature sample interval
             if (server.hasArg("temp_interval")) {
@@ -804,10 +813,10 @@ void pidControlEndpoints(WebServer& server) {
             sprintf(buffer, "\"temp_sample_count\":%d,", equivalent_samples);
             server.sendContent(buffer);
             
-            int equivalent_reject = (int)(10.0 - tempAvg.spikeThreshold);
-            if (equivalent_reject < 0) equivalent_reject = 0;
-            if (equivalent_reject > 10) equivalent_reject = 10;
-            sprintf(buffer, "\"temp_reject_count\":%d,", equivalent_reject);
+            // int equivalent_reject = (int)(10.0 - tempAvg.spikeThreshold);
+            // if (equivalent_reject < 0) equivalent_reject = 0;
+            // if (equivalent_reject > 10) equivalent_reject = 10;
+            sprintf(buffer, "\"temp_reject_count\":%d,", 0); // Spike detection disabled
             server.sendContent(buffer);
             
             sprintf(buffer, "\"temp_sample_interval\":%lu,", tempAvg.updateInterval);
@@ -828,14 +837,14 @@ void pidControlEndpoints(WebServer& server) {
             // New EMA-specific parameters
             sprintf(buffer, ",\"temp_alpha\":%.4f", tempAvg.alpha);
             server.sendContent(buffer);
-            sprintf(buffer, ",\"temp_spike_threshold\":%.1f", tempAvg.spikeThreshold);
-            server.sendContent(buffer);
+            // sprintf(buffer, ",\"temp_spike_threshold\":%.1f", tempAvg.spikeThreshold);
+            // server.sendContent(buffer);
             sprintf(buffer, ",\"temp_sample_count_total\":%lu", tempAvg.sampleCount);
             server.sendContent(buffer);
             sprintf(buffer, ",\"temp_last_accepted\":%.2f", tempAvg.lastCalibratedTemp);
             server.sendContent(buffer);
-            sprintf(buffer, ",\"temp_consecutive_spikes\":%u", tempAvg.consecutiveSpikes);
-            server.sendContent(buffer);
+            // sprintf(buffer, ",\"temp_consecutive_spikes\":%u", tempAvg.consecutiveSpikes);
+            // server.sendContent(buffer);
             
             server.sendContent("}");
         }

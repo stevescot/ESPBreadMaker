@@ -88,7 +88,9 @@ void updateTemperatureSampling() {
         // Take a new temperature sample using the calibrated readTemperature function
         float calibratedTemp = readTemperature();
         
-        // Spike detection with intelligent stuck-state recovery
+        // Spike detection disabled - accepting all temperature readings
+        // (Removed due to false positives after reboots)
+        /*
         if (tempAvg.initialized) {
             float tempChange = abs(calibratedTemp - tempAvg.lastCalibratedTemp);
             if (tempChange > tempAvg.spikeThreshold) {
@@ -119,6 +121,7 @@ void updateTemperatureSampling() {
                 tempAvg.consecutiveSpikes = 0;
             }
         }
+        */
         
         // Initialize EMA with first valid reading
         if (!tempAvg.initialized) {
@@ -139,7 +142,7 @@ void updateTemperatureSampling() {
         // Optional: Log every 10th sample for debugging
         if (debugSerial && (tempAvg.sampleCount % 10 == 0)) {
             Serial.printf("[TEMP-EMA] Sample #%u: Raw=%.2f°C, Smoothed=%.2f°C, α=%.3f\n", 
-                         tempAvg.sampleCount, rawTemp, tempAvg.smoothedTemperature, tempAvg.alpha);
+                         tempAvg.sampleCount, calibratedTemp, tempAvg.smoothedTemperature, tempAvg.alpha);
         }
     }
 }
@@ -775,6 +778,7 @@ unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentat
 }
 
 // Update fermentation cache - only recalculate when program or stage changes
+// NOTE: Cache now uses fermentState.predictedCompleteTime for consistency with programReadyAt
 void updateFermentationCache() {
   // Check if cache is still valid
   bool cacheValid = fermentCache.isValid && 
@@ -848,13 +852,17 @@ void updateFermentationCache() {
     
     fermentCache.cachedProgramEndTime = runningTime;
     
-    // Calculate timing data for UI
-    if (programState.actualStageStartTimes[0] > 0) {
+    // Calculate timing data for UI - use fermentState.predictedCompleteTime for consistency
+    if (programState.actualStageStartTimes[0] > 0 && fermentState.predictedCompleteTime > 0) {
       time_t programStart = programState.actualStageStartTimes[0];
+      time_t currentTime = time(nullptr);
+      
+      // Use the same timing source as programReadyAt for consistency
+      fermentCache.cachedProgramEndTime = fermentState.predictedCompleteTime;
       fermentCache.cachedTotalDuration = fermentCache.cachedProgramEndTime - programStart;
-      fermentCache.cachedElapsedTime = time(nullptr) - programStart;
-      fermentCache.cachedRemainingTime = (fermentCache.cachedProgramEndTime > time(nullptr)) ? 
-                                        (fermentCache.cachedProgramEndTime - time(nullptr)) : 0;
+      fermentCache.cachedElapsedTime = currentTime - programStart;
+      fermentCache.cachedRemainingTime = (fermentCache.cachedProgramEndTime > currentTime) ? 
+                                        (fermentCache.cachedProgramEndTime - currentTime) : 0;
     } else {
       fermentCache.cachedTotalDuration = 0;
       fermentCache.cachedElapsedTime = 0;

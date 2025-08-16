@@ -301,6 +301,14 @@
         <button id="btnSetStartAt" style="padding:0.3em 0.6em;border-radius:4px;background:#2196f3;color:#fff;border:none;cursor:pointer;">Set Time Only</button>
       </div>
       
+      <!-- Program Selection -->
+      <div id="programSelectRow" style="display:flex;align-items:center;justify-content:center;margin-bottom:0.7em;gap:0.7em;flex-wrap:wrap;">
+        <label for="programSelect" style="font-size:1em;color:#ffe;font-weight:bold;">Select Program:</label>
+        <select id="programSelect" style="padding:0.3em;border-radius:4px;border:1px solid #666;background:#333;color:#fff;min-width:12em;">
+          <option value="">Loading programs...</option>
+        </select>
+      </div>
+      
       <!-- Stage Selection (shown when program selected) -->
       <div id="startAtStageRow" style="display:none;align-items:center;justify-content:center;margin-bottom:0.7em;gap:0.7em;flex-wrap:wrap;">
         <label for="stageSelect" style="font-size:1em;color:#ffe;font-weight:bold;">Start at Stage:</label>

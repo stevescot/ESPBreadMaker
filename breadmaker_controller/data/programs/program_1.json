@@ -90,14 +90,14 @@
     },
     {
       "label": "Bake 1",
-      "min": 20,
-      "temp": 230,
+      "min": 30,
+      "temp": 175,
       "noMix": true
     },
     {
       "label": "Bake 2",
-      "min": 25,
-      "temp": 230,
+      "min": 35,
+      "temp": 175,
       "noMix": true
     },
     {
