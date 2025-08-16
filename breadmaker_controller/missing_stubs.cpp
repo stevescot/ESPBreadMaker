@@ -86,11 +86,11 @@ void updateTemperatureSampling() {
         tempAvg.lastUpdate = nowMs;
         
         // Take a new temperature sample using the calibrated readTemperature function
-        float rawTemp = readTemperature();
+        float calibratedTemp = readTemperature();
         
         // Spike detection with intelligent stuck-state recovery
         if (tempAvg.initialized) {
-            float tempChange = abs(rawTemp - tempAvg.lastRawTemp);
+            float tempChange = abs(calibratedTemp - tempAvg.lastCalibratedTemp);
             if (tempChange > tempAvg.spikeThreshold) {
                 // Count consecutive spikes
                 tempAvg.consecutiveSpikes++;
@@ -98,19 +98,19 @@ void updateTemperatureSampling() {
                 // If we've had many consecutive "spikes", the EWMA might be stuck at wrong value
                 if (tempAvg.consecutiveSpikes >= 10) {
                     // Reset EWMA to current reading - the "spikes" are probably correct
-                    tempAvg.smoothedTemperature = rawTemp;
-                    tempAvg.lastRawTemp = rawTemp;
+                    tempAvg.smoothedTemperature = calibratedTemp;
+                    tempAvg.lastCalibratedTemp = calibratedTemp;
                     tempAvg.consecutiveSpikes = 0;
                     
                     if (debugSerial) {
                         Serial.printf("[TEMP-EMA] RESET: %d consecutive spikes detected, resetting EWMA to %.2f°C\n", 
-                                    10, rawTemp);
+                                    10, calibratedTemp);
                     }
                 } else {
                     // Normal spike detection - ignore this reading
                     if (debugSerial) {
                         Serial.printf("[TEMP-EMA] Spike %d/10: %.2f°C change (%.2f -> %.2f), ignoring\n", 
-                                    tempAvg.consecutiveSpikes, tempChange, tempAvg.lastRawTemp, rawTemp);
+                                    tempAvg.consecutiveSpikes, tempChange, tempAvg.lastCalibratedTemp, calibratedTemp);
                     }
                     return;
                 }
@@ -122,18 +122,18 @@ void updateTemperatureSampling() {
         
         // Initialize EMA with first valid reading
         if (!tempAvg.initialized) {
-            tempAvg.smoothedTemperature = rawTemp;
+            tempAvg.smoothedTemperature = calibratedTemp;
             tempAvg.initialized = true;
             if (debugSerial) {
-                Serial.printf("[TEMP-EMA] Initialized with %.2f°C\n", rawTemp);
+                Serial.printf("[TEMP-EMA] Initialized with %.2f°C\n", calibratedTemp);
             }
         } else {
             // Apply Exponential Moving Average: new = α × current + (1-α) × previous
-            tempAvg.smoothedTemperature = tempAvg.alpha * rawTemp + 
+            tempAvg.smoothedTemperature = tempAvg.alpha * calibratedTemp + 
                                         (1.0 - tempAvg.alpha) * tempAvg.smoothedTemperature;
         }
         
-        tempAvg.lastRawTemp = rawTemp;
+        tempAvg.lastCalibratedTemp = calibratedTemp;
         tempAvg.sampleCount++;
         
         // Optional: Log every 10th sample for debugging

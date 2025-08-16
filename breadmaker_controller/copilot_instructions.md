@@ -1,11 +1,23 @@
 # Copilot Instructions for Breadmaker Controller
 
-## attitude
-if you have made changes, recompile to confirm they are succesful
-if there are compile errors attempt a fix first, do this a maximum 3 times before asking for confirmation
+## Attitude
+If you have made changes, recompile to confirm they are successful. If there are compile errors, attempt a fix first, do this a maximum 3 times before asking for confirmation.
 
-## Project Overview
-This project is an ESP32-based breadmaker controller with a web UI, stage-based breadmaking logic, and persistent storage using FFat filesystem. It supports program editing, calibration, OTA firmware updates, and live status monitoring.
+## Primary Documentation
+**📖 See `CODE_DOCUMENTATION.md` for comprehensive technical documentation including:**
+- Complete system architecture and memory optimization guidelines
+- Temperature control system (EWMA) implementation details  
+- Web endpoint specifications and optimization patterns
+- Safety systems, build procedures, and development guidelines
+
+**🚨 DOCUMENTATION POLICY: ALL future documentation MUST be added to `CODE_DOCUMENTATION.md`**
+- Do NOT create new standalone .md files for technical documentation
+- Add new content to the appropriate section in `CODE_DOCUMENTATION.md`
+- If creating a new major feature, add a new section with proper heading hierarchy
+- Update the Table of Contents when adding new sections
+- Keep documentation current with code changes
+
+## Quick Reference
 
 ## Device Connection & Authentication
 - **Device IP**: 192.168.250.125
@@ -59,6 +71,64 @@ This project is an ESP32-based breadmaker controller with a web UI, stage-based 
   - `calibration.html`: Temperature calibration
   - `update.html`: OTA firmware update
   - `programs.json`: Array of program objects (not an object)
+
+## Memory Optimization Guidelines (CRITICAL)
+
+### String() Concatenation is FORBIDDEN
+**NEVER use String() concatenation in web endpoints** - it causes severe memory fragmentation on ESP32.
+
+#### ❌ WRONG (causes heap fragmentation):
+```cpp
+server.sendContent("\"temperature\":" + String(temperature, 2) + ",");
+server.send(200, "application/json", "{\"value\":" + String(value) + "}");
+```
+
+#### ✅ CORRECT (memory efficient):
+```cpp
+// For streaming endpoints (preferred):
+char buffer[64];  // Stack allocated, reusable
+sprintf(buffer, "\"temperature\":%.2f,", temperature);
+server.sendContent(buffer);
+
+// For simple responses:
+server.send(200, "application/json", temperature > 25 ? "{\"hot\":true}" : "{\"hot\":false}");
+
+// For complex JSON:
+server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+server.send(200, "application/json", "");
+server.sendContent("{");
+sprintf(buffer, "\"temp\":%.1f,", temp);
+server.sendContent(buffer);
+server.sendContent("\"status\":\"ok\"}");
+```
+
+#### Memory Impact:
+- **String() concatenation**: ~24 bytes overhead + heap allocation per String object
+- **sprintf() approach**: 0 bytes overhead, fixed stack allocation, zero fragmentation
+- **Critical endpoints**: `/api/status`, `/api/pid`, `/api/pid_params`, toggle endpoints
+- **Result**: 200-400+ bytes saved per request, eliminates heap fragmentation
+
+#### Best Practices:
+1. **Use `sprintf()` with stack-allocated char buffers** for numeric formatting
+2. **Use static string literals** for boolean values (`"true"` vs `"false"`)
+3. **Use streaming with `server.sendContent()`** for complex JSON
+4. **Follow the `streamStatusJson()` pattern** in `missing_stubs.cpp` as the gold standard
+5. **Debug endpoints can use String concatenation** (development only, not performance critical)
+
+### Example Optimized Endpoint:
+```cpp
+server.on("/api/example", HTTP_GET, [&](){
+    char buffer[128];  // Stack allocated, efficient
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "application/json", "");
+    server.sendContent("{");
+    sprintf(buffer, "\"temperature\":%.2f,", getTemperature());
+    server.sendContent(buffer);
+    server.sendContent("\"active\":");
+    server.sendContent(isActive ? "true" : "false");
+    server.sendContent("}");
+});
+```
 
 ## Web Endpoints
 - `/status`: Returns JSON with current state, timing, and `stageStartTimes` (epoch seconds for each stage)

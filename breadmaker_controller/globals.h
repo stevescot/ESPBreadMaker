@@ -44,7 +44,7 @@ struct TemperatureEMAState {
     bool initialized = false;           // Has the EMA been seeded with a value?
     unsigned long lastUpdate = 0;       // Last update timestamp
     unsigned long updateInterval = 500; // Update interval in milliseconds
-    float lastRawTemp = 0.0;           // For spike detection
+    float lastCalibratedTemp = 0.0;     // Last accepted calibrated temperature (for spike detection)
     uint32_t sampleCount = 0;          // Total samples processed (for statistics)
     uint16_t consecutiveSpikes = 0;    // Counter for stuck-state detection
 };

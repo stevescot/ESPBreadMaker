@@ -537,10 +537,16 @@ void stateMachineEndpoints(WebServer& server) {
                     return;
                 }
                 scheduledStartStage = stageIdx;
-                server.send(200, "application/json", "{\"status\":\"Scheduled to start at stage " + String(stageIdx + 1) + " at " + t + "\"}");
+                // Ultra-efficient: Use sprintf instead of String concatenation
+                char buffer[128];
+                sprintf(buffer, "{\"status\":\"Scheduled to start at stage %d at %s\"}", stageIdx + 1, t.c_str());
+                server.send(200, "application/json", buffer);
             } else {
                 scheduledStartStage = -1;
-                server.send(200, "application/json", "{\"status\":\"Scheduled to start at " + t + "\"}");
+                // Ultra-efficient: Use sprintf instead of String concatenation
+                char buffer[128];
+                sprintf(buffer, "{\"status\":\"Scheduled to start at %s\"}", t.c_str());
+                server.send(200, "application/json", buffer);
             }
             return;
         }
@@ -639,25 +645,29 @@ void manualOutputEndpoints(WebServer& server) {
     server.on("/toggle_heater", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[MANUAL] Toggle heater"));
         setHeater(!heaterState);
-        server.send(200, "application/json", "{\"heater\":" + String(heaterState ? "true" : "false") + "}");
+        // Ultra-efficient: Use static strings instead of String concatenation
+        server.send(200, "application/json", heaterState ? "{\"heater\":true}" : "{\"heater\":false}");
     });
     
     server.on("/toggle_motor", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[MANUAL] Toggle motor"));
         setMotor(!motorState);
-        server.send(200, "application/json", "{\"motor\":" + String(motorState ? "true" : "false") + "}");
+        // Ultra-efficient: Use static strings instead of String concatenation
+        server.send(200, "application/json", motorState ? "{\"motor\":true}" : "{\"motor\":false}");
     });
     
     server.on("/toggle_light", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[MANUAL] Toggle light"));
         setLight(!lightState);
-        server.send(200, "application/json", "{\"light\":" + String(lightState ? "true" : "false") + "}");
+        // Ultra-efficient: Use static strings instead of String concatenation
+        server.send(200, "application/json", lightState ? "{\"light\":true}" : "{\"light\":false}");
     });
     
     server.on("/toggle_buzzer", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[MANUAL] Toggle buzzer"));
         setBuzzer(!buzzerState);
-        server.send(200, "application/json", "{\"buzzer\":" + String(buzzerState ? "true" : "false") + "}");
+        // Ultra-efficient: Use static strings instead of String concatenation
+        server.send(200, "application/json", buzzerState ? "{\"buzzer\":true}" : "{\"buzzer\":false}");
     });
     
     server.on("/beep", HTTP_GET, [&](){
@@ -670,15 +680,25 @@ void manualOutputEndpoints(WebServer& server) {
 // PID Control Endpoints
 void pidControlEndpoints(WebServer& server) {
     server.on("/api/pid", HTTP_GET, [&](){
+        // Ultra-efficient: Use sprintf with stack buffer instead of String concatenation
+        char buffer[128];  // Stack allocated, much more efficient than String objects
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
         server.sendContent("{");
-        server.sendContent("\"kp\":" + String(pid.Kp, 6) + ",");
-        server.sendContent("\"ki\":" + String(pid.Ki, 6) + ",");
-        server.sendContent("\"kd\":" + String(pid.Kd, 6) + ",");
-        server.sendContent("\"setpoint\":" + String(pid.Setpoint, 1) + ",");
-        server.sendContent("\"input\":" + String(pid.Input, 1) + ",");
-        server.sendContent("\"output\":" + String(pid.Output, 3) + "");
+        
+        sprintf(buffer, "\"kp\":%.6f,", pid.Kp);
+        server.sendContent(buffer);
+        sprintf(buffer, "\"ki\":%.6f,", pid.Ki);
+        server.sendContent(buffer);
+        sprintf(buffer, "\"kd\":%.6f,", pid.Kd);
+        server.sendContent(buffer);
+        sprintf(buffer, "\"setpoint\":%.1f,", pid.Setpoint);
+        server.sendContent(buffer);
+        sprintf(buffer, "\"input\":%.1f,", pid.Input);
+        server.sendContent(buffer);
+        sprintf(buffer, "\"output\":%.3f", pid.Output);
+        server.sendContent(buffer);
+        
         server.sendContent("}");
     });
     
@@ -771,31 +791,52 @@ void pidControlEndpoints(WebServer& server) {
             }
         } else {
             // Return current EMA temperature settings with legacy compatibility
+            // Ultra-efficient: Use sprintf with stack buffer instead of String concatenation
+            char buffer[128];  // Stack allocated, much more efficient than String objects
             server.setContentLength(CONTENT_LENGTH_UNKNOWN);
             server.send(200, "application/json", "");
             server.sendContent("{");
+            
             // Legacy compatibility - convert EMA parameters back to old format for web UI
             int equivalent_samples = (int)(2.0 / tempAvg.alpha) - 1;
             if (equivalent_samples < 5) equivalent_samples = 5;
             if (equivalent_samples > 100) equivalent_samples = 100;
-            server.sendContent("\"temp_sample_count\":" + String(equivalent_samples) + ",");
+            sprintf(buffer, "\"temp_sample_count\":%d,", equivalent_samples);
+            server.sendContent(buffer);
             
             int equivalent_reject = (int)(10.0 - tempAvg.spikeThreshold);
             if (equivalent_reject < 0) equivalent_reject = 0;
             if (equivalent_reject > 10) equivalent_reject = 10;
-            server.sendContent("\"temp_reject_count\":" + String(equivalent_reject) + ",");
+            sprintf(buffer, "\"temp_reject_count\":%d,", equivalent_reject);
+            server.sendContent(buffer);
             
-            server.sendContent("\"temp_sample_interval\":" + String(tempAvg.updateInterval) + ",");
+            sprintf(buffer, "\"temp_sample_interval\":%lu,", tempAvg.updateInterval);
+            server.sendContent(buffer);
             server.sendContent("\"temp_samples_ready\":");
             server.sendContent(tempAvg.initialized ? "true" : "false");
-            server.sendContent(",\"averaged_temperature\":" + String(tempAvg.smoothedTemperature, 2));
+            
+            sprintf(buffer, ",\"averaged_temperature\":%.2f", tempAvg.smoothedTemperature);
+            server.sendContent(buffer);
+            
+            // Add true raw ADC reading for comparison
+            int currentRawADC = analogRead(PIN_RTD);
+            sprintf(buffer, ",\"temp_raw_adc\":%d", currentRawADC);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"temp_calibrated_current\":%.2f", readTemperature());
+            server.sendContent(buffer);
             
             // New EMA-specific parameters
-            server.sendContent(",\"temp_alpha\":" + String(tempAvg.alpha, 4));
-            server.sendContent(",\"temp_spike_threshold\":" + String(tempAvg.spikeThreshold, 1));
-            server.sendContent(",\"temp_sample_count_total\":" + String(tempAvg.sampleCount));
-            server.sendContent(",\"temp_last_raw\":" + String(tempAvg.lastRawTemp, 2));
-            server.sendContent(",\"temp_consecutive_spikes\":" + String(tempAvg.consecutiveSpikes));
+            sprintf(buffer, ",\"temp_alpha\":%.4f", tempAvg.alpha);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"temp_spike_threshold\":%.1f", tempAvg.spikeThreshold);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"temp_sample_count_total\":%lu", tempAvg.sampleCount);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"temp_last_accepted\":%.2f", tempAvg.lastCalibratedTemp);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"temp_consecutive_spikes\":%u", tempAvg.consecutiveSpikes);
+            server.sendContent(buffer);
+            
             server.sendContent("}");
         }
     });
@@ -818,15 +859,18 @@ void homeAssistantEndpoint(WebServer& server) {
         server.send(200, "application/json", "");
         
         // Stream JSON directly to avoid memory allocation issues
+        char buffer[64];  // Stack allocated buffer for numeric conversions
         server.sendContent("{");
         
         // Basic status - matches template expectations
         server.sendContent("\"state\":\"");
         server.sendContent(programState.isRunning ? "running" : "idle");
         server.sendContent("\",\"temperature\":");
-        server.sendContent(String(getAveragedTemperature(), 1));
+        sprintf(buffer, "%.1f", getAveragedTemperature());
+        server.sendContent(buffer);
         server.sendContent(",\"setpoint\":");
-        server.sendContent(String(pid.Setpoint, 1));
+        sprintf(buffer, "%.1f", pid.Setpoint);
+        server.sendContent(buffer);
         server.sendContent(",");
         
         // Output states (direct boolean values as expected)
@@ -871,7 +915,8 @@ void homeAssistantEndpoint(WebServer& server) {
                     }
                     
                     server.sendContent("\"stage_time_left\":");
-                    server.sendContent(String(totalRemainingTime / 60)); // Convert to minutes for Home Assistant
+                    sprintf(buffer, "%lu", totalRemainingTime / 60); // Convert to minutes for Home Assistant
+                    server.sendContent(buffer);
                     server.sendContent(",");
                 } else if (!programState.isRunning) {
                     // Not running - calculate total program time if started now
@@ -884,7 +929,8 @@ void homeAssistantEndpoint(WebServer& server) {
                         totalProgramTime += adjustedDurationMs / 1000;
                     }
                     server.sendContent("\"stage_time_left\":");
-                    server.sendContent(String(totalProgramTime / 60)); // Convert to minutes for Home Assistant
+                    sprintf(buffer, "%lu", totalProgramTime / 60); // Convert to minutes for Home Assistant
+                    server.sendContent(buffer);
                     server.sendContent(",");
                 } else {
                     server.sendContent("\"stage\":\"Idle\",\"stage_time_left\":0,");
@@ -923,9 +969,11 @@ void homeAssistantEndpoint(WebServer& server) {
         }
         
         server.sendContent("\"stage_ready_at\":");
-        server.sendContent(String((unsigned long)stageReadyAt));
+        sprintf(buffer, "%lu", (unsigned long)stageReadyAt);
+        server.sendContent(buffer);
         server.sendContent(",\"program_ready_at\":");
-        server.sendContent(String((unsigned long)programReadyAt));
+        sprintf(buffer, "%lu", (unsigned long)programReadyAt);
+        server.sendContent(buffer);
         server.sendContent(",");
         
         // Health section (comprehensive system information as expected by template)
@@ -933,15 +981,18 @@ void homeAssistantEndpoint(WebServer& server) {
         
         // System info
         server.sendContent("\"uptime_sec\":");
-        server.sendContent(String(millis() / 1000));
+        sprintf(buffer, "%lu", millis() / 1000);
+        server.sendContent(buffer);
         server.sendContent(",\"firmware_version\":\"ESP32-WebServer\",\"build_date\":\"");
         server.sendContent(__DATE__);
         server.sendContent(" ");
         server.sendContent(__TIME__);
         server.sendContent("\",\"reset_reason\":\"");
-        server.sendContent(String(esp_reset_reason()));
+        sprintf(buffer, "%d", esp_reset_reason());
+        server.sendContent(buffer);
         server.sendContent("\",\"chip_id\":\"");
-        server.sendContent(String((uint32_t)ESP.getEfuseMac(), HEX));
+        sprintf(buffer, "%X", (uint32_t)ESP.getEfuseMac());
+        server.sendContent(buffer);
         server.sendContent("\",");
         
         // Performance metrics
