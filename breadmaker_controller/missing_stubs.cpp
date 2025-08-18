@@ -688,6 +688,7 @@ void streamStatusJson(Print& out) {
   // === Additional timing data for UI ===
   out.printf("\"totalProgramDuration\":%lu,", fermentCache.cachedTotalDuration);
   out.printf("\"elapsedTime\":%lu,", fermentCache.cachedElapsedTime);
+  out.printf("\"remainingTime\":%lu,", totalProgramRemainingTime); // Use calculated value instead of cache
   
   // === Stage Start Times Array ===
   out.print("\"actualStageStartTimes\":[");
