@@ -726,10 +726,17 @@ void streamStatusJson(Print& out) {
   
   // === Status ===
   if (safetySystem.emergencyShutdown) {
-    out.print("\"status\":\"emergency_shutdown\"");
+    out.print("\"status\":\"emergency_shutdown\",");
   } else {
-    out.print("\"status\":\"ok\"");
+    out.print("\"status\":\"ok\",");
   }
+  
+  // === Scheduled Start Information ===
+  extern time_t scheduledStart;
+  extern int scheduledStartStage;
+  
+  out.printf("\"scheduledStart\":%lu,", (unsigned long)scheduledStart);
+  out.printf("\"scheduledStartStage\":%d", scheduledStartStage);
   
   // Close main JSON object
   out.print("}");

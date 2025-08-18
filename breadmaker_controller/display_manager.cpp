@@ -112,28 +112,140 @@ void updateDisplay() {
   handleButtons();
 }
 
+// Helper function to calculate total time remaining in program
+unsigned long calculateTotalTimeLeft() {
+  const Program* activeProgram = getActiveProgram();
+  if (!activeProgram || !programState.isRunning) return 0;
+  
+  // Calculate current stage time remaining
+  unsigned long currentStageTimeLeft = 0;
+  if (programState.customStageIdx < activeProgram->customStages.size()) {
+    const CustomStage& currentStage = activeProgram->customStages[programState.customStageIdx];
+    unsigned long stageDurationMs = currentStage.min * 60 * 1000;
+    unsigned long elapsed = millis() - programState.customStageStart;
+    currentStageTimeLeft = (elapsed < stageDurationMs) ? (stageDurationMs - elapsed) / 1000 : 0;
+  }
+  
+  unsigned long totalRemaining = currentStageTimeLeft;
+  
+  // Add time for remaining stages
+  for (size_t i = programState.customStageIdx + 1; i < activeProgram->customStages.size(); i++) {
+    const CustomStage& stage = activeProgram->customStages[i];
+    totalRemaining += stage.min * 60;
+  }
+  
+  return totalRemaining;
+}
+
+// Helper function to calculate current stage time remaining
+unsigned long calculateStageTimeLeft() {
+  const Program* activeProgram = getActiveProgram();
+  if (!activeProgram || !programState.isRunning) return 0;
+  
+  if (programState.customStageIdx < activeProgram->customStages.size()) {
+    const CustomStage& currentStage = activeProgram->customStages[programState.customStageIdx];
+    unsigned long stageDurationMs = currentStage.min * 60 * 1000;
+    unsigned long elapsed = millis() - programState.customStageStart;
+    return (elapsed < stageDurationMs) ? (stageDurationMs - elapsed) / 1000 : 0;
+  }
+  
+  return 0;
+}
+
+// TTGO T-Display Layout Implementation (240×135 px)
+void drawTTGOProgramLayout() {
+  display.fillScreen(COLOR_BLACK);
+  
+  const Program* activeProgram = getActiveProgram();
+  if (!activeProgram || !programState.isRunning) return;
+  
+  // Get current stage info
+  String stageName = "Unknown";
+  if (programState.customStageIdx < activeProgram->customStages.size()) {
+    const CustomStage& stage = activeProgram->customStages[programState.customStageIdx];
+    stageName = String(stage.label);
+  }
+  
+  // Y: 0–30 (Top area) - Stage name (large font, centered)
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(2);
+  int stageWidth = stageName.length() * 12; // Approximate width
+  int stageX = (240 - stageWidth) / 2; // Center horizontally
+  display.setCursor(stageX, 8);
+  display.println(stageName);
+  
+  // Y: 30–60 (Progress area)
+  // Timer (MM:SS left) centered at top of this band
+  unsigned long timeLeft = calculateStageTimeLeft();
+  int minutes = timeLeft / 60;
+  int seconds = timeLeft % 60;
+  
+  display.setTextColor(COLOR_YELLOW);
+  display.setTextSize(2);
+  String timeStr = String(minutes) + ":" + (seconds < 10 ? "0" : "") + String(seconds);
+  int timeWidth = timeStr.length() * 12;
+  int timeX = (240 - timeWidth) / 2;
+  display.setCursor(timeX, 33);
+  display.println(timeStr);
+  
+  // Progress bar (200×15 px), horizontally centered at Y: 45
+  int progressBarX = (240 - 200) / 2; // Center 200px bar in 240px width
+  int progressBarY = 45;
+  int progressBarWidth = 200;
+  int progressBarHeight = 15;
+  
+  // Calculate progress percentage
+  float progress = 0.0;
+  if (activeProgram->customStages.size() > 0) {
+    progress = (float)programState.customStageIdx / activeProgram->customStages.size();
+  }
+  int filledWidth = (int)(progress * progressBarWidth);
+  
+  // Draw progress bar background
+  display.drawRect(progressBarX, progressBarY, progressBarWidth, progressBarHeight, COLOR_WHITE);
+  // Draw filled portion
+  if (filledWidth > 0) {
+    display.fillRect(progressBarX + 1, progressBarY + 1, filledWidth - 2, progressBarHeight - 2, COLOR_GREEN);
+  }
+  
+  // Y: 60–90 (Middle area) - Alerts/messages (for now, show program name)
+  display.setTextColor(COLOR_CYAN);
+  display.setTextSize(1);
+  String programName = String(activeProgram->name);
+  int progWidth = programName.length() * 6;
+  int progX = (240 - progWidth) / 2;
+  display.setCursor(progX, 72);
+  display.println(programName);
+  
+  // Y: 90–120 (Bottom info area) - Overall process time
+  unsigned long totalTimeLeft = calculateTotalTimeLeft();
+  int totalHours = totalTimeLeft / 3600;
+  int totalMinutes = (totalTimeLeft % 3600) / 60;
+  
+  // Calculate ready time
+  time_t now = time(nullptr);
+  time_t readyTime = now + totalTimeLeft;
+  struct tm* readyTm = localtime(&readyTime);
+  
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(1);
+  String readyStr = "Ready at " + String(readyTm->tm_hour) + ":" + 
+                   (readyTm->tm_min < 10 ? "0" : "") + String(readyTm->tm_min) +
+                   " (" + String(totalHours) + "h " + String(totalMinutes) + "m left)";
+  int readyWidth = readyStr.length() * 6;
+  int readyX = (240 - readyWidth) / 2;
+  display.setCursor(readyX, 100);
+  display.println(readyStr);
+  
+  // Y: 120–135 (Bottom row) - Metrics will be handled in displayStatus()
+}
+
 void displayStatus() {
   // Only clear screen if we need a full redraw
   if (forceFullRedraw) {
     display.fillScreen(COLOR_BLACK);
-    
-    // Title (static, only draw on full redraw)
-    display.setTextColor(COLOR_WHITE);
-    display.setTextSize(2);
-    display.setCursor(5, 5);
-    display.println("Breadmaker");
   }
   
-  // Temperature on the right side - only update if changed
-  float temp = readTemperature();
-  if (forceFullRedraw || abs(temp - lastTemperature) > 0.5) { // Update if temp changed by more than 0.5°C
-    // Clear temperature area
-    display.fillRect(140, 5, 95, 25, COLOR_BLACK);
-    drawTemperature(140, 5, temp);
-    lastTemperature = temp;
-  }
-  
-  // Current program info
   const Program* activeProgram = getActiveProgram();
   bool currentRunning = (activeProgram && programState.isRunning);
   String currentProgramName = activeProgram ? String(activeProgram->name) : "";
@@ -144,25 +256,35 @@ void displayStatus() {
     currentStageName = String(stage.label);
   }
   
-  // Only update program area if something changed
+  // Only update if something changed
   if (forceFullRedraw || currentRunning != lastRunningState || 
       currentProgramName != lastProgramName || currentStageName != lastStageName) {
     
-    // Clear program area
-    display.fillRect(5, 35, 230, 55, COLOR_BLACK);
-    
     if (currentRunning) {
-      // Show current stage
-      drawStageInfo(5, 35, currentStageName.c_str(), 0); // TODO: Calculate time left
-      
-      // Show progress bar - wider for landscape
-      float progress = 0.5; // TODO: Calculate actual progress
-      drawProgressBar(5, 65, 220, 15, progress);
+      // Use the new TTGO T-Display layout specification
+      drawTTGOProgramLayout();
     } else {
+      // Clear screen and show idle state
+      display.fillScreen(COLOR_BLACK);
+      
+      // Y: 0-30 (Top area) - Show "Breadmaker" when idle
+      display.setTextColor(COLOR_WHITE);
+      display.setTextSize(2);
+      display.setCursor(50, 8);
+      display.println("Breadmaker");
+      
+      // Y: 60-90 (Middle area) - Show idle message
       display.setTextColor(COLOR_GRAY);
       display.setTextSize(1);
-      display.setCursor(5, 35);
-      display.println("No program running");
+      display.setCursor(85, 75);
+      display.println("Idle");
+      
+      // Y: 120-135 (Bottom row) - Show temperature only
+      float temp = readTemperature();
+      display.setTextColor(COLOR_CYAN);
+      display.setTextSize(1);
+      display.setCursor(5, 123);
+      display.printf("Temp: %.1f°C", temp);
     }
     
     lastRunningState = currentRunning;
@@ -170,23 +292,50 @@ void displayStatus() {
     lastStageName = currentStageName;
   }
   
-  // Output states at bottom - only update if changed
-  if (forceFullRedraw || 
-      outputStates.heater != lastHeaterState ||
-      outputStates.motor != lastMotorState ||
-      outputStates.light != lastLightState ||
-      outputStates.buzzer != lastBuzzerState) {
-    
-    // Clear output area
-    display.fillRect(5, 95, 230, 35, COLOR_BLACK);
-    drawOutputStates(5, 95, outputStates.heater, outputStates.motor, 
-                     outputStates.light, outputStates.buzzer);
-    
-    lastHeaterState = outputStates.heater;
-    lastMotorState = outputStates.motor;
-    lastLightState = outputStates.light;
-    lastBuzzerState = outputStates.buzzer;
+  // Always update temperature in bottom row if running
+  if (currentRunning) {
+    float temp = readTemperature();
+    if (forceFullRedraw || abs(temp - lastTemperature) > 0.5) {
+      // Clear and update temperature in bottom row
+      display.fillRect(5, 120, 80, 15, COLOR_BLACK);
+      display.setTextColor(COLOR_CYAN);
+      display.setTextSize(1);
+      display.setCursor(5, 123);
+      display.printf("Temp: %.0f°C", temp);
+      lastTemperature = temp;
+    }
   }
+  
+  // Update output states in bottom row if running
+  if (currentRunning) {
+    bool heaterOn = outputStates.heater;
+    bool motorOn = outputStates.motor;
+    bool lightOn = outputStates.light;
+    
+    if (forceFullRedraw || motorOn != lastMotorState) {
+      // Clear and update motor status (center)
+      display.fillRect(85, 120, 70, 15, COLOR_BLACK);
+      display.setTextColor(motorOn ? COLOR_GREEN : COLOR_GRAY);
+      display.setTextSize(1);
+      display.setCursor(85, 123);
+      display.printf("Motor: %s", motorOn ? "On" : "Off");
+      lastMotorState = motorOn;
+    }
+    
+    if (forceFullRedraw || heaterOn != lastHeaterState) {
+      // Clear and update power status (right) - using heater as power indicator
+      display.fillRect(160, 120, 75, 15, COLOR_BLACK);
+      display.setTextColor(heaterOn ? COLOR_RED : COLOR_GRAY);
+      display.setTextSize(1);
+      display.setCursor(160, 123);
+      // Estimate power based on heater state (simplified)
+      int power = heaterOn ? 45 : 0;
+      display.printf("Power: %dW", power);
+      lastHeaterState = heaterOn;
+    }
+  }
+  
+  forceFullRedraw = false;
 }
 
 void displayMenu() {
@@ -421,6 +570,46 @@ void drawProgressBar(int x, int y, int width, int height, float progress) {
   display.setTextSize(1);
   display.setCursor(x + width + 5, y + height/2 - 4);
   display.printf("%.1f%%", progress * 100);
+}
+
+void drawProgramRunningLayout(int x, int y) {
+  // Large centered temperature display at top
+  float temp = readTemperature();
+  display.setTextColor(COLOR_YELLOW);
+  display.setTextSize(3);  // Large font
+  
+  // Calculate center position for temperature
+  char tempStr[16];
+  snprintf(tempStr, sizeof(tempStr), "%.1f°C", temp);
+  int tempWidth = strlen(tempStr) * 18; // Approximate width for size 3 font
+  int centerX = (235 - tempWidth) / 2;
+  
+  display.setCursor(centerX, y);
+  display.print(tempStr);
+  
+  // Motor status in center area
+  display.setTextColor(outputStates.motor ? COLOR_GREEN : COLOR_GRAY);
+  display.setTextSize(2);  // Medium-large font
+  
+  String motorText = outputStates.motor ? "Motor: ON" : "Motor: OFF";
+  int motorWidth = motorText.length() * 12; // Approximate width for size 2 font
+  int motorCenterX = (235 - motorWidth) / 2;
+  
+  display.setCursor(motorCenterX, y + 35);
+  display.print(motorText);
+  
+  // Power information on the right
+  display.setTextColor(COLOR_WHITE);
+  display.setTextSize(1);
+  
+  // Calculate approximate power based on active outputs
+  int powerWatts = 0;
+  if (outputStates.heater) powerWatts += 40;  // Heater power
+  if (outputStates.motor) powerWatts += 5;    // Motor power
+  if (outputStates.light) powerWatts += 3;    // Light power
+  
+  display.setCursor(170, y + 60);  // Right side
+  display.printf("Power: %dW", powerWatts);
 }
 
 void drawTemperature(int x, int y, float temp) {

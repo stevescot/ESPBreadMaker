@@ -246,7 +246,7 @@
 
     <!-- Combined Timed and Stage Start Controls -->
     <div class="timed-stage-controls" style="background:#2a2a2a;border-radius:8px;padding:1em;margin:0.7em auto;max-width:500px;">
-      <h3 style="color:#ffe;margin:0 0 0.7em 0;text-align:center;font-size:1.1em;">Scheduled Start</h3>
+      <h3 style="color:#ffe;margin:0 0 0.7em 0;text-align:center;font-size:1.1em;">Start</h3>
       
       <!-- Time Selection -->
       <div style="display:flex;align-items:center;justify-content:center;margin-bottom:0.7em;gap:0.7em;flex-wrap:wrap;">
@@ -280,6 +280,9 @@
       <!-- Status Display -->
       <div style="text-align:center;">
         <span id="startAtStatus" style="color:#ffb;font-size:0.9em;"></span>
+        <div id="cancelScheduledStartRow" style="display:none;margin-top:0.5em;">
+          <button id="btnCancelScheduledStart" style="padding:0.3em 0.8em;border-radius:4px;background:#f44336;color:#fff;border:none;cursor:pointer;font-size:0.9em;">Cancel Scheduled Start</button>
+        </div>
       </div>
     </div>
 

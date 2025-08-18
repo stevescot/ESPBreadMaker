@@ -34,11 +34,17 @@ Write-Host ""
 
 # Build and upload firmware
 Write-Host "Building and uploading firmware..." -ForegroundColor Blue
-if ($Password) {
-    & ".\build_esp32.ps1" -OTA $ESP32_IP -OTAPassword $Password
-} else {
-    & ".\build_esp32.ps1" -OTA $ESP32_IP
+
+# First build the firmware
+& ".\build_esp32.ps1"
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Firmware build failed!" -ForegroundColor Red
+    exit 1
 }
+
+# Then upload using the reliable HTTP method
+& ".\upload_ota.ps1" -IP $ESP32_IP
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Firmware upload failed!" -ForegroundColor Red

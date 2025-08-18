@@ -91,13 +91,19 @@ function populateProgramSelect() {
   programSelect.onchange = function() {
     const selectedProgramId = parseInt(this.value);
     if (selectedProgramId >= 0) {
-      populateStageDropdown(selectedProgramId);
+      // Find the program index by ID for populateStageDropdown (it expects array index, not ID)
+      const programIdx = window.cachedPrograms.findIndex(p => p.id === selectedProgramId);
+      if (programIdx >= 0) {
+        populateStageDropdown(programIdx);
+      }
     } else {
       // Hide stage selection if no program selected
       const startAtStageRow = document.getElementById('startAtStageRow');
       if (startAtStageRow) startAtStageRow.style.display = 'none';
     }
   };
+
+  // Note: Auto-selection logic moved to updateStatusInternal() to run after status is loaded
 }
 
 // ---- Stage Dropdown Population ----
@@ -579,6 +585,48 @@ function updateStatusInternal(s) {
 
   // ---- Startup Delay Handling ----
   updateStartupDelayUI(s);
+
+  // ---- Program Auto-Selection (runs after status is loaded) ----
+  autoSelectProgram(s);
+}
+
+// ---- Program Auto-Selection Function ----
+function autoSelectProgram(s) {
+  // Only run if programs are loaded and we have a program selector
+  if (!window.cachedPrograms || !s) return;
+  
+  const programSelect = document.getElementById('programSelect');
+  if (!programSelect) return;
+  
+  let correctId = null;
+  
+  // Use programId from status if available (prioritize this over program name)
+  if (s && typeof s.programId === 'number' && s.programId >= 0) {
+    // Verify this program ID exists in our cached programs
+    const found = window.cachedPrograms.find(p => p.id === s.programId);
+    if (found) {
+      correctId = s.programId;
+      console.log('[AUTO-SELECT] Using programId:', correctId, '(' + found.name + ')');
+    }
+  } else if (s && typeof s.program === 'string' && s.program !== "" && s.program !== "None" && s.program !== "Unknown") {
+    // Find by name fallback (only if program name is valid)
+    const found = window.cachedPrograms.find(p => p.name === s.program);
+    if (found) {
+      correctId = found.id;
+      console.log('[AUTO-SELECT] Using program name:', s.program, '-> ID:', correctId);
+    }
+  }
+  
+  // Set the selected value and populate stage dropdown
+  if (correctId !== null && String(programSelect.value) !== String(correctId)) {
+    console.log('[AUTO-SELECT] Setting program selector to:', correctId);
+    programSelect.value = String(correctId);
+    // Find the program index by ID for populateStageDropdown (it expects array index, not ID)
+    const programIdx = window.cachedPrograms.findIndex(p => p.id === correctId);
+    if (programIdx >= 0) {
+      populateStageDropdown(programIdx);
+    }
+  }
 }
 
 // ---- Startup Delay UI Handling ----
@@ -712,6 +760,11 @@ function updateCountdownDisplay() {
     let schedLeft = Math.max(0, Math.round(scheduledStart - (now/1000)));
     document.getElementById('timeLeft').textContent = formatDuration(schedLeft);
     document.getElementById('stageReadyAt').textContent = "Scheduled to start at: " + formatDateTime(scheduledStart * 1000);
+    
+    // Show cancel button when there's a scheduled start
+    const cancelRow = document.getElementById('cancelScheduledStartRow');
+    if (cancelRow) cancelRow.style.display = 'block';
+    
     // Also show program ready at if available
     if (programReadyAt > 0) {
       const progReadyTs = programReadyAt * 1000;
@@ -720,6 +773,10 @@ function updateCountdownDisplay() {
     }
     return;
   }
+
+  // Hide cancel button when no scheduled start
+  const cancelRow = document.getElementById('cancelScheduledStartRow');
+  if (cancelRow) cancelRow.style.display = 'none';
 
   // FIXED: Use total program remaining time instead of stage time for main display
   if (s.running && typeof s.remainingTime === 'number' && s.remainingTime > 0) {
@@ -733,8 +790,21 @@ function updateCountdownDisplay() {
     let elapsed = Math.floor((now - lastStatusTime) / 1000);
     
     // For fermentation stages, use adjustedTimeLeft (real clock time)
-    const isCurrentStageFermentation = s.stage && customStages && 
-          customStages.find(stage => stage.label === s.stage && stage.isFermentation);
+    let isCurrentStageFermentation = false;
+    if (s.stage && window.cachedPrograms) {
+      // Find current program to get its customStages
+      let currentProgram = null;
+      if (typeof s.programId === 'number' && s.programId >= 0) {
+        currentProgram = window.cachedPrograms.find(p => p.id === s.programId);
+      } else if (typeof s.program === 'string' && s.program !== "" && s.program !== "None") {
+        currentProgram = window.cachedPrograms.find(p => p.name === s.program);
+      }
+      
+      if (currentProgram && currentProgram.customStages) {
+        isCurrentStageFermentation = currentProgram.customStages.find(stage => 
+          stage.label === s.stage && stage.isFermentation);
+      }
+    }
     
     if (isCurrentStageFermentation && typeof s.adjustedTimeLeft === 'number') {
       timeLeft = Math.max(0, s.adjustedTimeLeft - elapsed);
@@ -815,13 +885,17 @@ function showPlanSummary(s) {
   let prog = null;
   if (s.programs && s.programs[s.program]) {
     prog = s.programs[s.program];
-  } else if (window.cachedPrograms) {
-    // If cached programs is an array of program objects
-    if (Array.isArray(window.cachedPrograms)) {
-      prog = window.cachedPrograms.find(p => p.name === s.program);
-    } else if (typeof window.cachedPrograms === 'object') {
-      prog = window.cachedPrograms[s.program];
+  } else if (window.cachedPrograms && Array.isArray(window.cachedPrograms)) {
+    // First try to find by programId if available
+    if (typeof s.programId === 'number' && s.programId >= 0) {
+      prog = window.cachedPrograms.find(p => p.id === s.programId);
     }
+    // If not found by ID, try by name
+    if (!prog && s.program) {
+      prog = window.cachedPrograms.find(p => p.name === s.program);
+    }
+  } else if (window.cachedPrograms && typeof window.cachedPrograms === 'object') {
+    prog = window.cachedPrograms[s.program];
   }
   
   if (!prog) {
@@ -1456,6 +1530,25 @@ window.addEventListener('DOMContentLoaded', () => {
   const stageSelect = document.getElementById('stageSelect');
   if (stageSelect) {
     stageSelect.addEventListener('change', updateCombinedStartButton);
+  }
+
+  // Cancel scheduled start button
+  const btnCancelScheduledStart = document.getElementById('btnCancelScheduledStart');
+  if (btnCancelScheduledStart) {
+    btnCancelScheduledStart.onclick = () => {
+      if (confirm('Cancel the scheduled start?')) {
+        fetch('/cancelScheduledStart')
+          .then(r => r.text())
+          .then(text => {
+            showStartAtStatus(text);
+            window.updateStatus();
+          })
+          .catch(err => {
+            console.error('Cancel scheduled start failed:', err);
+            showStartAtStatus('Failed to cancel scheduled start');
+          });
+      }
+    };
   }
 });
 

@@ -81,7 +81,7 @@ try {
     exit 1
 }
 
-# Function to upload firmware using HTTP multipart form
+# Function to upload firmware using HTTP multipart form (curl only - proven reliable)
 function Upload-Firmware {
     param(
         [string]$DeviceIP,
@@ -93,82 +93,47 @@ function Upload-Firmware {
     
     # Check if curl is available
     $curlPath = Get-Command curl -ErrorAction SilentlyContinue
-    if ($curlPath) {
-        Write-Host "Using curl for firmware upload..." -ForegroundColor Blue
+    if (-not $curlPath) {
+        Write-Host "✗ Error: curl is required for firmware upload but not found" -ForegroundColor Red
+        Write-Host "Please install curl or use Git Bash/WSL" -ForegroundColor Yellow
+        return $false
+    }
+    
+    Write-Host "Using curl for firmware upload..." -ForegroundColor Blue
+    
+    # Use proven curl command that works reliably
+    $curlArgs = @(
+        "-v"  # Verbose output for debugging
+        "-X", "POST"
+        "-F", "file=@`"$BinaryPath`";filename=firmware.bin"
+        "--max-time", "300"  # 5 minute timeout for large uploads
+        "--connect-timeout", "30"
+        $uploadUrl
+    )
+    
+    Write-Host "Uploading firmware via curl..." -ForegroundColor Yellow
+    Write-Host "Command: curl $($curlArgs -join ' ')" -ForegroundColor Gray
+    
+    try {
+        $result = & curl @curlArgs 2>&1
+        $exitCode = $LASTEXITCODE
         
-        # Use curl for reliable multipart upload (same method as data files)
-        $curlArgs = @(
-            "-X", "POST"
-            "-F", "file=@`"$BinaryPath`";filename=firmware.bin"
-            "--max-time", "300"  # 5 minute timeout for large uploads
-            "--connect-timeout", "30"
-            "--retry", "2"
-            $uploadUrl
-        )
-        
-        Write-Host "Uploading firmware via curl..." -ForegroundColor Yellow
-        Write-Host "Command: curl $($curlArgs -join ' ')" -ForegroundColor Gray
-        
-        try {
-            $result = & curl @curlArgs 2>&1
-            $exitCode = $LASTEXITCODE
-            
-            if ($exitCode -eq 0) {
-                Write-Host "✓ Firmware upload completed successfully!" -ForegroundColor Green
-                Write-Host "Response: $result" -ForegroundColor Gray
-                return $true
-            } else {
-                Write-Host "✗ Curl upload failed with exit code: $exitCode" -ForegroundColor Red
-                Write-Host "Error output: $result" -ForegroundColor Red
-                return $false
+        if ($exitCode -eq 0) {
+            Write-Host "✓ Firmware upload completed successfully!" -ForegroundColor Green
+            # Filter out curl verbose output, show only the response
+            $responseLines = $result | Where-Object { $_ -like "*Update successful*" -or $_ -like "*Rebooting*" }
+            if ($responseLines) {
+                Write-Host "Response: $($responseLines -join ', ')" -ForegroundColor Gray
             }
-        } catch {
-            Write-Host "✗ Curl execution failed: $($_.Exception.Message)" -ForegroundColor Red
+            return $true
+        } else {
+            Write-Host "✗ Curl upload failed with exit code: $exitCode" -ForegroundColor Red
+            Write-Host "Error output: $result" -ForegroundColor Red
             return $false
         }
-    } else {
-        # Fallback to PowerShell Invoke-WebRequest (less reliable for large files)
-        Write-Host "Using PowerShell Invoke-WebRequest for firmware upload..." -ForegroundColor Blue
-        Write-Host "Note: curl is recommended for better reliability with large files" -ForegroundColor Yellow
-        
-        try {
-            # Read binary file
-            $fileBytes = [System.IO.File]::ReadAllBytes($BinaryPath)
-            $fileName = "firmware.bin"
-            
-            # Create multipart form data
-            $boundary = [System.Guid]::NewGuid().ToString()
-            $LF = "`r`n"
-            
-            $bodyLines = @(
-                "--$boundary",
-                "Content-Disposition: form-data; name=`"file`"; filename=`"$fileName`"",
-                "Content-Type: application/octet-stream",
-                "",
-                [System.Text.Encoding]::GetEncoding("iso-8859-1").GetString($fileBytes),
-                "--$boundary--"
-            )
-            
-            $body = $bodyLines -join $LF
-            $bodyBytes = [System.Text.Encoding]::GetEncoding("iso-8859-1").GetBytes($body)
-            
-            Write-Host "Uploading firmware via PowerShell..." -ForegroundColor Yellow
-            
-            $response = Invoke-WebRequest -Uri $uploadUrl -Method POST -Body $bodyBytes -ContentType "multipart/form-data; boundary=$boundary" -TimeoutSec 300
-            
-            if ($response.StatusCode -eq 200) {
-                Write-Host "✓ Firmware upload completed successfully!" -ForegroundColor Green
-                Write-Host "Response: $($response.Content)" -ForegroundColor Gray
-                return $true
-            } else {
-                Write-Host "✗ Upload failed with HTTP status: $($response.StatusCode)" -ForegroundColor Red
-                Write-Host "Response: $($response.Content)" -ForegroundColor Red
-                return $false
-            }
-        } catch {
-            Write-Host "✗ PowerShell upload failed: $($_.Exception.Message)" -ForegroundColor Red
-            return $false
-        }
+    } catch {
+        Write-Host "✗ Curl execution failed: $($_.Exception.Message)" -ForegroundColor Red
+        return $false
     }
 }
 

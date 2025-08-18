@@ -263,6 +263,9 @@ void coreEndpoints(WebServer& server) {
     server.on("/", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] Root path '/' requested"));
         
+        // Ensure the active program is loaded when serving the index page
+        updateActiveProgramVars();
+        
         if (!serveStaticFile(server, "/")) {
             // If index.html not found, provide helpful debug info
             String response = "<!DOCTYPE html><html><head><title>Breadmaker Controller - Debug</title></head><body>";
@@ -558,7 +561,10 @@ void stateMachineEndpoints(WebServer& server) {
             return;
         }
         
-        // Immediate start
+        // Immediate start - clear any scheduled start
+        scheduledStart = 0;
+        scheduledStartStage = -1;
+        
         updateActiveProgramVars();
         
         if (server.hasArg("stage")) {
@@ -593,6 +599,168 @@ void stateMachineEndpoints(WebServer& server) {
         if (debugSerial) Serial.println(F("[ACTION] /stop called"));
         stopBreadmaker();
         server.send(200, "application/json", "{\"status\":\"stopped\"}");
+    });
+    
+    // Set scheduled start time only (no stage)
+    server.on("/setStartAt", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /setStartAt called"));
+        
+        if (!server.hasArg("time")) {
+            server.send(400, "text/plain", "Missing time parameter");
+            return;
+        }
+        
+        String timeStr = server.arg("time");
+        if (debugSerial) Serial.printf_P(PSTR("[ACTION] /setStartAt: time=%s\n"), timeStr.c_str());
+        
+        // Parse time in HH:MM format
+        int colonPos = timeStr.indexOf(':');
+        if (colonPos == -1 || timeStr.length() != 5) {
+            server.send(400, "text/plain", "Invalid time format. Use HH:MM");
+            return;
+        }
+        
+        int hours = timeStr.substring(0, colonPos).toInt();
+        int minutes = timeStr.substring(colonPos + 1).toInt();
+        
+        if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+            server.send(400, "text/plain", "Invalid time values");
+            return;
+        }
+        
+        // Calculate target timestamp for today at the specified time
+        time_t now = time(nullptr);
+        struct tm* timeinfo = localtime(&now);
+        timeinfo->tm_hour = hours;
+        timeinfo->tm_min = minutes;
+        timeinfo->tm_sec = 0;
+        
+        time_t targetTime = mktime(timeinfo);
+        
+        // If target time is in the past today, schedule for tomorrow
+        if (targetTime <= now) {
+            targetTime += 24 * 60 * 60; // Add 24 hours
+        }
+        
+        // Set the scheduled start time (stage will default to 0)
+        scheduledStart = targetTime;
+        scheduledStartStage = 0; // Start from beginning
+        
+        if (debugSerial) {
+            Serial.printf_P(PSTR("[ACTION] /setStartAt: Scheduled start set to %ld (stage 0)\n"), targetTime);
+        }
+        
+        // Format response message
+        struct tm* scheduleInfo = localtime(&targetTime);
+        char timeBuffer[32];
+        strftime(timeBuffer, sizeof(timeBuffer), "%H:%M", scheduleInfo);
+        
+        String response = "Scheduled to start at " + String(timeBuffer) + " from beginning";
+        server.send(200, "text/plain", response);
+        
+        invalidateStatusCache();
+    });
+    
+    // Set scheduled start time and stage
+    server.on("/setStartAtStage", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /setStartAtStage called"));
+        
+        if (!server.hasArg("time") || !server.hasArg("stage")) {
+            server.send(400, "text/plain", "Missing time or stage parameter");
+            return;
+        }
+        
+        String timeStr = server.arg("time");
+        int stageIdx = server.arg("stage").toInt();
+        
+        if (debugSerial) {
+            Serial.printf_P(PSTR("[ACTION] /setStartAtStage: time=%s, stage=%d\n"), timeStr.c_str(), stageIdx);
+        }
+        
+        // Validate stage index
+        const Program* activeProgram = getActiveProgram();
+        if (!activeProgram) {
+            server.send(400, "text/plain", "No active program selected");
+            return;
+        }
+        
+        if (stageIdx < 0 || stageIdx >= (int)activeProgram->customStages.size()) {
+            server.send(400, "text/plain", "Invalid stage index");
+            return;
+        }
+        
+        // Parse time in HH:MM format
+        int colonPos = timeStr.indexOf(':');
+        if (colonPos == -1 || timeStr.length() != 5) {
+            server.send(400, "text/plain", "Invalid time format. Use HH:MM");
+            return;
+        }
+        
+        int hours = timeStr.substring(0, colonPos).toInt();
+        int minutes = timeStr.substring(colonPos + 1).toInt();
+        
+        if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+            server.send(400, "text/plain", "Invalid time values");
+            return;
+        }
+        
+        // Calculate target timestamp for today at the specified time
+        time_t now = time(nullptr);
+        struct tm* timeinfo = localtime(&now);
+        timeinfo->tm_hour = hours;
+        timeinfo->tm_min = minutes;
+        timeinfo->tm_sec = 0;
+        
+        time_t targetTime = mktime(timeinfo);
+        
+        // If target time is in the past today, schedule for tomorrow
+        if (targetTime <= now) {
+            targetTime += 24 * 60 * 60; // Add 24 hours
+        }
+        
+        // Set the scheduled start time and stage
+        scheduledStart = targetTime;
+        scheduledStartStage = stageIdx;
+        
+        if (debugSerial) {
+            Serial.printf_P(PSTR("[ACTION] /setStartAtStage: Scheduled start set to %ld (stage %d)\n"), targetTime, stageIdx);
+        }
+        
+        // Format response message
+        struct tm* scheduleInfo = localtime(&targetTime);
+        char timeBuffer[32];
+        strftime(timeBuffer, sizeof(timeBuffer), "%H:%M", scheduleInfo);
+        
+        String stageName = "Unknown";
+        if (stageIdx < (int)activeProgram->customStages.size()) {
+            stageName = activeProgram->customStages[stageIdx].label;
+        }
+        
+        String response = "Scheduled to start at " + String(timeBuffer) + " at stage " + String(stageIdx + 1) + " (" + stageName + ")";
+        server.send(200, "text/plain", response);
+        
+        invalidateStatusCache();
+    });
+    
+    // Cancel scheduled start
+    server.on("/cancelScheduledStart", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /cancelScheduledStart called"));
+        
+        if (scheduledStart == 0) {
+            server.send(200, "text/plain", "No scheduled start to cancel");
+            return;
+        }
+        
+        // Clear the scheduled start
+        scheduledStart = 0;
+        scheduledStartStage = -1;
+        
+        if (debugSerial) {
+            Serial.println(F("[ACTION] /cancelScheduledStart: Scheduled start cancelled"));
+        }
+        
+        server.send(200, "text/plain", "Scheduled start cancelled");
+        invalidateStatusCache();
     });
     
     server.on("/advance", HTTP_GET, [&](){

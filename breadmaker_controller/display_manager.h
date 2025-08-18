@@ -79,6 +79,7 @@ public:
 #define COLOR_ORANGE    0xFD20
 #define COLOR_GRAY      0x7BEF
 #define COLOR_DARKGRAY  0x4208
+#define COLOR_CYAN      0x07FF
 
 // Display states
 enum DisplayState {
@@ -93,6 +94,7 @@ enum DisplayState {
 void displayManagerInit();
 void updateDisplay();
 void displayStatus();
+void drawTTGOProgramLayout();
 void displayMenu();
 void displayPrograms();
 void displaySettings();
@@ -110,6 +112,7 @@ void drawProgressBar(int x, int y, int width, int height, float progress);
 void drawTemperature(int x, int y, float temp);
 void drawStageInfo(int x, int y, const String& stage, unsigned long timeLeft);
 void drawOutputStates(int x, int y, bool heater, bool motor, bool light, bool buzzer);
+void drawProgramRunningLayout(int x, int y);
 
 // Screensaver functionality
 void updateActivityTime();

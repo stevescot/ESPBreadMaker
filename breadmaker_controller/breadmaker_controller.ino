@@ -399,6 +399,10 @@ void setup() {
   Serial.println(F("[setup] Starting OTA services..."));
   // OTA initialization handled by otaManagerInit() in WiFi setup
 
+  // Set timezone to Central European Time (CET/CEST)
+  // This handles both standard time (UTC+1) and daylight saving time (UTC+2)
+  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+  tzset();
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   
   // --- Initialize PID controller ---

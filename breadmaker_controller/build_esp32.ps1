@@ -53,7 +53,7 @@ Write-Host "  - Or configure User_Setup.h in the TFT_eSPI library" -ForegroundCo
 
 # Compile
 Write-Host "Compiling..." -ForegroundColor Blue
-arduino-cli compile --fqbn $Board breadmaker_controller.ino
+arduino-cli compile --fqbn $Board --build-path "build" breadmaker_controller.ino
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "Compilation successful!" -ForegroundColor Green
