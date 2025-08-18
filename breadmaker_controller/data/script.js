@@ -778,13 +778,19 @@ function updateCountdownDisplay() {
   const cancelRow = document.getElementById('cancelScheduledStartRow');
   if (cancelRow) cancelRow.style.display = 'none';
 
-  // FIXED: Use total program remaining time instead of stage time for main display
-  if (s.running && typeof s.remainingTime === 'number' && s.remainingTime > 0) {
-    // Use total program remaining time for main "Time Left" display
-    timeLeft = s.remainingTime;
+  // FIXED: Use proper stage time and program time fields from backend
+  if (s.running && typeof s.stageTimeLeft === 'number' && s.stageTimeLeft > 0) {
+    // Use actual stage time remaining (in minutes from backend, convert to seconds)
+    timeLeft = s.stageTimeLeft * 60;
+  } else if (s.running && typeof s.programTimeLeft === 'number' && s.programTimeLeft > 0) {
+    // Fallback to total program time if stage time not available
+    timeLeft = s.programTimeLeft * 60;
   } else if (stageReadyAt > 0) {
-    // Fallback to stage time if program time not available
-    timeLeft = Math.max(0, Math.round(stageReadyAt - (now / 1000)));
+    // Fallback to timestamp calculation, but only if stageReadyAt is a valid future time
+    const nowSeconds = Date.now() / 1000;
+    if (stageReadyAt > nowSeconds) {
+      timeLeft = Math.max(0, Math.round(stageReadyAt - nowSeconds));
+    }
   } else if (typeof s.timeLeft === 'number') {
     // Further fallback if stageReadyAt missing - use adjustedTimeLeft for fermentation stages
     let elapsed = Math.floor((now - lastStatusTime) / 1000);
@@ -813,10 +819,11 @@ function updateCountdownDisplay() {
     }
   }
 
-  // UI logic fix: Only show "stage ready at" if current stage is active and stageReadyAt is valid (future or present)
+  // UI logic fix: Only show "stage ready at" if current stage is active and stageReadyAt is valid future time
   let showStageReadyAt = false;
   let stageReadyAtText = '';
-  if (s.stage !== "Idle" && s.running && stageReadyAt > 0 && timeLeft > 0) {
+  const nowSeconds = Date.now() / 1000; // Current time in seconds
+  if (s.stage !== "Idle" && s.running && stageReadyAt > nowSeconds && timeLeft > 0) {
     showStageReadyAt = true;
     const stageReadyTs = stageReadyAt * 1000;
     stageReadyAtText = "Stage ready at: " + formatDateTime(stageReadyTs);

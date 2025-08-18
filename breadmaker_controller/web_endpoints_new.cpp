@@ -1076,14 +1076,14 @@ void homeAssistantEndpoint(WebServer& server) {
                     server.sendContent(p->customStages[programState.customStageIdx].label.c_str());
                     server.sendContent("\",");
                     
-                    // Calculate total program remaining time (stage + all remaining stages)
+                    // Calculate current stage remaining time only
                     unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
                     unsigned long stageTimeMs = getAdjustedStageTimeMs(p->customStages[programState.customStageIdx].min * 60 * 1000, 
                                                                        p->customStages[programState.customStageIdx].isFermentation);
                     unsigned long stageTimeLeft = (stageTimeMs / 1000) - elapsed;
                     if (stageTimeLeft < 0) stageTimeLeft = 0;
                     
-                    // Add time for all remaining stages
+                    // Calculate total program remaining time (stage + all remaining stages)
                     unsigned long totalRemainingTime = stageTimeLeft;
                     for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
                         unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
@@ -1092,7 +1092,10 @@ void homeAssistantEndpoint(WebServer& server) {
                     }
                     
                     server.sendContent("\"stage_time_left\":");
-                    sprintf(buffer, "%lu", totalRemainingTime / 60); // Convert to minutes for Home Assistant
+                    sprintf(buffer, "%lu", stageTimeLeft / 60); // Current stage time only (in minutes)
+                    server.sendContent(buffer);
+                    server.sendContent(",\"program_time_left\":");
+                    sprintf(buffer, "%lu", totalRemainingTime / 60); // Total program time (in minutes)
                     server.sendContent(buffer);
                     server.sendContent(",");
                 } else if (!programState.isRunning) {
@@ -1133,10 +1136,15 @@ void homeAssistantEndpoint(WebServer& server) {
                 int timeLeftSec = (stageTimeMs / 1000) - elapsed;
                 if (timeLeftSec < 0) timeLeftSec = 0;
                 
-                stageReadyAt = now + timeLeftSec;
+                // Only set stageReadyAt if we have valid time remaining
+                if (timeLeftSec > 0 && now > 0) {
+                    stageReadyAt = now + timeLeftSec;
+                } else {
+                    stageReadyAt = 0; // Invalid/completed stage
+                }
                 
                 // Calculate total program time remaining using fermentation adjustments
-                programReadyAt = stageReadyAt;
+                programReadyAt = (timeLeftSec > 0) ? (now + timeLeftSec) : now;
                 for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
                     unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
                                                                               p->customStages[i].isFermentation);
