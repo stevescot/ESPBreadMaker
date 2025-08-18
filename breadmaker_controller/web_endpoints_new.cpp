@@ -899,11 +899,49 @@ void pidControlEndpoints(WebServer& server) {
         sendJsonError(server, "invalid_request", "Invalid PID parameters", 400);
     });
     
-    // PID parameters endpoint for EMA temperature averaging and other settings
+    // PID parameters endpoint for EMA temperature averaging and PID tuning (memory-safe GET version)
     server.on("/api/pid_params", HTTP_GET, [&](){
         if (server.hasArg("temp_alpha") || server.hasArg("temp_interval") || 
-            server.hasArg("temp_samples") || server.hasArg("temp_reject")) {
+            server.hasArg("temp_samples") || server.hasArg("temp_reject") ||
+            server.hasArg("kp") || server.hasArg("ki") || server.hasArg("kd")) {
             bool updated = false;
+            
+            // Handle PID tuning parameters (memory-safe alternative to JSON POST)
+            if (server.hasArg("kp") || server.hasArg("ki") || server.hasArg("kd")) {
+                bool pidUpdated = false;
+                if (server.hasArg("kp")) {
+                    float newKp = server.arg("kp").toFloat();
+                    if (newKp >= 0.001 && newKp <= 1000.0) {
+                        pid.Kp = newKp;
+                        pidUpdated = true;
+                        if (debugSerial) Serial.printf("[PID] Kp updated to %.6f\n", newKp);
+                    }
+                }
+                if (server.hasArg("ki")) {
+                    float newKi = server.arg("ki").toFloat();
+                    if (newKi >= 0.0 && newKi <= 10.0) {
+                        pid.Ki = newKi;
+                        pidUpdated = true;
+                        if (debugSerial) Serial.printf("[PID] Ki updated to %.6f\n", newKi);
+                    }
+                }
+                if (server.hasArg("kd")) {
+                    float newKd = server.arg("kd").toFloat();
+                    if (newKd >= 0.0 && newKd <= 1000.0) {
+                        pid.Kd = newKd;
+                        pidUpdated = true;
+                        if (debugSerial) Serial.printf("[PID] Kd updated to %.6f\n", newKd);
+                    }
+                }
+                
+                // Apply PID tunings to controller
+                if (pidUpdated) {
+                    if (pid.controller) {
+                        pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
+                    }
+                    updated = true; // Set updated flag regardless of controller state
+                }
+            }
             
             // Handle legacy temp_samples parameter by converting to alpha
             if (server.hasArg("temp_samples")) {
@@ -962,7 +1000,16 @@ void pidControlEndpoints(WebServer& server) {
             }
             
             if (updated) {
-                server.send(200, "application/json", "{\"status\":\"updated\",\"message\":\"EMA temperature filtering parameters updated\"}");
+                bool hasPIDParams = server.hasArg("kp") || server.hasArg("ki") || server.hasArg("kd");
+                bool hasTempParams = server.hasArg("temp_alpha") || server.hasArg("temp_interval");
+                
+                if (hasPIDParams && hasTempParams) {
+                    server.send(200, "application/json", "{\"status\":\"updated\",\"message\":\"PID and EMA temperature parameters updated (memory-safe)\"}");
+                } else if (hasPIDParams) {
+                    server.send(200, "application/json", "{\"status\":\"updated\",\"message\":\"PID parameters updated (memory-safe)\"}");
+                } else {
+                    server.send(200, "application/json", "{\"status\":\"updated\",\"message\":\"EMA temperature filtering parameters updated\"}");
+                }
             } else {
                 server.send(400, "application/json", "{\"error\":\"invalid_parameters\",\"message\":\"Invalid or out-of-range parameters\"}");
             }
@@ -1013,6 +1060,14 @@ void pidControlEndpoints(WebServer& server) {
             server.sendContent(buffer);
             // sprintf(buffer, ",\"temp_consecutive_spikes\":%u", tempAvg.consecutiveSpikes);
             // server.sendContent(buffer);
+            
+            // Include current PID parameters in response
+            sprintf(buffer, ",\"kp\":%.6f", pid.Kp);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"ki\":%.6f", pid.Ki);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"kd\":%.6f", pid.Kd);
+            server.sendContent(buffer);
             
             server.sendContent("}");
         }

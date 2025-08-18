@@ -235,8 +235,23 @@ window.pidComponentData = {
 window.pidComponentChart = null;
 
 function initPIDComponentChart() {
-  const ctx = document.getElementById('pidComponentChart').getContext('2d');
-  window.pidComponentChart = new Chart(ctx, {
+  console.log('Initializing PID component chart...');
+  const canvas = document.getElementById('pidComponentChart');
+  if (!canvas) {
+    console.error('PID component chart canvas not found!');
+    return;
+  }
+  console.log('PID canvas element found:', canvas);
+  
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    console.error('Could not get 2D context from PID canvas!');
+    return;
+  }
+  console.log('PID canvas context obtained:', ctx);
+  
+  try {
+    window.pidComponentChart = new Chart(ctx, {
     type: 'line',
     data: window.pidComponentData,
     options: {
@@ -285,6 +300,10 @@ function initPIDComponentChart() {
       }
     }
   });
+  console.log('PID component chart created successfully:', window.pidComponentChart);
+  } catch (error) {
+    console.error('Error creating PID component chart:', error);
+  }
 }
 
 function clearPIDGraph() {
@@ -372,8 +391,23 @@ let chartData = {
 
 // Initialize chart
 function initChart() {
-  const ctx = document.getElementById('temperatureChart').getContext('2d');
-  temperatureChart = new Chart(ctx, {
+  console.log('Initializing temperature chart...');
+  const canvas = document.getElementById('temperatureChart');
+  if (!canvas) {
+    console.error('Temperature chart canvas not found!');
+    return;
+  }
+  console.log('Canvas element found:', canvas);
+  
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    console.error('Could not get 2D context from canvas!');
+    return;
+  }
+  console.log('Canvas context obtained:', ctx);
+  
+  try {
+    temperatureChart = new Chart(ctx, {
     type: 'line',
     data: chartData,
     options: {
@@ -435,6 +469,10 @@ function initChart() {
       }
     }
   });
+  console.log('Temperature chart created successfully:', temperatureChart);
+  } catch (error) {
+    console.error('Error creating temperature chart:', error);
+  }
 }
 
 // Update EWMA temperature parameters only
@@ -503,96 +541,73 @@ async function updateTempEWMA() {
   }
 }
 
-// Update PID parameters with high precision
+// Update PID parameters with memory-efficient GET requests (safer for ESP32)
 async function updatePIDParams() {
   const kp = parseFloat(document.getElementById('kpInput').value);
   const ki = parseFloat(document.getElementById('kiInput').value);
   const kd = parseFloat(document.getElementById('kdInput').value);
-  const sampleTime = parseInt(document.getElementById('sampleTimeInput').value);
-  const windowSize = parseInt(document.getElementById('windowSizeInput').value);
   const tempAlpha = parseFloat(document.getElementById('tempAlpha').value);
   const tempUpdateInterval = parseInt(document.getElementById('tempUpdateInterval').value);
 
-  // Validate EWMA parameters
+  // Validate parameters first
+  if (isNaN(kp) || isNaN(ki) || isNaN(kd)) {
+    showMessage('Invalid PID values. Please enter valid numbers.', 'error');
+    return;
+  }
+
   if (tempAlpha < 0.01 || tempAlpha > 0.5) {
     showMessage('Invalid alpha: must be between 0.01 and 0.5', 'error');
     return;
   }
 
-  console.log('Updating PID params:', { kp, ki, kd, sampleTime, windowSize, tempAlpha, tempUpdateInterval });
+  console.log('Updating PID params (memory-efficient):', { kp, ki, kd, tempAlpha, tempUpdateInterval });
 
   try {
-    // Use POST request with JSON body for PID parameter updates
-    const pidData = {
-      kp: parseFloat(kp.toFixed(6)),
-      ki: parseFloat(ki.toFixed(6)),
-      kd: parseFloat(kd.toFixed(6))
-    };
+    // Use simple GET requests to avoid JSON parsing overhead and memory issues
+    // This is much safer for ESP32 with limited RAM
     
-    console.log('Request data:', pidData);
+    showMessage('Updating parameters... (1/2)', 'info');
     
-    const response = await fetch('/api/pid', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(pidData)
-    });
+    // First, update PID parameters using GET (much more memory-efficient)
+    const pidUrl = `/api/pid_params?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}`;
+    console.log('PID update URL:', pidUrl);
     
-    const data = await response.json();
+    const pidResponse = await fetchWithTimeout(pidUrl, 8000);
     
-    if (response.ok) {
-      console.log('PID parameters updated:', data);
-      
-      // Enhanced feedback based on firmware response
-      let successMessage = 'Parameters updated successfully';
-      
-      if (data.update_details) {
-        successMessage = data.update_details;
-        
-        // Add data preservation info if available
-        if (data.data_preservation) {
-          successMessage += ` (${data.data_preservation})`;
-        }
-      } else if (data.updated) {
-        successMessage = 'PID parameters and temperature averaging updated successfully';
-      } else {
-        successMessage = 'Parameters verified - no changes required';
-      }
-      
-      showMessage(successMessage, 'success');
-      
-      // Log detailed information for debugging
-      if (data.update_details || data.data_preservation) {
-        console.log('Update details:', data.update_details);
-        console.log('Data preservation:', data.data_preservation);
-      }
-      
-      // Update display
-      document.getElementById('currentKp').textContent = kp.toFixed(6);
-      document.getElementById('currentKi').textContent = ki.toFixed(6);
-      document.getElementById('currentKd').textContent = kd.toFixed(6);
-      document.getElementById('currentSampleTime').textContent = sampleTime + ' ms';
-      
-      // Refresh the current status display to show updated temperature averaging values
-      setTimeout(() => {
-        console.log('Refreshing status after PID parameters update...');
-        if (typeof updateStatus === 'function') {
-          updateStatus();
-        }
-      }, 1000); // Increased delay to ensure backend has processed the update
-    } else {
-      // Handle validation errors from firmware
-      console.error('Parameter validation errors:', data);
-      if (data.errors) {
-        showMessage('Parameter validation errors: ' + data.errors, 'error');
-      } else {
-        showMessage('Failed to update PID parameters', 'error');
-      }
+    if (!pidResponse.ok) {
+      throw new Error(`PID update failed: ${pidResponse.status}`);
     }
+    
+    showMessage('Updating parameters... (2/2)', 'info');
+    
+    // Then update temperature averaging parameters
+    const tempUrl = `/api/pid_params?temp_alpha=${tempAlpha.toFixed(3)}&temp_interval=${tempUpdateInterval}`;
+    console.log('Temp update URL:', tempUrl);
+    
+    const tempResponse = await fetchWithTimeout(tempUrl, 8000);
+    
+    if (!tempResponse.ok) {
+      throw new Error(`Temperature settings update failed: ${tempResponse.status}`);
+    }
+    
+    // Success!
+    showMessage('All parameters updated successfully! (Memory-safe method)', 'success');
+    
+    // Update display values
+    document.getElementById('currentKp').textContent = kp.toFixed(6);
+    document.getElementById('currentKi').textContent = ki.toFixed(6);
+    document.getElementById('currentKd').textContent = kd.toFixed(6);
+    
+    // Small delay before refreshing status to avoid overwhelming ESP32
+    setTimeout(() => {
+      if (typeof updateStatus === 'function') {
+        updateStatus();
+      }
+    }, 2000);
+    
   } catch (error) {
-    console.error('Network error:', error);
-    showMessage('Error updating PID parameters: ' + error.message, 'error');
+    console.error('Parameter update error:', error);
+    showMessage('Error updating parameters: ' + error.message + ' (ESP32 may have run out of memory)', 'error');
   }
 }
 
@@ -764,6 +779,20 @@ if (!document.getElementById('messageAnimations')) {
 
 // Initialize page
 document.addEventListener('DOMContentLoaded', function() {
+  console.log('DOM Content Loaded - starting PID tune page initialization');
+  
+  // Check if Chart.js is loaded
+  if (typeof Chart === 'undefined') {
+    console.error('Chart.js library not loaded! Charts will not work.');
+    // Try to show an error message to the user
+    const chartContainers = document.querySelectorAll('.chart-container');
+    chartContainers.forEach(container => {
+      container.innerHTML = '<div style="text-align: center; color: red; padding: 20px;"><h3>⚠️ Chart.js library failed to load</h3><p>Real-time graphs are unavailable. Check your internet connection.</p></div>';
+    });
+    return;
+  }
+  console.log('Chart.js version:', Chart.version);
+  
   initChart();
   initPIDComponentChart();
   loadCurrentParams();
@@ -1257,6 +1286,80 @@ async function startManualTest() {
   }
 }
 
+// Quick test function that uses the prominent quick test input
+async function startQuickTest() {
+  const targetTemp = parseFloat(document.getElementById('quickTargetTemp').value);
+  
+  if (isNaN(targetTemp) || targetTemp < 20 || targetTemp > 250) {
+    showMessage('Please enter a valid target temperature (20-250°C)', 'error', 3000);
+    return;
+  }
+  
+  try {
+    // Enable manual mode
+    const manualModeResponse = await fetch('/api/manual_mode?on=1', {
+      method: 'GET'
+    });
+    
+    if (!manualModeResponse.ok) {
+      throw new Error('Failed to enable manual mode');
+    }
+    
+    // Set the temperature setpoint
+    const tempResponse = await fetch(`/api/temperature?setpoint=${targetTemp}`, {
+      method: 'GET'
+    });
+    
+    if (!tempResponse.ok) {
+      throw new Error('Failed to set temperature setpoint');
+    }
+    
+    // Reset test start time for chart
+    testStartTime = Date.now();
+    
+    // Enable status updates if not already running
+    if (!updateInterval) {
+      startStatusUpdates();
+    }
+    
+    showMessage(`Quick test started - target: ${targetTemp}°C. Scroll down to see graphs!`, 'success', 5000);
+    
+    // Update button states
+    const startBtn = document.querySelector('button[onclick="startQuickTest()"]');
+    const stopBtn = document.querySelector('button[onclick="stopTest()"]');
+    if (startBtn) {
+      startBtn.innerHTML = '🔄 Testing... Check graphs below!';
+      startBtn.disabled = true;
+      startBtn.style.background = '#ff9800';
+    }
+    if (stopBtn) stopBtn.disabled = false;
+    
+    // Show success message in the quick test section
+    const quickSection = document.querySelector('.quick-test-section');
+    if (quickSection) {
+      const existingMsg = quickSection.querySelector('.success-message');
+      if (existingMsg) existingMsg.remove();
+      
+      const successMsg = document.createElement('div');
+      successMsg.className = 'success-message';
+      successMsg.style.cssText = 'background: rgba(255,255,255,0.2); padding: 10px; border-radius: 6px; margin-top: 10px; border: 1px solid rgba(255,255,255,0.3);';
+      successMsg.innerHTML = '<strong>✅ Test Started!</strong> Scroll down to see the real-time graphs updating every 5 seconds.';
+      quickSection.appendChild(successMsg);
+      
+      // Remove message after 10 seconds
+      setTimeout(() => {
+        if (successMsg && successMsg.parentNode) {
+          successMsg.remove();
+        }
+      }, 10000);
+    }
+    
+  } catch (error) {
+    console.error('Failed to start quick test:', error);
+    showMessage('Failed to start quick test: ' + error.message, 'error', 5000);
+  }
+}
+
 // Stop any running test
 async function stopTest() {
   try {
@@ -1276,11 +1379,22 @@ async function stopTest() {
     
     showMessage('Test stopped', 'info', 3000);
     
-    // Update button states
+    // Update button states for both manual and quick test
     const startBtn = document.querySelector('button[onclick="startManualTest()"]');
+    const quickStartBtn = document.querySelector('button[onclick="startQuickTest()"]');
     const stopBtn = document.querySelector('button[onclick="stopTest()"]');
+    
     if (startBtn) startBtn.disabled = false;
+    if (quickStartBtn) {
+      quickStartBtn.innerHTML = '🚀 Start Test & Show Graphs';
+      quickStartBtn.disabled = false;
+      quickStartBtn.style.background = '';
+    }
     if (stopBtn) stopBtn.disabled = true;
+    
+    // Clear any success messages
+    const successMsg = document.querySelector('.success-message');
+    if (successMsg) successMsg.remove();
     
   } catch (error) {
     console.error('Failed to stop test:', error);

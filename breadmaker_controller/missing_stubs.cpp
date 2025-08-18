@@ -91,6 +91,23 @@ void updateTemperatureSampling() {
         // Take a new temperature sample using the calibrated readTemperature function
         float calibratedTemp = readTemperature();
         
+        // CRITICAL SAFETY FIX: Reject invalid temperature readings to prevent PID malfunction
+        if (calibratedTemp <= -999.0f || calibratedTemp >= 999.0f) {
+            if (debugSerial) {
+                Serial.printf("[TEMP-EMA] SAFETY: Rejecting invalid temperature %.2f°C from sensor failure\n", calibratedTemp);
+            }
+            // Do not update EMA with invalid readings - keep last valid temperature
+            return;
+        }
+        
+        // Additional validation: Reject physically impossible temperatures
+        if (calibratedTemp < -50.0f || calibratedTemp > 300.0f) {
+            if (debugSerial) {
+                Serial.printf("[TEMP-EMA] SAFETY: Rejecting out-of-range temperature %.2f°C\n", calibratedTemp);
+            }
+            return;
+        }
+        
         // Spike detection disabled - accepting all temperature readings
         // (Removed due to false positives after reboots)
         /*
@@ -456,6 +473,9 @@ void streamStatusJson(Print& out) {
   // Update fermentation cache first (only recalculates when needed)
   updateFermentationCache();
   
+  // Variable to store total program remaining time (will be calculated below)
+  unsigned long totalProgramRemainingTime = 0;
+  
   // Start main JSON object
   out.print("{");
   
@@ -489,22 +509,60 @@ void streamStatusJson(Print& out) {
         out.printf("\"stageIdx\":%u,", (unsigned)programState.customStageIdx);
         out.printf("\"setpoint\":%.1f,", stage.temp);
         
-        // Calculate time left in current stage (fermentation-adjusted)
+        // Calculate time left in current stage (fermentation-adjusted with periodic updates)
         unsigned long timeLeft = 0;
         unsigned long adjustedTimeLeft = 0;
         if (programState.isRunning && programState.customStageStart > 0) {
           unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
           unsigned long baseStageDuration = stage.min * 60;
-          unsigned long adjustedStageDuration = getAdjustedStageTimeMs(baseStageDuration * 1000, stage.isFermentation) / 1000;
+          
+          // Get or calculate adjusted stage duration with periodic updates (every 10 minutes)
+          unsigned long adjustedStageDuration = baseStageDuration;
+          if (stage.isFermentation) {
+            unsigned long timeSinceLastUpdate = millis() - programState.lastFermentationUpdate;
+            bool needsUpdate = (programState.adjustedStageDurations[programState.customStageIdx] == 0) || 
+                              (timeSinceLastUpdate > 600000); // 10 minutes = 600,000 ms
+            
+            if (needsUpdate) {
+              // Recalculate adjusted duration based on current fermentation conditions
+              adjustedStageDuration = getAdjustedStageTimeMs(baseStageDuration * 1000, true) / 1000;
+              programState.adjustedStageDurations[programState.customStageIdx] = adjustedStageDuration;
+              programState.lastFermentationUpdate = millis();
+            } else {
+              // Use cached adjusted duration
+              adjustedStageDuration = programState.adjustedStageDurations[programState.customStageIdx];
+            }
+          }
           
           // Original time left (non-adjusted)
           timeLeft = (elapsed < baseStageDuration) ? (baseStageDuration - elapsed) : 0;
           
-          // Fermentation-adjusted time left
+          // Fermentation-adjusted time left (using periodically updated duration)
           adjustedTimeLeft = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
         }
         out.printf("\"timeLeft\":%lu,", timeLeft);
         out.printf("\"adjustedTimeLeft\":%lu,", adjustedTimeLeft);
+        
+        // Calculate total program remaining time (current stage + all future stages with periodic fermentation adjustment)
+        totalProgramRemainingTime = adjustedTimeLeft; // Start with current stage time left
+        const Program* p = getActiveProgram();
+        if (p && programState.isRunning) {
+          // Add time for all remaining stages after current one
+          for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); i++) {
+            const CustomStage& futureStage = p->customStages[i];
+            unsigned long adjustedDurationMs;
+            
+            if (futureStage.isFermentation) {
+              // For future fermentation stages, use current fermentation conditions
+              // This will be updated every 10 minutes when those stages are reached
+              adjustedDurationMs = getAdjustedStageTimeMs(futureStage.min * 60 * 1000, true);
+            } else {
+              // Non-fermentation stages use original duration
+              adjustedDurationMs = futureStage.min * 60 * 1000;
+            }
+            totalProgramRemainingTime += adjustedDurationMs / 1000;
+          }
+        }
         
         // Stage ready time (using adjusted duration)
         if (programState.isRunning && adjustedTimeLeft > 0) {
@@ -627,10 +685,9 @@ void streamStatusJson(Print& out) {
   // === Predicted Program End Time ===
   out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)fermentCache.cachedProgramEndTime);
   
-  // === Additional timing data for UI (from cache) ===
+  // === Additional timing data for UI ===
   out.printf("\"totalProgramDuration\":%lu,", fermentCache.cachedTotalDuration);
   out.printf("\"elapsedTime\":%lu,", fermentCache.cachedElapsedTime);
-  out.printf("\"remainingTime\":%lu,", fermentCache.cachedRemainingTime);
   
   // === Stage Start Times Array ===
   out.print("\"actualStageStartTimes\":[");
@@ -868,17 +925,18 @@ void updateFermentationCache() {
     
     fermentCache.cachedProgramEndTime = runningTime;
     
-    // Calculate timing data for UI - use fermentState.predictedCompleteTime for consistency
-    if (programState.actualStageStartTimes[0] > 0 && fermentState.predictedCompleteTime > 0) {
+    // Calculate timing data for UI using the correctly calculated program end time
+    if (programState.actualStageStartTimes[0] > 0) {
       time_t programStart = programState.actualStageStartTimes[0];
       time_t currentTime = time(nullptr);
       
-      // Use the same timing source as programReadyAt for consistency
-      fermentCache.cachedProgramEndTime = fermentState.predictedCompleteTime;
-      fermentCache.cachedTotalDuration = fermentCache.cachedProgramEndTime - programStart;
+      // Use the correctly calculated program end time (not the bogus fermentState.predictedCompleteTime)
+      time_t programEndTime = programStart + runningTime;
+      fermentCache.cachedProgramEndTime = programEndTime;
+      fermentCache.cachedTotalDuration = runningTime;
       fermentCache.cachedElapsedTime = currentTime - programStart;
-      fermentCache.cachedRemainingTime = (fermentCache.cachedProgramEndTime > currentTime) ? 
-                                        (fermentCache.cachedProgramEndTime - currentTime) : 0;
+      fermentCache.cachedRemainingTime = (programEndTime > currentTime) ? 
+                                        (programEndTime - currentTime) : 0;
     } else {
       fermentCache.cachedTotalDuration = 0;
       fermentCache.cachedElapsedTime = 0;

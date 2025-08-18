@@ -25,7 +25,7 @@ void setHeater(bool on) {
   if (on) {
     extern float readTemperature();  // Forward declaration
     float currentTemp = readTemperature();
-    if (currentTemp <= -999.0f) {  // Error value indicating sensor failure
+    if (currentTemp <= -999.0f || currentTemp >= 999.0f) {  // Error values indicating sensor failure
       if (debugSerial) Serial.println("[SAFETY] Heater turn-on BLOCKED - temperature sensor failure detected!");
       on = false;  // Force heater off for safety
     }

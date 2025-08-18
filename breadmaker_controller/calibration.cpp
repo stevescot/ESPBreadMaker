@@ -67,7 +67,8 @@ float readTemperature() {
     // Turn off heater immediately for safety
     extern void setHeater(bool);  // Forward declaration
     setHeater(false);
-    return -999.0f;  // Return error value to indicate sensor failure
+    // SAFETY FIX: Return HIGH temperature to prevent PID from heating!
+    return 999.0f;  // Return HIGH error value - PID will think it's too hot and stop heating
   }
   
   float temp = tempFromRaw(raw);

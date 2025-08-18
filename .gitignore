@@ -3,3 +3,10 @@ breadmaker_controller/build/breadmaker_controller.ino.map
 breadmaker_controller/build/breadmaker_controller.ino.elf
 breadmaker_controller/build/breadmaker_controller.ino.bin
 /breadmaker_controller/build
+
+# Ignore empty markdown files that might be auto-generated
+*.md
+!README.md
+!CODE_DOCUMENTATION.md
+!copilot_instructions.md
+!DOCUMENTATION_CONSOLIDATION.md

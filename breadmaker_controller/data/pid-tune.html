@@ -85,6 +85,24 @@
       </div>
     </div>
     
+    <!-- Quick Test Section - Prominent placement -->
+    <div class="quick-test-section">
+      <h3>🚀 Quick PID Test (Start Here!)</h3>
+      <div class="quick-test-controls">
+        <div class="param-row" style="align-items: center; gap: 15px; flex-wrap: wrap;">
+          <label class="param-label" style="font-weight: bold;">Target Temperature:</label>
+          <input type="number" id="quickTargetTemp" class="param-input" step="0.5" min="20" max="250" value="27.0" style="min-width: 80px;">
+          <span class="param-unit">°C</span>
+          <button class="btn btn-success btn-large" onclick="startQuickTest()" style="margin-left: 10px; padding: 12px 24px; font-size: 16px; font-weight: bold;">🚀 Start Test & Show Graphs</button>
+          <button class="btn btn-danger" onclick="stopTest()" style="padding: 12px 24px; font-size: 16px;">⏹️ Stop Test</button>
+        </div>
+        <div class="param-desc" style="margin-top: 15px; padding: 10px; background: #e3f2fd; border-left: 4px solid #2196f3; border-radius: 4px;">
+          <strong>💡 Start here to see the real-time graphs!</strong> Set a safe temperature (like 27°C for gentle testing) and click "Start Test". 
+          The graphs will appear at the bottom and show live PID performance data. Perfect for tuning during bread proofing!
+        </div>
+      </div>
+    </div>
+    
     <div class="tuning-instructions">
       <h3>📚 PID Tuning Quick Reference</h3>
       <div class="instructions-grid">
@@ -223,10 +241,15 @@
         </div>
 
         <div class="button-group">
-          <button class="btn btn-primary" onclick="updatePIDParams()">Apply All Parameters</button>
+          <button class="btn btn-primary" onclick="updatePIDParams()">🔧 Apply All Parameters (Memory-Safe)</button>
           <button class="btn btn-primary" onclick="updateTempEWMA()">Apply EWMA Settings</button>
           <button class="btn btn-warning" onclick="resetToDefaults()">Reset Defaults</button>
           <button class="btn btn-primary" onclick="loadCurrentParams()">Load Current</button>
+        </div>
+        
+        <div class="param-desc" style="margin-top: 15px; padding: 10px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
+          <strong>⚠️ Memory Notice:</strong> The "Apply All Parameters" button now uses a memory-efficient method to prevent ESP32 crashes. 
+          If you experience any issues, try applying parameters individually using the other buttons.
         </div>
         
         <div class="param-group">

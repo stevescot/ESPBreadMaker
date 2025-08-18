@@ -111,6 +111,8 @@ struct ProgramState {
     unsigned long customStageStart = 0, customMixStepStart = 0;
     time_t programStartTime = 0;
     time_t actualStageStartTimes[MAX_PROGRAM_STAGES] = {0};
+    unsigned long adjustedStageDurations[MAX_PROGRAM_STAGES] = {0}; // Store fermentation-adjusted durations
+    unsigned long lastFermentationUpdate = 0; // Last time fermentation was recalculated (millis)
     bool isRunning = false, manualMode = false;
 };
 #endif
@@ -221,6 +223,8 @@ struct SafetySystem {
     
     // Check if temperature reading is valid
     bool isTemperatureValid(float temp) const {
+        // Reject sensor error values (both low and high) and physically impossible readings
+        if (temp <= -999.0f || temp >= 999.0f) return false;
         return (temp >= MIN_VALID_TEMPERATURE && temp <= MAX_VALID_TEMPERATURE && temp != 0.0);
     }
     

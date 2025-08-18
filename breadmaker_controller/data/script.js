@@ -1008,27 +1008,67 @@ function showPlanSummary(s) {
       let skipped = false;
       if (currentStageIdx >= 0) {
         if (i < currentStageIdx) {
-          // If actualStageStartTimes[i] is missing but a later stage has started, this stage was skipped
-          if (!s.actualStageStartTimes || !s.actualStageStartTimes[i]) {
-            rowClass = 'done';
-            skipped = true;
+          // Stage is before current stage - determine if completed or skipped
+          // If we have actualStageStartTimes data, use it for detection
+          if (Array.isArray(s.actualStageStartTimes)) {
+            if (!s.actualStageStartTimes[i]) {
+              // No start time recorded, but check if this could be a backend recording issue
+              // If stages after this one have start times, or if current stage is running normally,
+              // then this stage probably ran but wasn't recorded properly
+              let hasLaterStages = false;
+              for (let j = i + 1; j < currentStageIdx && j < s.actualStageStartTimes.length; j++) {
+                if (s.actualStageStartTimes[j] > 0) {
+                  hasLaterStages = true;
+                  break;
+                }
+              }
+              
+              // If we're currently in a stage beyond this one and running normally, 
+              // assume missing stages were completed (backend recording issue)
+              if (s.running && currentStageIdx > i) {
+                rowClass = 'done';
+                skipped = false; // Assume completed, not skipped
+              } else {
+                rowClass = 'done';
+                skipped = true; // Truly skipped
+              }
+            } else {
+              // Start time exists = stage was completed normally
+              rowClass = 'done';
+              skipped = false;
+            }
           } else {
+            // No actualStageStartTimes data - assume completed if we're past it
             rowClass = 'done';
+            skipped = false;
           }
         } else if (i === currentStageIdx) rowClass = 'active';
         else rowClass = 'inactive';
       }
+      
       // Show actual elapsed time for done stages if available, else planned/adjusted duration
       let durationCell = '';
       if (skipped) {
         durationCell = `<span title="Skipped stage">Skipped</span>`;
-      } else if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i+1]) {
-        // Show actual elapsed time for completed stage
-        let elapsedSec = (s.actualStageStartTimes[i+1] - s.actualStageStartTimes[i]);
+      } else if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i]) {
+        // For completed stages, calculate actual duration
+        let elapsedSec = 0;
+        if (s.actualStageStartTimes[i+1]) {
+          // Next stage started - use that as end time
+          elapsedSec = (s.actualStageStartTimes[i+1] - s.actualStageStartTimes[i]);
+        } else if (i === currentStageIdx - 1 && typeof s.programStartTime === 'number' && typeof s.stageStartTime === 'number') {
+          // This is the most recently completed stage - use current stage start as end time
+          elapsedSec = (s.stageStartTime - s.actualStageStartTimes[i]);
+        } else if (i === currentStageIdx - 1 && typeof s.customStageStart === 'number') {
+          // Fallback: use current stage start time
+          elapsedSec = (s.customStageStart / 1000 - s.actualStageStartTimes[i]);
+        }
+        
         if (elapsedSec > 0) {
-          durationCell = `<span title="Actual elapsed time">${formatDuration(elapsedSec)}</span>`;
+          durationCell = `<span title="Actual elapsed time" style="color: #2d8c2d; font-weight: bold;">${formatDuration(elapsedSec)}</span>`;
         } else {
-          durationCell = '--';
+          // Fallback to planned duration if we can't calculate actual time
+          durationCell = `<span title="Planned duration (actual time unavailable)">${formatDuration(st.min * 60)}<br><small>(${st.min.toFixed(1)} min planned)</small></span>`;
         }
       } else if (rowClass === 'active' && typeof s.timeLeft === 'number' && i === currentStageIdx && s.running) {
         // Show actual time left for the active stage - use adjustedTimeLeft for fermentation stages
