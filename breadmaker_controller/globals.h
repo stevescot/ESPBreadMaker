@@ -16,7 +16,10 @@ typedef struct {
   float fermentLastTemp;
   float fermentLastFactor;
   unsigned long fermentLastUpdateMs;
-  double fermentWeightedSec;
+  // New clearer time tracking approach
+  double scheduledElapsedSeconds;     // Elapsed time in "scheduled fermentation time" (what the recipe expects)
+  double realElapsedSeconds;          // Actual real-world elapsed time since stage start
+  double accumulatedFermentMinutes;   // Accumulated fermentation progress in minute increments
 } FermentationState;
 
 extern FermentationState fermentState;

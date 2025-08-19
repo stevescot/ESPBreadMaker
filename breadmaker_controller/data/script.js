@@ -1191,15 +1191,20 @@ function renderProgramProgressBar(s) {
   if (typeof s.predictedProgramEnd === 'number' && actualStarts[0]) {
     // Use firmware-calculated total duration (includes fermentation adjustments)
     totalSec = s.predictedProgramEnd - actualStarts[0];
-    elapsed = Math.floor((Date.now()/1000) - actualStarts[0]);
+    // Prefer server-calculated elapsed time, fallback to browser calculation
+    elapsed = (typeof s.elapsedTime === 'number') ? s.elapsedTime : Math.floor((Date.now()/1000) - actualStarts[0]);
   } else {
     // Fallback to raw stage durations (without fermentation adjustments)
     let totalMin = stages.reduce((sum, st) => sum + (st.min || 0), 0);
     totalSec = totalMin * 60;
-    // If we have actual start times, use them for elapsed
-    elapsed = typeof s.elapsed === 'number' ? s.elapsed : 0;
-    if (!elapsed && actualStarts[0]) {
-      elapsed = Math.floor((Date.now()/1000) - actualStarts[0]);
+    // Prefer server elapsed time, then try s.elapsed, then calculate from start times
+    if (typeof s.elapsedTime === 'number') {
+      elapsed = s.elapsedTime;
+    } else {
+      elapsed = typeof s.elapsed === 'number' ? s.elapsed : 0;
+      if (!elapsed && actualStarts[0]) {
+        elapsed = Math.floor((Date.now()/1000) - actualStarts[0]);
+      }
     }
   }
   // Render progress bar
@@ -1236,9 +1241,8 @@ function renderProgramProgressBar(s) {
   // Priority 1: Use firmware-provided timing data (most accurate)
   if (s.running && typeof s.totalProgramDuration === 'number' && typeof s.elapsedTime === 'number' && typeof s.remainingTime === 'number') {
     totalSec = s.totalProgramDuration;
-    // For fermentation programs, calculate real elapsed time from total - remaining
-    // This ensures elapsed time matches the fermentation-adjusted total duration
-    elapsed = s.totalProgramDuration - s.remainingTime;
+    // Use the server-calculated elapsed time directly (handles timezone/NTP correctly)
+    elapsed = s.elapsedTime;
     remain = s.remainingTime;
   }
   // Priority 2: Use firmware predictedProgramEnd (fermentation-adjusted)

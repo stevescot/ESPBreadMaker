@@ -684,7 +684,7 @@ void resetFermentationTracking(float temp) {
   }
   lastResetTime = now;
   
-  if (debugSerial) Serial.printf("[FERMENT] Tracking reset: temp=%.1f, previous weighted=%.1fs, clearing all timers\n", temp, fermentState.fermentWeightedSec);
+  if (debugSerial) Serial.printf("[FERMENT] Tracking reset: temp=%.1f, previous scheduled=%.1fs, clearing all timers\n", temp, fermentState.scheduledElapsedSeconds);
   
   fermentState.initialFermentTemp = temp;
   fermentState.fermentationFactor = calculateFermentationFactor(temp); // Calculate proper factor
@@ -693,7 +693,10 @@ void resetFermentationTracking(float temp) {
   fermentState.fermentLastTemp = temp;
   fermentState.fermentLastFactor = fermentState.fermentationFactor;
   fermentState.fermentLastUpdateMs = now;
-  fermentState.fermentWeightedSec = 0.0;
+  // Initialize new time tracking system
+  fermentState.scheduledElapsedSeconds = 0.0;
+  fermentState.realElapsedSeconds = 0.0;
+  fermentState.accumulatedFermentMinutes = 0.0;
   
   // Reset rate limiting to allow immediate update for new stage
   lastFermentUpdate = 0;
@@ -1023,7 +1026,10 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           Serial.printf("[FERMENT-TIMING-CALC] Calculation: pow(%.1f, (%.1f - %.1f) / 10.0) = pow(%.1f, %.1f) = %.3f\n", 
                        q10, baseline, actualTemp, q10, (baseline - actualTemp) / 10.0, fermentState.fermentLastFactor);
           fermentState.fermentLastUpdateMs = nowMs;
-          fermentState.fermentWeightedSec = 0.0;
+          // Initialize new time tracking system
+          fermentState.scheduledElapsedSeconds = 0.0;
+          fermentState.realElapsedSeconds = 0.0;
+          fermentState.accumulatedFermentMinutes = 0.0;
           if (debugSerial) Serial.printf("[FERMENT] Stage %d (%s) initialized: temp=%.1f, baseline=%.1f, q10=%.1f, factor=%.3f, planned=%.1fs (%.1f hours)\n", 
                                         programState.customStageIdx, st.label.c_str(), actualTemp, baseline, q10, 
                                         fermentState.fermentLastFactor, (double)st.min * 60.0, (double)st.min / 60.0);
@@ -1035,38 +1041,51 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
             return;
           }
           
-          double elapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
+          double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
           // Sanity check: prevent accumulation of unreasonably large time periods
-          if (elapsedSec > 1800.0) { // More than 30 minutes since last update
-            if (debugSerial) Serial.printf("[FERMENT] WARNING: Large time gap detected (%.1fs), capping at 1800s\n", elapsedSec);
-            elapsedSec = 1800.0;
+          if (realElapsedSec > 1800.0) { // More than 30 minutes since last update
+            if (debugSerial) Serial.printf("[FERMENT] WARNING: Large time gap detected (%.1fs), capping at 1800s\n", realElapsedSec);
+            realElapsedSec = 1800.0;
           }
           
-          double previousWeightedSec = fermentState.fermentWeightedSec;
-          double incrementalWeightedSec = elapsedSec / fermentState.fermentLastFactor; // DIVISION: cooler temp = factor > 1 = slower fermentation
-          fermentState.fermentWeightedSec += incrementalWeightedSec;
+          // Update real elapsed time
+          fermentState.realElapsedSeconds += realElapsedSec;
+          
+          // Update fermentation factor based on current temperature
           fermentState.fermentLastTemp = actualTemp;
           fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
           Serial.printf("[FERMENT-TIMING-UPDATE] Calculation: pow(%.1f, (%.1f - %.1f) / 10.0) = pow(%.1f, %.1f) = %.3f\n", 
                        q10, baseline, actualTemp, q10, (baseline - actualTemp) / 10.0, fermentState.fermentLastFactor);
+          
+          // NEW APPROACH: Every (fermentationFactor * 60) real seconds = 1 minute of scheduled fermentation
+          // Example: factor 0.84 means every 50.4 real seconds = 1 scheduled minute (faster fermentation)
+          // Example: factor 1.2 means every 72 real seconds = 1 scheduled minute (slower fermentation)
+          double secondsPerScheduledMinute = fermentState.fermentLastFactor * 60.0;
+          fermentState.accumulatedFermentMinutes += realElapsedSec / secondsPerScheduledMinute;
+          
+          // Convert accumulated minutes back to scheduled seconds for comparison
+          double previousScheduledSec = fermentState.scheduledElapsedSeconds;
+          fermentState.scheduledElapsedSeconds = fermentState.accumulatedFermentMinutes * 60.0;
+          
           fermentState.fermentLastUpdateMs = nowMs;
           
-          // Enhanced debug output with detailed accumulation info
+          // Enhanced debug output with clear real vs scheduled time
           if (debugSerial) {
-            Serial.printf("[FERMENT] Stage %d (%s) update: real_elapsed=%.1fs, factor=%.3f, increment=%.1fs, weighted=%.1fs->%.1fs (%.1f%% complete), temp=%.1f, target=%.1fs (%.1f hours)\n", 
-                         programState.customStageIdx, st.label.c_str(), elapsedSec, fermentState.fermentLastFactor, 
-                         incrementalWeightedSec, previousWeightedSec, fermentState.fermentWeightedSec, 
-                         (fermentState.fermentWeightedSec / ((double)st.min * 60.0)) * 100.0, 
-                         actualTemp, (double)st.min * 60.0, (double)st.min / 60.0);
+            Serial.printf("[FERMENT] Stage %d (%s): real_elapsed=%.1fs, sched_elapsed=%.1fs, factor=%.3f, secs_per_sched_min=%.1f, temp=%.1f, target=%.1fs (%.1f%% complete)\n", 
+                         programState.customStageIdx, st.label.c_str(), 
+                         fermentState.realElapsedSeconds, fermentState.scheduledElapsedSeconds, 
+                         fermentState.fermentLastFactor, secondsPerScheduledMinute, actualTemp, 
+                         (double)st.min * 60.0, (fermentState.scheduledElapsedSeconds / ((double)st.min * 60.0)) * 100.0);
           }
         }
         fermentState.fermentationFactor = fermentState.fermentLastFactor; // For reference: multiply planned time by this factor for Q10
         double plannedStageSec = (double)st.min * 60.0;
         double epsilon = 0.05;
-        if (!stageJustAdvanced && (fermentState.fermentWeightedSec + epsilon >= plannedStageSec)) {
-          if (debugSerial) Serial.printf("[FERMENT] Auto-advance: Stage %d (%s) COMPLETE - weighted %.1fs >= planned %.1fs (%.1f%% complete, %.1f hours actual)\n", 
-                                        programState.customStageIdx, st.label.c_str(), fermentState.fermentWeightedSec, plannedStageSec, 
-                                        (fermentState.fermentWeightedSec / plannedStageSec) * 100.0, fermentState.fermentWeightedSec / 3600.0);
+        if (!stageJustAdvanced && (fermentState.scheduledElapsedSeconds + epsilon >= plannedStageSec)) {
+          if (debugSerial) Serial.printf("[FERMENT] Auto-advance: Stage %d (%s) COMPLETE - scheduled %.1fs >= planned %.1fs (%.1f%% complete, real %.1fs actual, ratio %.2f)\n", 
+                                        programState.customStageIdx, st.label.c_str(), fermentState.scheduledElapsedSeconds, plannedStageSec, 
+                                        (fermentState.scheduledElapsedSeconds / plannedStageSec) * 100.0, fermentState.realElapsedSeconds,
+                                        fermentState.realElapsedSeconds / fermentState.scheduledElapsedSeconds);
           programState.customStageIdx++;
           programState.customStageStart = millis();
           
@@ -1239,18 +1258,17 @@ void handleCustomStages(bool &stageJustAdvanced) {
             float factor = pow(q10, (baseline - temp) / 10.0); // Q10: factor > 1 means slower at cooler temp
             cumulativePredictedSec += plannedStageSec * factor; // Multiply: cooler temp = longer real time needed
           } else if (i == programState.customStageIdx) {
-            // Current fermentation stage: weighted elapsed + predicted remaining
-            double elapsedWeightedSec = fermentState.fermentWeightedSec;
-            double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
-            elapsedWeightedSec += realElapsedSec / fermentState.fermentLastFactor; // DIVISION: convert real time to weighted time
+            // Current fermentation stage: use scheduled elapsed time
+            double elapsedScheduledSec = fermentState.scheduledElapsedSeconds;
             
-            // Remaining weighted time needed
-            double remainingWeightedSec = plannedStageSec - elapsedWeightedSec;
-            if (remainingWeightedSec < 0) remainingWeightedSec = 0;
+            // Remaining scheduled time needed
+            double remainingScheduledSec = plannedStageSec - elapsedScheduledSec;
+            if (remainingScheduledSec < 0) remainingScheduledSec = 0;
             
-            // Convert elapsed and remaining weighted time back to real time at current temperature
-            double elapsedRealSec = elapsedWeightedSec * fermentState.fermentLastFactor; // Multiply: convert weighted back to real
-            double remainingRealSec = remainingWeightedSec * fermentState.fermentLastFactor; // Multiply: cooler temp = more real time
+            // Convert to real time using current factor
+            double factor = fermentState.fermentLastFactor > 0 ? fermentState.fermentLastFactor : 1.0;
+            double elapsedRealSec = fermentState.realElapsedSeconds;
+            double remainingRealSec = remainingScheduledSec * factor; // Multiply: cooler temp = more real time
             cumulativePredictedSec += elapsedRealSec + remainingRealSec;
           } else {
             // Future fermentation stages: predict using current temperature
@@ -1260,7 +1278,14 @@ void handleCustomStages(bool &stageJustAdvanced) {
           cumulativePredictedSec += plannedStageSec;
         }
       }
-      fermentState.predictedCompleteTime = (unsigned long)(programState.programStartTime + (unsigned long)(cumulativePredictedSec)); // All predicted times use Q10 multiply logic
+      // Check if NTP time is valid before setting predicted complete time
+      time_t now = time(nullptr);
+      bool ntpValid = (now > 1640995200); // Jan 1, 2022 - if before this, NTP failed
+      if (ntpValid && programState.programStartTime > 1640995200) {
+        fermentState.predictedCompleteTime = (unsigned long)(programState.programStartTime + (unsigned long)(cumulativePredictedSec)); // All predicted times use Q10 multiply logic
+      } else {
+        fermentState.predictedCompleteTime = 0; // NTP not synced, disable timestamp predictions
+      }
     }
     if (st.temp > 0 || programState.manualMode) {
       // Rate limit PID calculations to configured sample time
@@ -1456,13 +1481,20 @@ void handleCustomStages(bool &stageJustAdvanced) {
         // Estimate remaining time for this stage (should be near zero if just advanced, but recalc for next stage)
         double plannedStageSec = (double)st.min * 60.0;
         double epsilon = 0.05;
-        double remainWeightedSec = plannedStageSec - fermentState.fermentWeightedSec;
-        if (remainWeightedSec < 0) remainWeightedSec = 0;
+        double remainScheduledSec = plannedStageSec - fermentState.scheduledElapsedSeconds;
+        if (remainScheduledSec < 0) remainScheduledSec = 0;
         double factor = fermentState.fermentLastFactor > 0 ? fermentState.fermentLastFactor : 1.0; // Q10: factor < 1 means faster
         time_t now = time(nullptr);
-        time_t predicted = now + (time_t)(remainWeightedSec * factor); // Multiply: higher temp = less time
-        fermentState.predictedCompleteTime = predicted;
-        if (debugSerial) Serial.printf("[FERMENT] Stage advanced, predictedCompleteTime set to %lu (now=%lu, remainWeightedSec=%.2f, factor=%.3f) [MULTIPLY]\n", (unsigned long)predicted, (unsigned long)now, remainWeightedSec, factor);
+        // Check if NTP time is valid (reasonable epoch time)
+        bool ntpValid = (now > 1640995200); // Jan 1, 2022 - if before this, NTP failed
+        if (ntpValid) {
+          time_t predicted = now + (time_t)(remainScheduledSec * factor); // Multiply: higher temp = less time
+          fermentState.predictedCompleteTime = predicted;
+          if (debugSerial) Serial.printf("[FERMENT] Stage advanced, predictedCompleteTime set to %lu (now=%lu, remainScheduledSec=%.2f, factor=%.3f) [MULTIPLY]\n", (unsigned long)predicted, (unsigned long)now, remainScheduledSec, factor);
+        } else {
+          fermentState.predictedCompleteTime = 0; // NTP not synced, disable timestamp predictions
+          if (debugSerial) Serial.printf("[FERMENT] Stage advanced, NTP not synced (now=%lu), predictedCompleteTime disabled\n", (unsigned long)now);
+        }
       }
       programState.customStageIdx++;
       programState.customStageStart = millis();

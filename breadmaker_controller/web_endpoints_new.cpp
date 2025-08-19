@@ -1182,6 +1182,9 @@ void homeAssistantEndpoint(WebServer& server) {
         time_t stageReadyAt = 0;
         time_t programReadyAt = 0;
         
+        // Check if NTP time is valid (reasonable epoch time)
+        bool ntpValid = (now > 1640995200); // Jan 1, 2022 - if before this, NTP failed
+        
         if (programState.isRunning && programState.activeProgramId >= 0) {
             Program* p = getActiveProgramMutable();
             if (p && programState.customStageIdx < p->customStages.size()) {
@@ -1191,19 +1194,21 @@ void homeAssistantEndpoint(WebServer& server) {
                 int timeLeftSec = (stageTimeMs / 1000) - elapsed;
                 if (timeLeftSec < 0) timeLeftSec = 0;
                 
-                // Only set stageReadyAt if we have valid time remaining
-                if (timeLeftSec > 0 && now > 0) {
+                // Only set timestamps if NTP time is valid
+                if (ntpValid && timeLeftSec > 0) {
                     stageReadyAt = now + timeLeftSec;
+                    
+                    // Calculate total program time remaining using fermentation adjustments
+                    programReadyAt = now + timeLeftSec;
+                    for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
+                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
+                                                                                  p->customStages[i].isFermentation);
+                        programReadyAt += adjustedDurationMs / 1000;
+                    }
                 } else {
-                    stageReadyAt = 0; // Invalid/completed stage
-                }
-                
-                // Calculate total program time remaining using fermentation adjustments
-                programReadyAt = (timeLeftSec > 0) ? (now + timeLeftSec) : now;
-                for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
-                    unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
-                                                                              p->customStages[i].isFermentation);
-                    programReadyAt += adjustedDurationMs / 1000;
+                    // NTP not synced or stage completed - return 0 timestamps
+                    stageReadyAt = 0;
+                    programReadyAt = 0;
                 }
             }
         }

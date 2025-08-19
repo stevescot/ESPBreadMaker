@@ -669,6 +669,11 @@ void streamStatusJson(Print& out) {
   out.printf("\"fermentationFactor\":%.3f,", fermentState.fermentationFactor);
   out.printf("\"initialFermentTemp\":%.1f,", fermentState.initialFermentTemp);
   
+  // === New Clear Fermentation Timing Data ===
+  out.printf("\"fermentScheduledElapsed\":%.1f,", fermentState.scheduledElapsedSeconds);
+  out.printf("\"fermentRealElapsed\":%.1f,", fermentState.realElapsedSeconds);
+  out.printf("\"fermentAccumulatedMinutes\":%.2f,", fermentState.accumulatedFermentMinutes);
+  
   // === Predicted Stage End Times (Fermentation-Adjusted) ===
   out.print("\"predictedStageEndTimes\":[");
   if (fermentCache.isValid && programState.activeProgramId >= 0) {
@@ -688,7 +693,7 @@ void streamStatusJson(Print& out) {
   // === Additional timing data for UI ===
   out.printf("\"totalProgramDuration\":%lu,", fermentCache.cachedTotalDuration);
   out.printf("\"elapsedTime\":%lu,", fermentCache.cachedElapsedTime);
-  out.printf("\"remainingTime\":%lu,", totalProgramRemainingTime); // Use calculated value instead of cache
+  out.printf("\"remainingTime\":%lu,", fermentCache.cachedRemainingTime); // Use cached value for consistency
   
   // === Stage Start Times Array ===
   out.print("\"actualStageStartTimes\":[");
@@ -904,38 +909,48 @@ void updateFermentationCache() {
     CustomStage& currentStage = p->customStages[programState.customStageIdx];
     unsigned long adjustedStageDuration = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation) / 1000;
     unsigned long remaining = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
-    runningTime = currentTime + remaining;
+    
+    // runningTime should accumulate total program duration, not reset to remaining time
+    runningTime = 0; // Reset to calculate total program duration from scratch
     
     // Cache times for stages already completed
     for (size_t i = 0; i < programState.customStageIdx && i < 20; i++) {
       fermentCache.cachedStageEndTimes[i] = programState.actualStageStartTimes[i + 1];
+      // Add completed stage durations to total
+      CustomStage& completedStage = p->customStages[i];
+      unsigned long completedDuration = getAdjustedStageTimeMs(completedStage.min * 60 * 1000, completedStage.isFermentation) / 1000;
+      runningTime += completedDuration;
     }
     
-    // Cache current stage end time
+    // Add current stage total duration (not just remaining)
+    runningTime += adjustedStageDuration;
+    
+    // Cache current stage end time (program start + elapsed time + remaining time for current stage)
+    time_t programStart = programState.actualStageStartTimes[0];
+    time_t currentTime = time(nullptr);
+    unsigned long elapsedProgramTime = (currentTime > programStart) ? (currentTime - programStart) : 0;
+    
     if (programState.customStageIdx < 20) {
-      fermentCache.cachedStageEndTimes[programState.customStageIdx] = runningTime;
+      fermentCache.cachedStageEndTimes[programState.customStageIdx] = programStart + elapsedProgramTime + remaining;
     }
     
-    // Calculate remaining stages
+    // Calculate remaining stages - accumulate durations
     for (size_t i = programState.customStageIdx + 1; i < p->customStages.size() && i < 20; i++) {
       CustomStage& stage = p->customStages[i];
       unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
       runningTime += adjustedDuration;
-      fermentCache.cachedStageEndTimes[i] = runningTime;
+      // Stage end time = program start + total elapsed + remaining current + all future stages up to this point
+      fermentCache.cachedStageEndTimes[i] = programStart + elapsedProgramTime + remaining + 
+                                          (runningTime - adjustedStageDuration); // Subtract current stage since it's included in remaining calculation
     }
-    
-    fermentCache.cachedProgramEndTime = runningTime;
     
     // Calculate timing data for UI using the correctly calculated program end time
     if (programState.actualStageStartTimes[0] > 0) {
-      time_t programStart = programState.actualStageStartTimes[0];
-      time_t currentTime = time(nullptr);
-      
-      // Use the correctly calculated program end time (not the bogus fermentState.predictedCompleteTime)
+      // We already calculated programStart and currentTime above, reuse them
       time_t programEndTime = programStart + runningTime;
-      fermentCache.cachedProgramEndTime = programEndTime;
-      fermentCache.cachedTotalDuration = runningTime;
-      fermentCache.cachedElapsedTime = currentTime - programStart;
+      fermentCache.cachedProgramEndTime = programEndTime; // Absolute end timestamp
+      fermentCache.cachedTotalDuration = runningTime; // Total duration in seconds
+      fermentCache.cachedElapsedTime = (currentTime > programStart) ? (currentTime - programStart) : 0;
       fermentCache.cachedRemainingTime = (programEndTime > currentTime) ? 
                                         (programEndTime - currentTime) : 0;
     } else {
