@@ -1089,6 +1089,12 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           programState.customStageIdx++;
           programState.customStageStart = millis();
           
+          // Record when the new stage started for timing display
+          time_t now = time(nullptr);
+          if (now > 1640995200 && programState.customStageIdx < 20) { // Valid NTP time and within bounds
+            programState.actualStageStartTimes[programState.customStageIdx] = now;
+          }
+          
           // Optimize fermentation stage transition: batch operations and add yield points
           yield(); // Allow other tasks to run
           resetFermentationTracking(actualTemp);
@@ -1500,6 +1506,12 @@ void handleCustomStages(bool &stageJustAdvanced) {
       programState.customStageStart = millis();
       programState.customMixIdx = 0;
       programState.customMixStepStart = 0;
+      
+      // Record when the new stage started for timing display
+      time_t now = time(nullptr);
+      if (now > 1640995200 && programState.customStageIdx < 20) { // Valid NTP time and within bounds
+        programState.actualStageStartTimes[programState.customStageIdx] = now;
+      }
       
       // Optimize stage transition: batch operations and add yield points
       yield(); // Allow other tasks to run
