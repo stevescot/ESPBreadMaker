@@ -3,6 +3,7 @@
 #include "programs_manager.h"
 #include "calibration.h"
 #include "outputs_manager.h"
+#include "missing_stubs.h"
 #include <WiFi.h>
 
 #ifndef FIRMWARE_BUILD_DATE
@@ -18,7 +19,7 @@ LGFX display;
 static DisplayState currentState = DISPLAY_STATUS;
 static DisplayState lastState = DISPLAY_STATUS;
 static unsigned long lastDisplayUpdate = 0;
-static const unsigned long DISPLAY_UPDATE_INTERVAL = 1000; // Update every 1000ms (reduced frequency)
+static const unsigned long DISPLAY_UPDATE_INTERVAL = 500; // Update every 500ms for better timing accuracy
 
 // Screensaver variables
 static unsigned long lastActivityTime = 0;
@@ -117,21 +118,22 @@ unsigned long calculateTotalTimeLeft() {
   const Program* activeProgram = getActiveProgram();
   if (!activeProgram || !programState.isRunning) return 0;
   
-  // Calculate current stage time remaining
+  // Calculate current stage time remaining using adjusted duration
   unsigned long currentStageTimeLeft = 0;
   if (programState.customStageIdx < activeProgram->customStages.size()) {
     const CustomStage& currentStage = activeProgram->customStages[programState.customStageIdx];
-    unsigned long stageDurationMs = currentStage.min * 60 * 1000;
+    unsigned long stageDurationMs = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation);
     unsigned long elapsed = millis() - programState.customStageStart;
     currentStageTimeLeft = (elapsed < stageDurationMs) ? (stageDurationMs - elapsed) / 1000 : 0;
   }
   
   unsigned long totalRemaining = currentStageTimeLeft;
   
-  // Add time for remaining stages
+  // Add time for remaining stages using adjusted durations
   for (size_t i = programState.customStageIdx + 1; i < activeProgram->customStages.size(); i++) {
     const CustomStage& stage = activeProgram->customStages[i];
-    totalRemaining += stage.min * 60;
+    unsigned long adjustedDurationMs = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation);
+    totalRemaining += adjustedDurationMs / 1000;
   }
   
   return totalRemaining;
@@ -144,7 +146,9 @@ unsigned long calculateStageTimeLeft() {
   
   if (programState.customStageIdx < activeProgram->customStages.size()) {
     const CustomStage& currentStage = activeProgram->customStages[programState.customStageIdx];
-    unsigned long stageDurationMs = currentStage.min * 60 * 1000;
+    
+    // Use the same calculation as the web API to account for fermentation adjustments
+    unsigned long stageDurationMs = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation);
     unsigned long elapsed = millis() - programState.customStageStart;
     return (elapsed < stageDurationMs) ? (stageDurationMs - elapsed) / 1000 : 0;
   }

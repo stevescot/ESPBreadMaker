@@ -1,0 +1,162 @@
+[
+  {
+    "id": 0,
+    "name": "Bread - Sourdough Basic",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20,
+    "fermentQ10": 2
+  },
+  {
+    "id": 1,
+    "name": "Bread - Sourdough In-Machine",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20,
+    "fermentQ10": 2
+  },
+  {
+    "id": 2,
+    "name": "Bread - Sourdough Pizza Dough",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 3,
+    "name": "Bread - White Basic",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20,
+    "fermentQ10": 2
+  },
+  {
+    "id": 4,
+    "name": "Bread - Whole Wheat",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 5,
+    "name": "Bread - Enriched Sweet",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 6,
+    "name": "Bread - Rye",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 7,
+    "name": "Dairy - Yogurt Making",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 8,
+    "name": "Dairy - Soft Cheese",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 9,
+    "name": "Dessert - Chocolate Tempering",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 10,
+    "name": "Dessert - Soft Caramel",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 11,
+    "name": "Utility - Sous Vide",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 12,
+    "name": "Utility - Herb Drying",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 13,
+    "name": "Utility - Butter Melting",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 14,
+    "name": "Utility - Sanitize Container",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 15,
+    "name": "Utility - Proof Box",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 16,
+    "name": "Utility - Melt Beeswax",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 17,
+    "name": "Utility - Hot Towel Warmer",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 18,
+    "name": "Utility - DIY Lotions",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20.0,
+    "fermentQ10": 2.0
+  },
+  {
+    "id": 19,
+    "name": "TEST - Fermentation Only",
+    "notes": "",
+    "icon": "",
+    "fermentBaselineTemp": 20,
+    "fermentQ10": 2
+  }
+]

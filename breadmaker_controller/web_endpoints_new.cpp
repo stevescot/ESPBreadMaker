@@ -813,6 +813,64 @@ void stateMachineEndpoints(WebServer& server) {
         streamStatusJson(stringPrint);
         server.send(200, "application/json", jsonOutput);
     });
+    
+    // Override stage duration endpoint
+    server.on("/api/override_stage_duration", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /api/override_stage_duration called"));
+        
+        if (!programState.isRunning) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Program not running\"}");
+            return;
+        }
+        
+        Program* p = getActiveProgramMutable();
+        if (!p || p->customStages.empty()) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"No active program\"}");
+            return;
+        }
+        
+        if (programState.customStageIdx >= p->customStages.size()) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid stage index\"}");
+            return;
+        }
+        
+        // Get the minutes parameter
+        String minutesParam = server.arg("minutes");
+        if (minutesParam.length() == 0) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing 'minutes' parameter\"}");
+            return;
+        }
+        
+        int newDurationMinutes = minutesParam.toInt();
+        if (newDurationMinutes <= 0 || newDurationMinutes > 1440) { // Max 24 hours
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Duration must be between 1 and 1440 minutes\"}");
+            return;
+        }
+        
+        // Override the current stage duration
+        p->customStages[programState.customStageIdx].min = newDurationMinutes;
+        
+        // Reset stage start time to recalculate timing
+        programState.customStageStart = millis();
+        
+        // Update actual stage start time
+        if (programState.customStageIdx < 20) {
+            programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
+        }
+        
+        resetFermentationTracking(getAveragedTemperature());
+        invalidateStatusCache();
+        saveResumeState();
+        
+        if (debugSerial) Serial.printf("[STAGE DURATION OVERRIDE] Stage %d duration set to %d minutes\n", 
+                                     (int)programState.customStageIdx, newDurationMinutes);
+        
+        // Create a string stream for the JSON output  
+        String jsonOutput = "";
+        StringPrint stringPrint(jsonOutput);
+        streamStatusJson(stringPrint);
+        server.send(200, "application/json", jsonOutput);
+    });
 }
 
 // Manual Output Endpoints

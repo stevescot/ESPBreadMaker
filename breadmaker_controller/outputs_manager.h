@@ -12,6 +12,9 @@ void setLight(bool on);
 void setBuzzer(bool on);
 void outputsManagerInit();
 
+// Heater safety watchdog - call this from main loop
+void checkHeaterWatchdog();
+
 // Buzzer tone functions
 void startBuzzerTone(float frequency, float amplitude, unsigned long duration);
 void shortBeep();

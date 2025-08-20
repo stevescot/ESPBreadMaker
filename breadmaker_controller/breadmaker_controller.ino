@@ -914,6 +914,7 @@ void loop() {
   // --- Safety monitoring (low-impact, every 1 second) ---
   safetySystem.loopStartTime = micros();
   performSafetyChecks();
+  checkHeaterWatchdog(); // CRITICAL: Check heater safety watchdog every loop
   
   updatePerformanceMetrics(); // Track performance for Home Assistant endpoint
   updateTemperatureSampling();
@@ -931,12 +932,21 @@ void loop() {
   static bool stageJustAdvanced = false;
   static bool scheduledStartTriggered = false;
   
-  // Rate limiting for main loop to prevent excessive CPU usage
+  // Rate limiting for main loop - IMPROVED for heating responsiveness
   static unsigned long lastMainLoopUpdate = 0;
   unsigned long nowMs = millis();
-  if (nowMs - lastMainLoopUpdate < 50) { // 50ms for balanced CPU usage and fermentation accuracy
+  
+  // Dynamic loop timing: faster during heating, slower when idle
+  unsigned long loopInterval = 50; // Default 50ms
+  if (programState.isRunning && outputStates.heater) {
+    loopInterval = 25; // 25ms when heater is on for better PID responsiveness  
+  } else if (!programState.isRunning) {
+    loopInterval = 100; // 100ms when idle to save CPU
+  }
+  
+  if (nowMs - lastMainLoopUpdate < loopInterval) {
     yield();
-    delay(10);
+    delay(5); // Reduced delay for better responsiveness
     return;
   }
   lastMainLoopUpdate = nowMs;
@@ -991,7 +1001,7 @@ void loop() {
   }
   
   yield();
-  delay(100);  // Increased delay to reduce CPU load significantly
+  // Removed final delay - timing now handled by rate limiting above for better responsiveness
 }
 
 // --- Helper function definitions ---

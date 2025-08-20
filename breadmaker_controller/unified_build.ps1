@@ -9,6 +9,8 @@ param(
     [string[]]$Files = @(),   # Specific files to upload (optional, used with -UploadData)
     [switch]$Clean,           # Clean build artifacts
     [switch]$Test,            # Run basic API tests
+    [switch]$PreserveState,   # Force backup and restore device settings during uploads
+    [switch]$NoPreserveState, # Disable state preservation for full uploads
     [switch]$Help,            # Show help
     [string]$IP = "192.168.250.125"  # Device IP address
 )
@@ -35,6 +37,8 @@ function Show-Help {
     Write-Host "  -Serial COM3              Upload firmware via serial port if connected"
     Write-Host "  -UploadData               Upload data files HTML, JS, programs"
     Write-Host "  -Files file1,file2        Upload specific files only with -UploadData"
+    Write-Host "  -PreserveState            Force backup and restore device settings"
+    Write-Host "  -NoPreserveState          Disable state preservation for full uploads"
     Write-Host "  -Clean                    Remove build artifacts"
     Write-Host "  -Test                     Run API connectivity tests"
     Write-Host ""
@@ -46,7 +50,13 @@ function Show-Help {
     Write-Host "  # Build and upload firmware via web (most reliable)"
     Write-Host ""
     Write-Host "  .\unified_build.ps1 -UploadData"
-    Write-Host "  # Upload only web files and data"
+    Write-Host "  # Upload all data files (state preserved by default)"
+    Write-Host ""
+    Write-Host "  .\unified_build.ps1 -UploadData -NoPreserveState"
+    Write-Host "  # Upload data files without state preservation"
+    Write-Host ""
+    Write-Host "  .\unified_build.ps1 -UploadData -Files index.html"
+    Write-Host "  # Upload specific files (no state preservation unless -PreserveState)"
     Write-Host ""
     Write-Host "  .\unified_build.ps1 -Build -WebOTA -UploadData"
     Write-Host "  # Full deployment: build firmware and upload everything"
@@ -61,6 +71,8 @@ function Show-Help {
     Write-Host "  • ArduinoOTA port 3232 is unreliable, use web endpoint"
     Write-Host "  • Always build before uploading to catch compilation errors"
     Write-Host "  • Device uses FFat filesystem (not LittleFS)"
+    Write-Host "  • Full data uploads preserve device state by default"
+    Write-Host "  • Preserved settings are saved to data/ directory for source control"
 }
 
 function Test-DeviceConnectivity {
@@ -140,6 +152,13 @@ function Upload-FirmwareOTA {
         return $false
     }
     
+    # Backup device state before firmware upload (unless explicitly disabled)
+    $backupDir = $null
+    if (!$NoPreserveState) {
+        Write-Info "Backing up device state before firmware upload..."
+        $backupDir = Backup-DeviceState -DeviceIp $DEVICE_IP -SaveToDataDir
+    }
+    
     if ($UsePowerShell) {
         # PowerShell multipart form upload method
         try {
@@ -179,11 +198,24 @@ Content-Type: application/octet-stream
                     Write-Info "Checking if device is back online (attempt $retryCount/$maxRetries)..."
                     if (Test-DeviceConnectivity) {
                         Write-Success "Device is back online after firmware update"
+                        
+                        # Restore device state if backup was created
+                        if ($backupDir) {
+                            Write-Info "Restoring device state after firmware upload..."
+                            Start-Sleep -Seconds 3  # Extra pause for firmware to fully initialize
+                            Restore-DeviceState -DeviceIp $DEVICE_IP -BackupDir $backupDir
+                        }
+                        
                         return $true
                     }
                 } while ($retryCount -lt $maxRetries)
                 
                 Write-Warning "Device may still be restarting or upload may have failed"
+                if ($backupDir) {
+                    Write-Host ""
+                    Write-Host "💡 NOTE: Device state backup was created in data directory." -ForegroundColor Cyan
+                    Write-Host "   You can manually restore settings if needed." -ForegroundColor Cyan
+                }
                 return $false
             } else {
                 Write-Error "Upload failed with status: $($response.StatusCode)"
@@ -237,11 +269,24 @@ Content-Type: application/octet-stream
                 Write-Info "Checking if device is back online (attempt $retryCount/$maxRetries)..."
                 if (Test-DeviceConnectivity) {
                     Write-Success "Device is back online after firmware update"
+                    
+                    # Restore device state if backup was created
+                    if ($backupDir) {
+                        Write-Info "Restoring device state after firmware upload..."
+                        Start-Sleep -Seconds 3  # Extra pause for firmware to fully initialize
+                        Restore-DeviceState -DeviceIp $DEVICE_IP -BackupDir $backupDir
+                    }
+                    
                     return $true
                 }
             } while ($retryCount -lt $maxRetries)
             
             Write-Warning "Device may still be restarting or upload may have failed"
+            if ($backupDir) {
+                Write-Host ""
+                Write-Host "💡 NOTE: Device state backup was created in data directory." -ForegroundColor Cyan
+                Write-Host "   You can manually restore settings if needed." -ForegroundColor Cyan
+            }
             return $false
         } else {
             Write-Error "Upload failed with curl exit code: $curlExitCode"
@@ -371,10 +416,149 @@ function Upload-FirmwareSerial {
     }
 }
 
+# Backup device state before uploads
+function Backup-DeviceState {
+    param([string]$DeviceIp, [switch]$SaveToDataDir = $false)
+    
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    
+    if ($SaveToDataDir) {
+        $backupDir = "data\device_backup_$timestamp"
+        Write-Host "Backing up device state to local data directory: $backupDir" -ForegroundColor Yellow
+    } else {
+        $backupDir = "device_backup_$timestamp"
+        Write-Host "Backing up device state to: $backupDir" -ForegroundColor Yellow
+    }
+    
+    New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+    
+    # List of critical files to backup
+    $criticalFiles = @(
+        "calibration.json",
+        "programs.json", 
+        "pid-profiles.json",
+        "programs_index.json"
+    )
+    
+    # Add individual program files (program_0.json through program_19.json)
+    for ($i = 0; $i -le 19; $i++) {
+        $criticalFiles += "programs/program_$i.json"
+    }
+    
+    $backupSuccess = $false
+    
+    foreach ($file in $criticalFiles) {
+        try {
+            $response = Invoke-WebRequest -Uri "http://$DeviceIp/$file" -Method GET -TimeoutSec 10
+            if ($response.StatusCode -eq 200) {
+                $localFilePath = "$backupDir\$file"
+                
+                # Create directory if file is in a subdirectory
+                $fileDir = Split-Path $localFilePath -Parent
+                if (!(Test-Path $fileDir)) {
+                    New-Item -ItemType Directory -Path $fileDir -Force | Out-Null
+                }
+                
+                $response.Content | Out-File -FilePath $localFilePath -Encoding UTF8
+                Write-Host "  ✓ Backed up: $file" -ForegroundColor Green
+                $backupSuccess = $true
+            }
+        } catch {
+            Write-Host "  ⚠ Could not backup $file`: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+    
+    # Backup current program state
+    try {
+        $statusResponse = Invoke-WebRequest -Uri "http://$DeviceIp/api/status" -Method GET -TimeoutSec 10
+        if ($statusResponse.StatusCode -eq 200) {
+            $statusResponse.Content | Out-File -FilePath "$backupDir\current_status.json" -Encoding UTF8
+            Write-Host "  ✓ Backed up: current status" -ForegroundColor Green
+            $backupSuccess = $true
+        }
+    } catch {
+        Write-Host "  ⚠ Could not backup current status: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+    
+    if ($SaveToDataDir -and $backupSuccess) {
+        Write-Host "  📁 Device state saved to data directory for source control review" -ForegroundColor Cyan
+    }
+    
+    return $backupDir
+}
+
+# Restore device state after uploads
+function Restore-DeviceState {
+    param([string]$DeviceIp, [string]$BackupDir)
+    
+    Write-Host "Restoring device state from: $BackupDir" -ForegroundColor Yellow
+    
+    if (-not (Test-Path $BackupDir)) {
+        Write-Host "  ⚠ Backup directory not found: $BackupDir" -ForegroundColor Yellow
+        return
+    }
+    
+    # Restore critical files (including those in subdirectories)
+    $backupFiles = Get-ChildItem -Path $BackupDir -Filter "*.json" -Recurse | Where-Object { $_.Name -ne "current_status.json" }
+    
+    foreach ($file in $backupFiles) {
+        try {
+            # Calculate the relative path from backup directory to maintain directory structure
+            $relativePath = $file.FullName.Substring($BackupDir.Length + 1).Replace('\', '/')
+            
+            # Use multipart form upload method that the firmware expects
+            $boundary = [System.Guid]::NewGuid().ToString()
+            $fileBinary = [System.IO.File]::ReadAllBytes($file.FullName)
+            
+            $body = @"
+--$boundary
+Content-Disposition: form-data; name="file"; filename="$relativePath"
+Content-Type: application/octet-stream
+
+"@
+            $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+            $bodyBytes += $fileBinary
+            $bodyBytes += [System.Text.Encoding]::UTF8.GetBytes("`r`n--$boundary--`r`n")
+            
+            $response = Invoke-WebRequest -Uri "http://$DeviceIp/upload" -Method POST -Body $bodyBytes -ContentType "multipart/form-data; boundary=$boundary" -TimeoutSec 30
+            if ($response.StatusCode -eq 200) {
+                Write-Host "  ✓ Restored: $relativePath" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "  ⚠ Could not restore $($file.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+}
+
 function Upload-DataFiles {
     param([string[]]$SpecificFiles = @())
     
     Write-Info "Uploading data files..."
+    
+    # Determine if this is a full upload (no specific files) or partial upload
+    $isFullUpload = ($SpecificFiles.Count -eq 0)
+    
+    # For full uploads, enable state preservation by default unless explicitly disabled
+    # For partial uploads, only preserve state if explicitly requested
+    $shouldPreserveState = if ($isFullUpload) { 
+        # Full upload: preserve by default, but allow override
+        if ($NoPreserveState) { 
+            $false 
+        } elseif ($PreserveState) { 
+            $true 
+        } else { 
+            $true  # Default to preserving state for full uploads
+        }
+    } else { 
+        # Partial upload: only if explicitly requested
+        $PreserveState 
+    }
+    
+    # Backup device state if preservation is enabled
+    $backupDir = $null
+    if ($shouldPreserveState) {
+        $backupDir = Backup-DeviceState -DeviceIp $DEVICE_IP -SaveToDataDir:$isFullUpload
+    }
     
     $dataPath = "data"
     if (!(Test-Path $dataPath)) {
@@ -396,8 +580,10 @@ function Upload-DataFiles {
             }
         }
     } else {
-        # Upload all files in data directory
-        $filesToUpload = Get-ChildItem -Path $dataPath -File -Recurse | ForEach-Object { $_.FullName }
+        # Upload all files in data directory (excluding backup directories)
+        $filesToUpload = Get-ChildItem -Path $dataPath -File -Recurse | Where-Object { 
+            $_.FullName -notmatch "device_backup_" 
+        } | ForEach-Object { $_.FullName }
     }
     
     if ($filesToUpload.Count -eq 0) {
@@ -440,6 +626,18 @@ Content-Type: application/octet-stream
         catch {
             Write-Error "Failed to upload ${fileName}: $($_.Exception.Message)"
         }
+    }
+    
+    # Restore device state if backup was created
+    if ($shouldPreserveState -and $backupDir) {
+        Start-Sleep -Seconds 2  # Brief pause to let uploads settle
+        Restore-DeviceState -DeviceIp $DEVICE_IP -BackupDir $backupDir
+    }
+    
+    if ($isFullUpload -and $shouldPreserveState) {
+        Write-Host ""
+        Write-Host "💡 TIP: Device configuration has been backed up to data directory." -ForegroundColor Cyan
+        Write-Host "   Review the backed-up files and commit them to source control." -ForegroundColor Cyan
     }
     
     Write-Success "Upload completed: $successCount/$($filesToUpload.Count) files uploaded successfully"

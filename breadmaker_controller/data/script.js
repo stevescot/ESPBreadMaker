@@ -914,10 +914,20 @@ function renderMixPatternGraph(mixPattern) {
 }
 
 // ---- Program Plan Summary & Google Calendar Link ----
+function hideLoadingIndicator() {
+  const loadingIndicator = document.getElementById('loadingIndicator');
+  if (loadingIndicator) {
+    loadingIndicator.style.display = 'none';
+  }
+}
+
 function showPlanSummary(s) {
   const planSummary = document.getElementById('planSummary');
   if (!planSummary || !s || !s.program) {
-    if (planSummary) planSummary.innerHTML = '<i>No bread program selected.</i>';
+    if (planSummary) {
+      hideLoadingIndicator();
+      planSummary.innerHTML = '<i>No bread program selected.</i>';
+    }
     return;
   }
   
@@ -941,11 +951,13 @@ function showPlanSummary(s) {
   if (!prog) {
     // If we have a program name but no details, show the name
     if (s.program && s.program.trim() !== '') {
+      hideLoadingIndicator();
       planSummary.innerHTML = `<div style="padding:15px; background:#1e1e1e; border:1px solid #444; border-radius:8px; margin:10px 0;">
         <h4 style="color:#66bb6a; margin:0 0 8px 0; font-size:1.1em;">${s.program}</h4>
         <p style="color:#bbb; margin:0; font-style:italic;">Program details loading...</p>
       </div>`;
     } else {
+      hideLoadingIndicator();
       planSummary.innerHTML = '<i>Program details not available.</i>';
     }
     return;
@@ -1139,6 +1151,7 @@ function showPlanSummary(s) {
         + '</tr>';
     });
     summary += '</table>';
+    hideLoadingIndicator();
     planSummary.innerHTML = summary;
     // Add click listeners for info icons
     document.querySelectorAll('.stage-info-icon').forEach(function(el) {
@@ -1153,6 +1166,7 @@ function showPlanSummary(s) {
     return;
   }
   // No classic stage logic remains here.
+  hideLoadingIndicator();
   planSummary.innerHTML = '<i>No bread program selected.</i>';
 }
 
@@ -1461,7 +1475,18 @@ window.addEventListener('DOMContentLoaded', () => {
       const stageSelect = document.getElementById('stageSelect');
       if (stageSelect && stageSelect.value !== '') {
         const stageIdx = parseInt(stageSelect.value);
-        if (confirm(`Start the program at stage ${stageIdx + 1}? This will skip the previous stages.`)) {
+        const selectedProgram = document.getElementById('programSelect')?.value || 'Unknown';
+        const isRunning = window.status?.state === 'Running' || window.status?.state === 'Paused';
+        
+        let confirmMessage = `🚀 Start Program at Specific Stage?\n\nProgram: ${selectedProgram}\nStarting at Stage: ${stageIdx + 1}\n\nThis will skip all previous stages.`;
+        
+        if (isRunning) {
+          confirmMessage += `\n\n⚠️ WARNING: A program is currently running!\nThis will stop the current program.`;
+        }
+        
+        confirmMessage += `\n\nAre you sure?`;
+        
+        if (confirm(confirmMessage)) {
           fetch(`/start_at_stage?stage=${stageIdx}`)
             .then(r => r.json())
             .then(response => {
@@ -1501,40 +1526,82 @@ window.addEventListener('DOMContentLoaded', () => {
   const btnStart = document.getElementById('btnStart');
   if (btnStart) {
     btnStart.addEventListener('click', function() {
-      fetch('/start')
-        .then(r => r.json())
-        .then(window.updateStatus)
-        .catch(err => console.error('Start failed:', err));
+      const isRunning = window.status?.state === 'Running' || window.status?.state === 'Paused';
+      const currentProgram = window.status?.program || 'Unknown';
+      const selectedProgram = document.getElementById('programSelect')?.value || 'Unknown';
+      
+      if (isRunning) {
+        if (confirm(`🔄 Restart Program?\n\nCurrent Program: ${currentProgram}\nSelected Program: ${selectedProgram}\n\nThis will stop the current program and start a new one.\nAll progress will be lost!\n\nAre you sure?`)) {
+          fetch('/start')
+            .then(r => r.json())
+            .then(window.updateStatus)
+            .catch(err => console.error('Start failed:', err));
+        }
+      } else {
+        // No program running, start normally
+        fetch('/start')
+          .then(r => r.json())
+          .then(window.updateStatus)
+          .catch(err => console.error('Start failed:', err));
+      }
     });
   }
 
   const btnStop = document.getElementById('btnStop');
   if (btnStop) {
     btnStop.addEventListener('click', function() {
-      fetch('/stop')
-        .then(r => r.json())
-        .then(window.updateStatus)
-        .catch(err => console.error('Stop failed:', err));
+      const currentStage = window.status?.currentStage || 'Unknown';
+      const currentProgram = window.status?.program || 'Unknown';
+      
+      if (confirm(`⚠️ Stop Program?\n\nProgram: ${currentProgram}\nCurrent Stage: ${currentStage}\n\nThis will stop the current program and turn off all outputs.\nAre you sure?`)) {
+        // Add visual feedback animation
+        btnStop.classList.add('critical-pressed');
+        setTimeout(() => btnStop.classList.remove('critical-pressed'), 300);
+        
+        fetch('/stop')
+          .then(r => r.json())
+          .then(window.updateStatus)
+          .catch(err => console.error('Stop failed:', err));
+      }
     });
   }
 
   const btnBack = document.getElementById('btnBack');
   if (btnBack) {
     btnBack.addEventListener('click', function() {
-      fetch('/back')
-        .then(r => r.json())
-        .then(window.updateStatus)
-        .catch(err => console.error('Back failed:', err));
+      const currentStage = window.status?.currentStage || 'Unknown';
+      const currentProgram = window.status?.program || 'Unknown';
+      
+      if (confirm(`⏮️ Go to Previous Stage?\n\nProgram: ${currentProgram}\nCurrent Stage: ${currentStage}\n\nThis will move back to the previous stage and may affect timing.\nAre you sure?`)) {
+        // Add visual feedback animation
+        btnBack.classList.add('critical-pressed');
+        setTimeout(() => btnBack.classList.remove('critical-pressed'), 300);
+        
+        fetch('/back')
+          .then(r => r.json())
+          .then(window.updateStatus)
+          .catch(err => console.error('Back failed:', err));
+      }
     });
   }
 
   const btnAdvance = document.getElementById('btnAdvance');
   if (btnAdvance) {
     btnAdvance.addEventListener('click', function() {
-      fetch('/advance')
-        .then(r => r.json())
-        .then(window.updateStatus)
-        .catch(err => console.error('Advance failed:', err));
+      const currentStage = window.status?.currentStage || 'Unknown';
+      const currentProgram = window.status?.program || 'Unknown';
+      const elapsedTime = window.status?.elapsedTime || 'Unknown';
+      
+      if (confirm(`⏭️ Advance to Next Stage?\n\nProgram: ${currentProgram}\nCurrent Stage: ${currentStage}\nElapsed: ${elapsedTime}\n\nThis will immediately advance to the next stage.\nThis action cannot be undone!\n\nAre you sure?`)) {
+        // Add visual feedback animation
+        btnAdvance.classList.add('critical-pressed');
+        setTimeout(() => btnAdvance.classList.remove('critical-pressed'), 300);
+        
+        fetch('/advance')
+          .then(r => r.json())
+          .then(window.updateStatus)
+          .catch(err => console.error('Advance failed:', err));
+      }
     });
   }
 

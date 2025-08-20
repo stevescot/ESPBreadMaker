@@ -72,6 +72,55 @@
       <button class="config-link-btn" onclick="toggleFirmwareUpload()">&#8593; Firmware Update</button>
       <button class="config-link-btn" onclick="toggleFileManager()">&#128193; File Manager</button>
       <button class="config-link-btn" onclick="location.href='/home_assistant.html'" style="background:#ffb366; color:#232323;">🏠 Home Assistant Config Guide</button>
+      <button class="config-link-btn" onclick="toggleTimingControls()">⏱️ Timing Override Controls</button>
+    </div>
+    
+    <!-- Timing Override Section -->
+    <div id="timingControls" style="display:none; margin-top:2em; padding:1.5em; border:1px solid #ff9800; border-radius:8px; background:#2a1a1a;">
+      <h3 style="margin-top:0; color:#ffd600;">⏱️ Stage Timing Override</h3>
+      <div style="color:#ffcc99; font-size:0.9em; margin-bottom:1.5em; padding:1em; background:#3a2a1a; border-radius:6px; border-left:4px solid #ff9800;">
+        <strong>Use with caution:</strong> This allows you to manually override the remaining time for the current program stage. Use this if you accidentally advanced a stage or need to adjust timing due to environmental factors.
+      </div>
+      
+      <div id="currentStageInfo" style="margin-bottom:1.5em; padding:1em; background:#333; border-radius:6px; color:#fff;">
+        <div>Current Program: <span id="currentProgram" style="color:#ffd600;">--</span></div>
+        <div>Current Stage: <span id="currentStage" style="color:#ffd600;">--</span></div>
+        <div>Time Remaining: <span id="timeRemaining" style="color:#ffd600;">--</span></div>
+        <div>Target End Time: <span id="targetEndTime" style="color:#ffd600;">--</span></div>
+      </div>
+      
+      <div style="margin-bottom:1.5em;">
+        <h4 style="color:#fff;">Override Stage Duration</h4>
+        <div style="margin-bottom:1em;">
+          <label style="display:block; margin-bottom:0.5em; color:#fff;">New Duration (minutes):</label>
+          <input type="number" id="newDurationMinutes" min="1" max="1440" step="1" placeholder="Enter minutes (1-1440)" 
+                 style="padding:0.5em; border-radius:4px; background:#444; color:#fff; border:1px solid #666; width:200px;">
+          <div style="font-size:0.85em; color:#aaa; margin-top:0.3em;">Range: 1-1440 minutes (24 hours max)</div>
+        </div>
+        
+        <div style="margin-bottom:1em;">
+          <label style="display:block; margin-bottom:0.5em; color:#fff;">Quick Presets:</label>
+          <button onclick="setDurationPreset(30)" style="margin:0.2em; padding:0.4em 0.8em; border-radius:4px; background:#666; color:#fff; border:none; cursor:pointer;">30 min</button>
+          <button onclick="setDurationPreset(60)" style="margin:0.2em; padding:0.4em 0.8em; border-radius:4px; background:#666; color:#fff; border:none; cursor:pointer;">1 hour</button>
+          <button onclick="setDurationPreset(90)" style="margin:0.2em; padding:0.4em 0.8em; border-radius:4px; background:#666; color:#fff; border:none; cursor:pointer;">1.5 hours</button>
+          <button onclick="setDurationPreset(120)" style="margin:0.2em; padding:0.4em 0.8em; border-radius:4px; background:#666; color:#fff; border:none; cursor:pointer;">2 hours</button>
+          <button onclick="setDurationPreset(180)" style="margin:0.2em; padding:0.4em 0.8em; border-radius:4px; background:#666; color:#fff; border:none; cursor:pointer;">3 hours</button>
+        </div>
+        
+        <button onclick="overrideStageDuration()" style="padding:0.7em 2em; border-radius:6px; background:#ff9800; color:#000; border:none; cursor:pointer; font-size:1.1em; font-weight:bold;">Override Stage Duration</button>
+      </div>
+      
+      <div id="timingOverrideStatus" style="margin-top:1em; padding:1em; border-radius:6px; background:#333; color:#fff; display:none;"></div>
+      
+      <div style="margin-top:1.5em; font-size:0.9em; color:#aaa;">
+        <h4 style="color:#fff;">Common Use Cases:</h4>
+        <ul style="line-height:1.6;">
+          <li><strong>Accidental Advancement:</strong> If you accidentally hit "Next" and advanced to the wrong stage</li>
+          <li><strong>Environmental Adjustments:</strong> Room temperature affecting rise times</li>
+          <li><strong>Schedule Recovery:</strong> Adjusting timing to meet your target finish time</li>
+          <li><strong>Manual Control:</strong> Taking manual control over automated timing</li>
+        </ul>
+      </div>
     </div>
     
     <!-- Firmware Upload Section -->
@@ -201,6 +250,102 @@
       });
     };
     fetchOutputMode();
+    
+    // Timing Controls functionality
+    function toggleTimingControls() {
+      const timingControls = document.getElementById('timingControls');
+      if (timingControls.style.display === 'none') {
+        timingControls.style.display = 'block';
+        refreshCurrentStageInfo();
+      } else {
+        timingControls.style.display = 'none';
+      }
+    }
+    
+    function refreshCurrentStageInfo() {
+      fetch('/api/status')
+        .then(r => r.json())
+        .then(d => {
+          document.getElementById('currentProgram').textContent = d.program || 'None';
+          document.getElementById('currentStage').textContent = d.stage || 'None';
+          
+          if (d.timeLeft && d.timeLeft > 0) {
+            // Convert seconds to formatted time
+            const hours = Math.floor(d.timeLeft / 3600);
+            const minutes = Math.floor((d.timeLeft % 3600) / 60);
+            const seconds = d.timeLeft % 60;
+            document.getElementById('timeRemaining').textContent = `${hours}h ${minutes}m ${seconds}s`;
+          } else {
+            document.getElementById('timeRemaining').textContent = 'N/A';
+          }
+          
+          if (d.predictedProgramEnd && d.predictedProgramEnd > 0) {
+            // Convert Unix timestamp to readable time
+            const endTime = new Date(d.predictedProgramEnd * 1000);
+            document.getElementById('targetEndTime').textContent = endTime.toLocaleTimeString();
+          } else {
+            document.getElementById('targetEndTime').textContent = 'N/A';
+          }
+        })
+        .catch(e => {
+          console.error('Failed to fetch status:', e);
+          document.getElementById('currentProgram').textContent = 'Error loading';
+          document.getElementById('currentStage').textContent = 'Error loading';
+          document.getElementById('timeRemaining').textContent = 'Error loading';
+          document.getElementById('targetEndTime').textContent = 'Error loading';
+        });
+    }
+    
+    function setDurationPreset(minutes) {
+      document.getElementById('newDurationMinutes').value = minutes;
+    }
+    
+    function overrideStageDuration() {
+      const minutesInput = document.getElementById('newDurationMinutes');
+      const statusDiv = document.getElementById('timingOverrideStatus');
+      const minutes = parseInt(minutesInput.value);
+      
+      if (!minutes || minutes < 1 || minutes > 1440) {
+        statusDiv.style.display = 'block';
+        statusDiv.style.background = '#d32f2f';
+        statusDiv.innerHTML = '❌ Please enter a valid duration between 1 and 1440 minutes';
+        return;
+      }
+      
+      if (!confirm(`Are you sure you want to override the current stage duration to ${minutes} minutes?\n\nThis will reset the stage timing and cannot be undone.`)) {
+        return;
+      }
+      
+      statusDiv.style.display = 'block';
+      statusDiv.style.background = '#333';
+      statusDiv.innerHTML = '🔄 Overriding stage duration...';
+      
+      fetch(`/api/override_stage_duration?minutes=${minutes}`, {
+        method: 'GET'
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          statusDiv.style.background = '#4CAF50';
+          statusDiv.innerHTML = `✅ Stage duration successfully overridden to ${minutes} minutes<br>New target end time: ${d.new_target_end_time || 'Calculating...'}`;
+          
+          // Refresh the stage info after a short delay
+          setTimeout(() => {
+            refreshCurrentStageInfo();
+          }, 1000);
+          
+          // Clear the input
+          minutesInput.value = '';
+        } else {
+          statusDiv.style.background = '#d32f2f';
+          statusDiv.innerHTML = `❌ Failed to override duration: ${d.error || 'Unknown error'}`;
+        }
+      })
+      .catch(e => {
+        statusDiv.style.background = '#d32f2f';
+        statusDiv.innerHTML = `❌ Override failed: ${e.message}`;
+      });
+    }
     
     // File Manager functionality
     // --- Folder support logic ---

@@ -4,6 +4,9 @@ breadmaker_controller/build/breadmaker_controller.ino.elf
 breadmaker_controller/build/breadmaker_controller.ino.bin
 /breadmaker_controller/build
 
+# Device state backups (can be reviewed before committing)
+breadmaker_controller/data/device_backup_*/
+
 # Ignore empty markdown files that might be auto-generated
 *.md
 !README.md

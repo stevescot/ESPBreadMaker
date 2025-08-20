@@ -15,12 +15,24 @@ const int PIN_BUZZER = 26;     // Buzzer (digital ON/OFF)
 // Output pins (should be defined in main or here if needed)
 extern bool debugSerial;
 
+// HEATER SAFETY WATCHDOG - prevents heater staying on if firmware locks up
+const unsigned long HEATER_WATCHDOG_TIMEOUT_MS = 15000; // 15 seconds max heater on time
+static unsigned long heaterWatchdogStart = 0;
+static bool heaterWatchdogActive = false;
+
 bool heaterState = false;
 bool motorState = false;
 bool lightState = false;
 bool buzzerState = false;
 
 void setHeater(bool on) {
+  // HEATER SAFETY WATCHDOG: Check if heater has been on too long
+  if (heaterWatchdogActive && (millis() - heaterWatchdogStart > HEATER_WATCHDOG_TIMEOUT_MS)) {
+    if (debugSerial) Serial.println("[SAFETY] HEATER WATCHDOG TIMEOUT - forcing heater OFF after 15 seconds!");
+    on = false;  // Force heater off due to watchdog timeout
+    heaterWatchdogActive = false;
+  }
+
   // CRITICAL SAFETY CHECK: Don't allow heater to turn on if temperature sensor is failed
   if (on) {
     extern float readTemperature();  // Forward declaration
@@ -36,6 +48,16 @@ void setHeater(bool on) {
   outputStates.heater = on;  // Keep struct in sync
   if (debugSerial) Serial.printf("[setHeater] Setting heater to %s\n", on ? "ON" : "OFF");
   digitalWrite(PIN_HEATER, on ? HIGH : LOW);
+  
+  // HEATER SAFETY WATCHDOG: Start/stop watchdog timer
+  if (on) {
+    heaterWatchdogStart = millis();
+    heaterWatchdogActive = true;
+    if (debugSerial) Serial.println("[WATCHDOG] Heater watchdog started - 15 second timeout");
+  } else {
+    heaterWatchdogActive = false;
+    if (debugSerial && heaterWatchdogActive) Serial.println("[WATCHDOG] Heater watchdog stopped");
+  }
 }
 
 void setMotor(bool on) {
@@ -139,5 +161,13 @@ void updateBuzzerTone() {
     digitalWrite(PIN_BUZZER, HIGH);
   } else {
     digitalWrite(PIN_BUZZER, LOW);
+  }
+}
+
+// HEATER SAFETY WATCHDOG: Check if heater needs to be shut off (call from main loop)
+void checkHeaterWatchdog() {
+  if (heaterWatchdogActive && (millis() - heaterWatchdogStart > HEATER_WATCHDOG_TIMEOUT_MS)) {
+    if (debugSerial) Serial.println("[SAFETY] HEATER WATCHDOG TIMEOUT - forcing heater OFF after 15 seconds!");
+    setHeater(false);  // This will also reset the watchdog
   }
 }
