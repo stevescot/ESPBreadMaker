@@ -328,10 +328,43 @@ function updateStageProgress(currentStage, statusData) {
         span.textContent = ' (' + formatDuration(timeToShow) + ' left)';
         div.appendChild(span);
       } else {
+        // For completed stages, show elapsed time
         let elapsed = 0;
-        if (i < customStages.length - 1 && actualStarts[i+1]) {
+        
+        // First try using actual stage start times if available
+        if (i < customStages.length - 1 && actualStarts[i+1] && actualStarts[i]) {
           elapsed = actualStarts[i+1] - actualStarts[i];
+        } else if (actualStarts[i] && actualStarts[0] && statusData.running) {
+          // If we have start times but not consecutive ones, estimate based on stage durations
+          let estimatedStageEnd = actualStarts[0]; // Program start
+          
+          // Add up durations of all stages up to and including this one
+          for (let j = 0; j <= i; j++) {
+            const stageDuration = customStages[j].min * 60;
+            
+            // Apply fermentation factor if this is a fermentation stage
+            if (customStages[j].isFermentation && typeof statusData.fermentationFactor === 'number' && statusData.fermentationFactor > 0) {
+              estimatedStageEnd += stageDuration * statusData.fermentationFactor;
+            } else {
+              estimatedStageEnd += stageDuration;
+            }
+          }
+          
+          // Calculate this stage's duration
+          let stageDuration = customStages[i].min * 60;
+          if (customStages[i].isFermentation && typeof statusData.fermentationFactor === 'number' && statusData.fermentationFactor > 0) {
+            elapsed = stageDuration * statusData.fermentationFactor;
+          } else {
+            elapsed = stageDuration;
+          }
+        } else {
+          // Fallback: just use the planned duration (possibly adjusted for fermentation)
+          elapsed = customStages[i].min * 60;
+          if (customStages[i].isFermentation && typeof statusData.fermentationFactor === 'number' && statusData.fermentationFactor > 0) {
+            elapsed *= statusData.fermentationFactor;
+          }
         }
+        
         if (elapsed > 0) {
           const span = document.createElement('span');
           span.className = 'stage-elapsed';

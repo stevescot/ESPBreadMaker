@@ -823,22 +823,64 @@ float calculateFermentationFactor(float actualTemp) {
   
   if (debugSerial) Serial.printf("[FERMENT-CALC] Using program values: baseline=%.1f, Q10=%.1f\n", baselineTemp, q10);
   
-  // Calculate fermentation factor using Q10 temperature coefficient
-  // Factor = Q10^((baseline - actual) / 10)
-  // If temp is lower than baseline, factor > 1 (slower fermentation, takes longer)
-  // If temp is higher than baseline, factor < 1 (faster fermentation, takes less time)
-  float tempDiff = baselineTemp - actualTemp;
-  float exponent = tempDiff / 10.0;
-  float factor = pow(q10, exponent);
+  // Biologically realistic fermentation factor based on yeast activity
+  float factor = 0.0;
   
-  // Debug output - only when debug enabled
-  if (debugSerial) {
-    Serial.printf("[FERMENT] Calculation: actualTemp=%.1f, baseline=%.1f, Q10=%.1f\n", actualTemp, baselineTemp, q10);
-    Serial.printf("[FERMENT] TempDiff=%.1f, Exponent=%.2f, Factor=%.3f\n", tempDiff, exponent, factor);
+  if (actualTemp < 0.0) {
+    // Below freezing: dough is frozen, no fermentation
+    factor = 0.0;
+    if (debugSerial) Serial.printf("[FERMENT] FROZEN: temp=%.1f°C < 0°C, factor=0 (no fermentation)\n", actualTemp);
+  } else if (actualTemp > 59.0) {
+    // Above 59°C: yeast cells are killed, no fermentation
+    factor = 0.0;
+    if (debugSerial) Serial.printf("[FERMENT] TOO HOT: temp=%.1f°C > 59°C, factor=0 (yeast death)\n", actualTemp);
+    // TODO: Add warning flag for overheating
+  } else if (actualTemp <= 36.0) {
+    // 0°C to 36°C: Normal Q10 calculation, peak activity at 36°C
+    float tempDiff = baselineTemp - actualTemp;
+    float exponent = tempDiff / 10.0;
+    factor = pow(q10, exponent);
+    
+    // Special case: if baseline is above 36°C, calculate from 36°C as the peak
+    if (baselineTemp > 36.0) {
+      float tempDiffFrom36 = 36.0 - actualTemp;
+      float exponentFrom36 = tempDiffFrom36 / 10.0;
+      factor = pow(q10, exponentFrom36);
+    }
+    
+    if (debugSerial) {
+      Serial.printf("[FERMENT] NORMAL: temp=%.1f°C, baseline=%.1f°C, Q10=%.1f\n", actualTemp, baselineTemp, q10);
+      Serial.printf("[FERMENT] TempDiff=%.1f, Exponent=%.2f, Factor=%.3f\n", tempDiff, exponent, factor);
+    }
+  } else {
+    // 36°C to 59°C: Linear interpolation from peak factor (at 36°C) down to 0 (at 59°C)
+    // First calculate the peak factor at 36°C
+    float tempDiffAt36 = baselineTemp - 36.0;
+    float exponentAt36 = tempDiffAt36 / 10.0;
+    float peakFactor = pow(q10, exponentAt36);
+    
+    // Special case: if baseline is above 36°C, use factor=1.0 as peak
+    if (baselineTemp > 36.0) {
+      peakFactor = 1.0;
+    }
+    
+    // Linear interpolation: factor decreases from peakFactor at 36°C to 0 at 59°C
+    float tempRange = 59.0 - 36.0; // 23°C range
+    float tempAbove36 = actualTemp - 36.0;
+    float interpolationRatio = 1.0 - (tempAbove36 / tempRange); // 1.0 at 36°C, 0.0 at 59°C
+    factor = peakFactor * interpolationRatio;
+    
+    if (debugSerial) {
+      Serial.printf("[FERMENT] HIGH TEMP: temp=%.1f°C (36-59°C range)\n", actualTemp);
+      Serial.printf("[FERMENT] Peak factor at 36°C: %.3f, interpolation ratio: %.2f, final factor: %.3f\n", 
+                    peakFactor, interpolationRatio, factor);
+    }
   }
   
-  // Clamp to reasonable bounds (0.1x to 20x)
-  if (factor < 0.1) factor = 0.1;
+  // Ensure factor is never negative
+  if (factor < 0.0) factor = 0.0;
+  
+  // Clamp to reasonable upper bound (20x max)
   if (factor > 20.0) factor = 20.0;
   
   return factor;
