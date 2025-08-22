@@ -1,0 +1,19 @@
+{
+  "id": 17,
+  "name": "Utility - Hot Towel Warmer",
+  "customStages": [
+    {
+      "label": "Warm",
+      "min": 20,
+      "temp": 50,
+      "mixPattern": [
+        {
+          "mixSec": 0,
+          "waitSec": 1200,
+          "durationSec": 1200
+        }
+      ],
+      "instructions": "Add rolled damp towels. Keep lid closed until ready to use."
+    }
+  ]
+}

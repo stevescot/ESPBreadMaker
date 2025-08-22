@@ -280,8 +280,9 @@ function updateStageProgress(currentStage, statusData) {
       activeIdx = customStages.findIndex(stage => stage.label === currentStage);
     }
   }
-  // Use actualStageStartTimes and stageStartTimes for progress
+  // Use actualStageStartTimes, actualStageEndTimes, and stageStartTimes for progress
   const actualStarts = Array.isArray(statusData.actualStageStartTimes) ? statusData.actualStageStartTimes : [];
+  const actualEnds = Array.isArray(statusData.actualStageEndTimes) ? statusData.actualStageEndTimes : [];
   const estStarts = Array.isArray(statusData.stageStartTimes) ? statusData.stageStartTimes : [];
   for (let i = 0; i < customStages.length; ++i) {
     const stage = customStages[i];
@@ -331,10 +332,18 @@ function updateStageProgress(currentStage, statusData) {
         // For completed stages, show elapsed time
         let elapsed = 0;
         
-        // First try using actual stage start times if available
-        if (i < customStages.length - 1 && actualStarts[i+1] && actualStarts[i]) {
+        // First try using actual end and start times if both are available
+        if (actualEnds[i] && actualStarts[i] && actualEnds[i] > 0 && actualStarts[i] > 0) {
+          elapsed = actualEnds[i] - actualStarts[i];
+          if (console && console.log) console.log(`Stage ${i}: Using actual end time - ${elapsed} seconds`);
+        }
+        // Fallback: try using next stage start time minus current stage start time
+        else if (i < customStages.length - 1 && actualStarts[i+1] && actualStarts[i] && actualStarts[i+1] > 0 && actualStarts[i] > 0) {
           elapsed = actualStarts[i+1] - actualStarts[i];
-        } else if (actualStarts[i] && actualStarts[0] && statusData.running) {
+          if (console && console.log) console.log(`Stage ${i}: Using next start time - ${elapsed} seconds`);
+        } 
+        // Fallback: estimate based on program start and stage durations
+        else if (actualStarts[i] && actualStarts[0] && statusData.running) {
           // If we have start times but not consecutive ones, estimate based on stage durations
           let estimatedStageEnd = actualStarts[0]; // Program start
           

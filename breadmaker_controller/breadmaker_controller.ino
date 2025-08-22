@@ -515,6 +515,13 @@ void serializeResumeStateJson(Print& f) {
     if (i > 0) f.print(',');
     f.print((unsigned long)programState.actualStageStartTimes[i]);
   }
+  f.print(F("],\"actualStageEndTimes\":["));
+  
+  // Add actual stage end times for complete stage duration tracking
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) f.print(',');
+    f.print((unsigned long)programState.actualStageEndTimes[i]);
+  }
   f.print(F("]}\n"));
 }
 
@@ -590,6 +597,15 @@ void loadResumeState() {
     JsonArray stageStartArray = doc["actualStageStartTimes"];
     for (int i = 0; i < min(20, (int)stageStartArray.size()); i++) {
       programState.actualStageStartTimes[i] = stageStartArray[i];
+    }
+  }
+
+  // Load actual stage end times
+  for (int i = 0; i < 20; i++) programState.actualStageEndTimes[i] = 0;
+  if (doc.containsKey("actualStageEndTimes") && doc["actualStageEndTimes"].is<JsonArray>()) {
+    JsonArray stageEndArray = doc["actualStageEndTimes"];
+    for (int i = 0; i < min(20, (int)stageEndArray.size()); i++) {
+      programState.actualStageEndTimes[i] = stageEndArray[i];
     }
   }
 
@@ -1096,13 +1112,21 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
                                         programState.customStageIdx, st.label.c_str(), fermentState.scheduledElapsedSeconds, plannedStageSec, 
                                         (fermentState.scheduledElapsedSeconds / plannedStageSec) * 100.0, fermentState.realElapsedSeconds,
                                         fermentState.realElapsedSeconds / fermentState.scheduledElapsedSeconds);
+          
+          // Record when the current stage ended (BEFORE advancing)
+          time_t now = time(nullptr);
+          if (now > 1640995200 && programState.customStageIdx < 20) { // Valid NTP time and within bounds
+            programState.actualStageEndTimes[programState.customStageIdx] = now;
+            if (debugSerial) Serial.printf("[TIMING] Stage %d ended at %lu\n", programState.customStageIdx, (unsigned long)now);
+          }
+          
           programState.customStageIdx++;
           programState.customStageStart = millis();
           
           // Record when the new stage started for timing display
-          time_t now = time(nullptr);
           if (now > 1640995200 && programState.customStageIdx < 20) { // Valid NTP time and within bounds
             programState.actualStageStartTimes[programState.customStageIdx] = now;
+            if (debugSerial) Serial.printf("[TIMING] Stage %d started at %lu\n", programState.customStageIdx, (unsigned long)now);
           }
           
           // Optimize fermentation stage transition: batch operations and add yield points

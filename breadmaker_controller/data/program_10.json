@@ -1,0 +1,58 @@
+{
+  "id": 10,
+  "name": "Dessert - Soft Caramel",
+  "customStages": [
+    {
+      "label": "Sugar Melt",
+      "min": 5,
+      "temp": 160,
+      "mixPattern": [
+        {
+          "mixSec": 5,
+          "waitSec": 25,
+          "durationSec": 30
+        }
+      ],
+      "instructions": "Add 200g granulated sugar and 60ml water. Mix until sugar dissolves."
+    },
+    {
+      "label": "Heat & Stir",
+      "min": 8,
+      "temp": 118,
+      "mixPattern": [
+        {
+          "mixSec": 15,
+          "waitSec": 45,
+          "durationSec": 60
+        }
+      ],
+      "instructions": "Once sugar is amber, carefully add 120ml warm heavy cream, 56g butter, 1/4 tsp salt. Mixture will bubble vigorously."
+    },
+    {
+      "label": "Cook",
+      "min": 12,
+      "temp": 118,
+      "mixPattern": [
+        {
+          "mixSec": 10,
+          "waitSec": 50,
+          "durationSec": 60
+        }
+      ],
+      "instructions": "Cook until mixture reaches soft-ball stage (116-118\u00c2\u00b0C). Add 1 tsp vanilla extract at end."
+    },
+    {
+      "label": "Cool",
+      "min": 30,
+      "temp": 20,
+      "mixPattern": [
+        {
+          "mixSec": 30,
+          "waitSec": 270,
+          "durationSec": 300
+        }
+      ],
+      "instructions": "Let caramel cool and thicken. Pour into prepared container when done."
+    }
+  ]
+}

@@ -114,6 +114,7 @@ struct ProgramState {
     unsigned long customStageStart = 0, customMixStepStart = 0;
     time_t programStartTime = 0;
     time_t actualStageStartTimes[MAX_PROGRAM_STAGES] = {0};
+    time_t actualStageEndTimes[MAX_PROGRAM_STAGES] = {0}; // Record when each stage actually ended
     unsigned long adjustedStageDurations[MAX_PROGRAM_STAGES] = {0}; // Store fermentation-adjusted durations
     unsigned long lastFermentationUpdate = 0; // Last time fermentation was recalculated (millis)
     bool isRunning = false, manualMode = false;

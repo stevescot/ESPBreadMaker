@@ -1,0 +1,55 @@
+{
+  "id": 2,
+  "name": "Bread - Sourdough Pizza Dough",
+  "customStages": [
+    {
+      "label": "Autolyse",
+      "min": 20,
+      "temp": 24,
+      "noMix": true,
+      "instructions": "Add 500g bread flour and 325g water at the beginning of this stage."
+    },
+    {
+      "label": "Mix",
+      "min": 10,
+      "temp": 24,
+      "mixPattern": [
+        {
+          "mixSec": 60,
+          "waitSec": 60
+        },
+        {
+          "mixSec": 60,
+          "waitSec": 0
+        }
+      ],
+      "instructions": "Add 100g sourdough starter, 10g salt, and 30g olive oil at the beginning of this stage."
+    },
+    {
+      "label": "Bulk Ferment",
+      "min": 180,
+      "temp": 24,
+      "noMix": true,
+      "instructions": "Perform stretch and folds every 30 minutes for the first 2 hours if desired."
+    },
+    {
+      "label": "Knockdown",
+      "min": 2,
+      "temp": 24,
+      "mixPattern": [
+        {
+          "mixSec": 60,
+          "waitSec": 60
+        }
+      ],
+      "instructions": "Degas dough gently, then rest."
+    },
+    {
+      "label": "Cold Proof",
+      "min": 720,
+      "temp": 5,
+      "noMix": true,
+      "instructions": "Refrigerate dough. Use as needed after this stage."
+    }
+  ]
+}

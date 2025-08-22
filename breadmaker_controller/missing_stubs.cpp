@@ -703,6 +703,14 @@ void streamStatusJson(Print& out) {
   }
   out.print("],");
   
+  // === Stage End Times Array ===
+  out.print("\"actualStageEndTimes\":[");
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) out.print(",");
+    out.printf("%lu", (unsigned long)programState.actualStageEndTimes[i]);
+  }
+  out.print("],");
+  
   // === Health and System Data ===
   out.printf("\"uptime_sec\":%lu,", millis() / 1000);
   

@@ -1,0 +1,55 @@
+{
+  "id": 6,
+  "name": "Bread - Rye",
+  "customStages": [
+    {
+      "label": "Mix",
+      "min": 15,
+      "temp": 25,
+      "mixPattern": [
+        {
+          "mixSec": 360,
+          "waitSec": 240
+        }
+      ],
+      "instructions": "Add 300g rye flour, 200g bread flour, 350g water, 10g instant yeast, 10g salt, 20g molasses at the beginning of this stage."
+    },
+    {
+      "label": "Bulk Ferment",
+      "min": 75,
+      "temp": 28,
+      "noMix": true
+    },
+    {
+      "label": "Knockdown",
+      "min": 2,
+      "temp": 25,
+      "mixPattern": [
+        {
+          "mixSec": 60,
+          "waitSec": 60
+        }
+      ],
+      "instructions": "Degas dough gently, then rest."
+    },
+    {
+      "label": "Proof",
+      "min": 50,
+      "temp": 28,
+      "noMix": true
+    },
+    {
+      "label": "Bake",
+      "min": 50,
+      "temp": 185,
+      "noMix": true
+    },
+    {
+      "label": "Cool",
+      "min": 10,
+      "temp": 25,
+      "noMix": true,
+      "instructions": "Remove bread when cool."
+    }
+  ]
+}

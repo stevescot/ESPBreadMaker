@@ -584,8 +584,17 @@ void stateMachineEndpoints(WebServer& server) {
         programState.customMixStepStart = 0;
         programState.programStartTime = time(nullptr);
         
-        for (int i = 0; i < 20; i++) programState.actualStageStartTimes[i] = 0;
+        // Clear all timing arrays when starting/restarting
+        for (int i = 0; i < 20; i++) {
+            programState.actualStageStartTimes[i] = 0;
+            programState.actualStageEndTimes[i] = 0;
+        }
+        // Record the start time for the current stage
         programState.actualStageStartTimes[programState.customStageIdx] = programState.programStartTime;
+        
+        if (debugSerial) {
+            Serial.printf("[TIMING] Program started at stage %d, time %lu\n", programState.customStageIdx, (unsigned long)programState.programStartTime);
+        }
         
         resetFermentationTracking(getAveragedTemperature());
         invalidateStatusCache();
@@ -782,13 +791,21 @@ void stateMachineEndpoints(WebServer& server) {
             return;
         }
         
+        // Record when current stage ended (BEFORE advancing)
+        time_t now = time(nullptr);
+        if (now > 1640995200 && programState.customStageIdx < 20) { // Valid NTP time and within bounds
+            programState.actualStageEndTimes[programState.customStageIdx] = now;
+            if (debugSerial) Serial.printf("[TIMING] Manual advance - Stage %d ended at %lu\n", programState.customStageIdx, (unsigned long)now);
+        }
+        
         // Manually advance to next stage
         programState.customStageIdx++;
         programState.customStageStart = millis();
         
         // Update actual stage start times array
         if (programState.customStageIdx < 20) {
-            programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
+            programState.actualStageStartTimes[programState.customStageIdx] = now;
+            if (debugSerial) Serial.printf("[TIMING] Manual advance - Stage %d started at %lu\n", programState.customStageIdx, (unsigned long)now);
         }
         
         resetFermentationTracking(getAveragedTemperature());

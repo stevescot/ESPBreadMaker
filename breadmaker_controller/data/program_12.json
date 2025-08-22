@@ -1,0 +1,19 @@
+{
+  "id": 12,
+  "name": "Utility - Herb Drying",
+  "customStages": [
+    {
+      "label": "Dry",
+      "min": 180,
+      "temp": 35,
+      "mixPattern": [
+        {
+          "mixSec": 0,
+          "waitSec": 10800,
+          "durationSec": 10800
+        }
+      ],
+      "instructions": "Place clean herbs in a single layer. Leave lid slightly open for ventilation."
+    }
+  ]
+}
