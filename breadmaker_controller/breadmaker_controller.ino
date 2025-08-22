@@ -1048,9 +1048,9 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         
         if (fermentState.fermentLastUpdateMs == 0) {
           fermentState.fermentLastTemp = actualTemp;
-          fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0); // Q10: factor < 1 means faster at higher temp
-          Serial.printf("[FERMENT-TIMING-CALC] Calculation: pow(%.1f, (%.1f - %.1f) / 10.0) = pow(%.1f, %.1f) = %.3f\n", 
-                       q10, baseline, actualTemp, q10, (baseline - actualTemp) / 10.0, fermentState.fermentLastFactor);
+          fermentState.fermentLastFactor = calculateFermentationFactor(actualTemp); // Use proper biological calculation
+          Serial.printf("[FERMENT-TIMING-CALC] Initial factor calculation: temp=%.1f°C -> factor=%.3f\n", 
+                       actualTemp, fermentState.fermentLastFactor);
           fermentState.fermentLastUpdateMs = nowMs;
           // Initialize new time tracking system
           fermentState.scheduledElapsedSeconds = 0.0;
@@ -1077,17 +1077,18 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           // Update real elapsed time
           fermentState.realElapsedSeconds += realElapsedSec;
           
-          // Update fermentation factor based on current temperature
-          fermentState.fermentLastTemp = actualTemp;
-          fermentState.fermentLastFactor = pow(q10, (baseline - actualTemp) / 10.0);
-          Serial.printf("[FERMENT-TIMING-UPDATE] Calculation: pow(%.1f, (%.1f - %.1f) / 10.0) = pow(%.1f, %.1f) = %.3f\n", 
-                       q10, baseline, actualTemp, q10, (baseline - actualTemp) / 10.0, fermentState.fermentLastFactor);
-          
+          // FIXED: Calculate accumulated minutes using PREVIOUS factor FIRST (for time that passed at previous temperature)
           // NEW APPROACH: Every (fermentationFactor * 60) real seconds = 1 minute of scheduled fermentation
           // Example: factor 0.84 means every 50.4 real seconds = 1 scheduled minute (faster fermentation)
           // Example: factor 1.2 means every 72 real seconds = 1 scheduled minute (slower fermentation)
           double secondsPerScheduledMinute = fermentState.fermentLastFactor * 60.0;
           fermentState.accumulatedFermentMinutes += realElapsedSec / secondsPerScheduledMinute;
+          
+          // THEN update fermentation factor based on current temperature for NEXT interval
+          fermentState.fermentLastTemp = actualTemp;
+          fermentState.fermentLastFactor = calculateFermentationFactor(actualTemp); // Use proper biological calculation
+          Serial.printf("[FERMENT-TIMING-UPDATE] Used previous factor %.3f for elapsed %.1fs, updated to new factor %.3f for temp %.1f°C\n", 
+                       secondsPerScheduledMinute / 60.0, realElapsedSec, fermentState.fermentLastFactor, actualTemp);
           
           // Convert accumulated minutes back to scheduled seconds for comparison
           double previousScheduledSec = fermentState.scheduledElapsedSeconds;

@@ -60,21 +60,28 @@ float tempFromRaw(int raw) {
 float readTemperature() {
   int raw = analogRead(PIN_RTD);  // RTD on ESP32 analog pin
   
-  // CRITICAL SAFETY CHECK: If raw reading is zero, immediately turn off heater
+  // CRITICAL SAFETY FIX: Raw reading of 0 means VERY HOT temperature, not sensor failure!
+  // RTD resistance drops as temperature increases, so raw=0 means maximum temperature
   if (raw == 0) {
-    Serial.println("CRITICAL SAFETY ALERT: Raw temperature reading is ZERO - sensor failure detected!");
-    Serial.println("Immediately shutting off heater for safety");
+    Serial.println("CRITICAL TEMPERATURE ALERT: Raw reading is 0 - EXTREMELY HOT TEMPERATURE DETECTED!");
+    Serial.println("Immediately shutting off heater for safety - temperature is at maximum scale!");
     // Turn off heater immediately for safety
     extern void setHeater(bool);  // Forward declaration
     setHeater(false);
-    // SAFETY FIX: Return HIGH temperature to prevent PID from heating!
-    return 999.0f;  // Return HIGH error value - PID will think it's too hot and stop heating
+    // Return the maximum temperature from our calibration table (highest temperature we can measure)
+    if (!rtdCalibTable.empty()) {
+      float maxTemp = rtdCalibTable.front().temp;  // First entry should be highest temp (raw=0)
+      Serial.printf("Returning maximum calibrated temperature: %.1f°C\n", maxTemp);
+      return maxTemp;
+    }
+    // Fallback if no calibration table
+    return 250.0f;  // Return a high but realistic maximum temperature
   }
   
   float temp = tempFromRaw(raw);
   
-  // Temperature sensor fault detection
-  if (temp > 250.0f || temp < -40.0f) {
+  // Temperature sensor fault detection - only for unrealistic readings
+  if (temp > 300.0f || temp < -50.0f) {
     Serial.println("WARNING: Temperature sensor fault detected - extreme reading: " + String(temp) + "°C");
     Serial.println("Raw ADC value: " + String(raw));
     return 25.0f;  // Return safe room temperature default

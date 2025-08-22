@@ -177,13 +177,16 @@ struct SafetySystem {
     unsigned long lastTempRiseTime = 0;
     static constexpr unsigned long HEATING_CHECK_INTERVAL = 30000; // 30 seconds
     static constexpr float MIN_TEMP_RISE = 2.0;                    // Minimum rise in 30s
-    static constexpr unsigned long MAX_HEATING_TIME = 300000;      // 5 minutes max heat time
+    static constexpr unsigned long MAX_HEATING_TIME = 180000;      // 3 minutes max heat time (reduced from 5 min)
+    
+    // Enhanced sensor failure detection
+    static constexpr float MAX_TEMP_SPIKE = 50.0;                  // Max temp rise per check interval
     
     // Temperature limits for oven operation
     static constexpr float MAX_SAFE_TEMPERATURE = 235.0;     // Maximum oven temperature
     static constexpr float EMERGENCY_TEMPERATURE = 240.0;    // Emergency shutdown threshold
     static constexpr float MIN_VALID_TEMPERATURE = -10.0;    // Minimum valid sensor reading
-    static constexpr float MAX_VALID_TEMPERATURE = 250.0;    // Maximum valid sensor reading
+    static constexpr float MAX_VALID_TEMPERATURE = 300.0;    // Maximum valid sensor reading (increased to accommodate calibration table max of 280°C)
     
     // PID saturation monitoring (normal during heat-up)
     bool pidSaturated = false;
@@ -229,7 +232,8 @@ struct SafetySystem {
     bool isTemperatureValid(float temp) const {
         // Reject sensor error values (both low and high) and physically impossible readings
         if (temp <= -999.0f || temp >= 999.0f) return false;
-        return (temp >= MIN_VALID_TEMPERATURE && temp <= MAX_VALID_TEMPERATURE && temp != 0.0);
+        // Allow 0.0°C as it might be a valid reading or filtered result
+        return (temp >= MIN_VALID_TEMPERATURE && temp <= MAX_VALID_TEMPERATURE);
     }
     
     // Check if temperature is in safe operating range

@@ -77,19 +77,59 @@ function populateProgramSelect() {
   // Clear existing options
   programSelect.innerHTML = '<option value="">Select a program...</option>';
   
+  // Get current status to show running program
+  const status = window.status;
+  const isRunning = status?.running || status?.state === 'Running' || status?.state === 'Paused';
+  const currentProgramId = status?.programId;
+  
   // Add programs as options
   window.cachedPrograms.forEach(program => {
     if (program.valid !== false) { // Only show valid programs
       const option = document.createElement('option');
       option.value = program.id;
-      option.textContent = program.name;
+      
+      // Show if this program is currently running
+      if (isRunning && program.id === currentProgramId) {
+        option.textContent = `${program.name} ● RUNNING`;
+        option.style.background = '#2a5a2a';
+        option.style.color = '#90ff90';
+        option.style.fontWeight = 'bold';
+      } else {
+        option.textContent = program.name;
+      }
+      
       programSelect.appendChild(option);
     }
   });
   
-  // Add change event listener
+  // Add change event listener with running program confirmation
   programSelect.onchange = function() {
     const selectedProgramId = parseInt(this.value);
+    const status = window.status;
+    const isRunning = status?.running || status?.state === 'Running' || status?.state === 'Paused';
+    const currentProgramId = status?.programId;
+    const currentProgramName = status?.program || 'Unknown';
+    
+    // If a program is running and user selects a different one, ask for confirmation
+    if (isRunning && selectedProgramId !== currentProgramId && selectedProgramId >= 0) {
+      const selectedProgram = window.cachedPrograms.find(p => p.id === selectedProgramId);
+      const selectedProgramName = selectedProgram?.name || 'Unknown';
+      
+      const confirmed = confirm(
+        `⚠️ Program Currently Running!\n\n` +
+        `Current Program: ${currentProgramName}\n` +
+        `Selected Program: ${selectedProgramName}\n\n` +
+        `Changing programs will STOP the current program and lose all progress.\n\n` +
+        `Do you want to continue?`
+      );
+      
+      if (!confirmed) {
+        // Revert selection to current running program
+        this.value = String(currentProgramId);
+        return;
+      }
+    }
+    
     if (selectedProgramId >= 0) {
       // Find the program index by ID for populateStageDropdown (it expects array index, not ID)
       const programIdx = window.cachedPrograms.findIndex(p => p.id === selectedProgramId);
@@ -639,6 +679,18 @@ function autoSelectProgram(s) {
   
   const programSelect = document.getElementById('programSelect');
   if (!programSelect) return;
+  
+  // Refresh the program dropdown to show running status
+  const currentValue = programSelect.value;
+  populateProgramSelect();
+  
+  // Only auto-select if no program is currently selected (empty value or default option)
+  // This prevents overriding user's manual selection when they're trying to select a different program
+  if (currentValue && currentValue !== "") {
+    programSelect.value = currentValue; // Restore previous selection
+    console.log('[AUTO-SELECT] Preserving user selection:', currentValue);
+    return;
+  }
   
   let correctId = null;
   
