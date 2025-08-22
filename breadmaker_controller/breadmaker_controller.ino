@@ -182,6 +182,14 @@ void initialState(){
   delay(100);
   Serial.println(F("[setup] Booting..."));
   
+  // --- CRITICAL: Force all output GPIOs to LOW state immediately ---
+  // This must happen BEFORE any other initialization to prevent brief power-on heating
+  digitalWrite(32, LOW);  // PIN_HEATER
+  digitalWrite(33, LOW);  // PIN_MOTOR  
+  digitalWrite(25, LOW);  // PIN_LIGHT
+  digitalWrite(26, LOW);  // PIN_BUZZER
+  Serial.println(F("[setup] Emergency GPIO LOW state set"));
+  
   // --- Ensure all outputs are OFF immediately on boot/reset ---
   setHeater(false);
   setMotor(false);

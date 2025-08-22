@@ -524,8 +524,8 @@ void streamStatusJson(Print& out) {
                               (timeSinceLastUpdate > 600000); // 10 minutes = 600,000 ms
             
             if (needsUpdate) {
-              // Recalculate adjusted duration based on current fermentation conditions
-              adjustedStageDuration = getAdjustedStageTimeMs(baseStageDuration * 1000, true) / 1000;
+              // FIXED: Use original stage time (stage.min), not baseStageDuration which might be pre-adjusted
+              adjustedStageDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, true) / 1000;
               programState.adjustedStageDurations[programState.customStageIdx] = adjustedStageDuration;
               programState.lastFermentationUpdate = millis();
             } else {
