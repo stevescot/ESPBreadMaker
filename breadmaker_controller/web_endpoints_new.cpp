@@ -2621,6 +2621,15 @@ void registerWebEndpoints(WebServer& server) {
         server.sendHeader("Pragma", "no-cache");
         server.sendHeader("Expires", "-1");
         
+        // Cache expensive heap calculation (only update every 10 seconds)
+        static uint32_t cachedFreeHeap = 0;
+        static unsigned long lastHeapUpdate = 0;
+        unsigned long now = millis();
+        if (now - lastHeapUpdate > 10000 || lastHeapUpdate == 0) {
+            cachedFreeHeap = ESP.getFreeHeap();
+            lastHeapUpdate = now;
+        }
+        
         // Send minimal JSON for PID tuning page using chunked response to avoid String concatenation
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
@@ -2641,7 +2650,7 @@ void registerWebEndpoints(WebServer& server) {
         server.sendContent("\"pid_i\":" + String(pid.pidI, 3) + ",");
         server.sendContent("\"pid_d\":" + String(pid.pidD, 3) + ",");
         server.sendContent("\"uptime_sec\":" + String(millis() / 1000) + ",");
-        server.sendContent("\"free_heap\":" + String(ESP.getFreeHeap()));
+        server.sendContent("\"free_heap\":" + String(cachedFreeHeap));
         server.sendContent("}");
         server.sendContent("");  // End chunked response
     });

@@ -334,7 +334,8 @@ function clearPIDGraph() {
 
 function startStatusUpdates() {
   if (updateInterval) clearInterval(updateInterval);
-  updateInterval = setInterval(updateStatus, 2000);
+  // Reduced to 10 seconds to minimize server load
+  updateInterval = setInterval(updateStatus, 10000);
 }
 
 function stopStatusUpdates() {
@@ -832,14 +833,14 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Initialize method description
   updateAutoTuneMethodDescription();
   
-  // Start periodic status updates (slower when not testing)
+  // Start periodic status updates (much slower when not testing)
   setInterval(() => {
     // Don't start new updates if there's already a faster update interval running
     // or if an update is already in progress to prevent request backup
     if (!updateInterval && !updateInProgress) {
       updateStatus();
     }
-  }, 5000);
+  }, 15000); // Increased to 15 seconds for minimal server load
   
   console.log('PID Controller Tuning page initialized');
 });
