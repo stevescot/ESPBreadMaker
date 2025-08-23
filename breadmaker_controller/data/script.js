@@ -1470,7 +1470,7 @@ window.addEventListener('DOMContentLoaded', () => {
     populateProgramSelect();
     // Immediately update status after programs are loaded
     window.updateStatus();
-    // Set up periodic status updates to keep everything in sync
+    // Set up periodic status updates to keep everything in sync (reduced frequency for better performance)
     setInterval(() => {
       fetch('/status')
         .then(r => r.json())
@@ -1478,7 +1478,7 @@ window.addEventListener('DOMContentLoaded', () => {
           window.updateStatus(s);
         })
         .catch(err => console.error('Status poll failed:', err));
-    }, 3000);
+    }, 5000); // Increased from 3 seconds to 5 seconds
   });
 
   // Manual Mode toggle logic

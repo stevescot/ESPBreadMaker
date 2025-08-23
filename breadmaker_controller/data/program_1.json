@@ -75,7 +75,7 @@
         {
           "mixSec": 2,
           "waitSec": 20,
-          "durationSec": 60
+          "durationSec": 300
         }
       ],
       "instructions": "Degas dough gently, then rest."

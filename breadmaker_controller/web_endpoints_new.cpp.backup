@@ -14,6 +14,10 @@
 #include "missing_stubs.h"  // For getAdjustedStageTimeMs and other functions
 #include "display_manager.h"  // For screensaver control
 
+// Simple gzip compression for API responses
+// Note: ESP32's WebServer doesn't support automatic gzip, so we'll use content-encoding headers
+// and compress responses manually for large JSON data
+
 // External OTA status for web integration
 extern OTAStatus otaStatus;
 
@@ -64,12 +68,26 @@ static unsigned long lastWifiStatus = WL_CONNECTED;
 static unsigned long lastStatusUpdate = 0;
 static unsigned long lastHaUpdate = 0;
 static const unsigned long STATUS_CACHE_MS = 1000;  // Cache for 1 second
-static const unsigned long HA_CACHE_MS = 3000;      // Cache HA for 3 seconds
+static const unsigned long HA_CACHE_MS = 10000;     // Cache HA for 10 seconds
+
+// HA response cache - stores the last generated response
+static String cachedHaResponse = "";
+static String cachedHaResponseCompressed = "";
+static bool cachedResponseGzipped = false;
+
+// Simple function to check if client accepts gzip
+bool clientSupportsGzip(WebServer& server) {
+    String acceptEncoding = server.header("Accept-Encoding");
+    return acceptEncoding.indexOf("gzip") != -1;
+}
 
 // Cache invalidation function - call this when state changes
 void invalidateStatusCache() {
   lastStatusUpdate = 0;
   lastHaUpdate = 0;
+  cachedHaResponse = ""; // Clear cached HA response
+  cachedHaResponseCompressed = ""; // Clear compressed cache
+  cachedResponseGzipped = false;
 }
 
 // Helper to track web activity for screensaver
@@ -175,13 +193,22 @@ bool serveStaticFile(WebServer& server, const String& path) {
   server.send(200, contentType, "");
   
   // Stream file in chunks to avoid memory limitations
-  const size_t CHUNK_SIZE = 1024; // 1KB chunks
+  // Use smaller chunks for better responsiveness during large file serving
+  const size_t CHUNK_SIZE = 512; // Reduced from 1024 to 512 bytes for more frequent yielding
   uint8_t buffer[CHUNK_SIZE];
+  size_t totalSent = 0;
   
   while (file.available()) {
     size_t bytesRead = file.readBytes((char*)buffer, CHUNK_SIZE);
     if (bytesRead > 0) {
       server.client().write(buffer, bytesRead);
+      totalSent += bytesRead;
+      
+      // For large files (>20KB), add a small delay every 10KB to prevent overwhelming the network
+      if (totalSent > 20480 && (totalSent % 10240) == 0) {
+        delay(10); // Small 10ms delay every 10KB for large files
+      }
+      
       yield(); // Allow other tasks to run and prevent watchdog timeout
     } else {
       break; // End of file or error
@@ -272,23 +299,25 @@ void coreEndpoints(WebServer& server) {
         updateActiveProgramVars();
         
         if (!serveStaticFile(server, "/")) {
-            // If index.html not found, provide helpful debug info
-            String response = "<!DOCTYPE html><html><head><title>Breadmaker Controller - Debug</title></head><body>";
-            response += "<h1>Breadmaker Controller</h1>";
-            response += "<p><strong>Status:</strong> Firmware running, but web files not found</p>";
-            response += "<h2>Available Endpoints:</h2>";
-            response += "<ul>";
-            response += "<li><a href='/status'>GET /status</a> - System status JSON</li>";
-            response += "<li><a href='/debug/fs'>GET /debug/fs</a> - Filesystem debug info</li>";
-            response += "<li><a href='/api/firmware_info'>GET /api/firmware_info</a> - Firmware info</li>";
-            response += "</ul>";
-            response += "<h2>Next Steps:</h2>";
-            response += "<ol>";
-            response += "<li>Check filesystem status at <a href='/debug/fs'>/debug/fs</a></li>";
-            response += "<li>Upload web files using: <code>.\\upload_files_esp32.ps1 -Port COM3</code></li>";
-            response += "</ol>";
-            response += "</body></html>";
-            server.send(200, "text/html", response);
+            // If index.html not found, provide helpful debug info using streaming
+            // OPTIMIZATION: Use streaming instead of String concatenation to save memory
+            server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+            server.send(200, "text/html", "");
+            server.sendContent("<!DOCTYPE html><html><head><title>Breadmaker Controller - Debug</title></head><body>");
+            server.sendContent("<h1>Breadmaker Controller</h1>");
+            server.sendContent("<p><strong>Status:</strong> Firmware running, but web files not found</p>");
+            server.sendContent("<h2>Available Endpoints:</h2>");
+            server.sendContent("<ul>");
+            server.sendContent("<li><a href='/status'>GET /status</a> - System status JSON</li>");
+            server.sendContent("<li><a href='/debug/fs'>GET /debug/fs</a> - Filesystem debug info</li>");
+            server.sendContent("<li><a href='/api/firmware_info'>GET /api/firmware_info</a> - Firmware info</li>");
+            server.sendContent("</ul>");
+            server.sendContent("<h2>Next Steps:</h2>");
+            server.sendContent("<ol>");
+            server.sendContent("<li>Check filesystem status at <a href='/debug/fs'>/debug/fs</a></li>");
+            server.sendContent("<li>Upload web files using: <code>.\\upload_files_esp32.ps1 -Port COM3</code></li>");
+            server.sendContent("</ol>");
+            server.sendContent("</body></html>");
         }
     });
     
@@ -304,17 +333,35 @@ void coreEndpoints(WebServer& server) {
         server.sendContent(""); // End chunked response
     });
     
-    // Add missing /api/status endpoint for frontend compatibility
+    // Add missing /api/status endpoint for frontend compatibility with caching
     server.on("/api/status", HTTP_GET, [&](){
         trackWebActivity(); // Track web activity for screensaver
         if (debugSerial) Serial.println(F("[DEBUG] /api/status requested"));
         
-        // Stream directly to client - no buffer needed, unlimited size, better memory usage
-        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-        server.send(200, "application/json", "");
-        WebServerPrint webPrint(server);
-        streamStatusJson(webPrint);
-        server.sendContent(""); // End chunked response
+        unsigned long now = millis();
+        bool supportsGzip = clientSupportsGzip(server);
+        
+        // Check if we can use cached response
+        if (now - lastHaUpdate < HA_CACHE_MS && cachedHaResponse.length() > 0) {
+            // Use cached response (note: basic compression not implemented yet for ESP32 WebServer)
+            server.send(200, "application/json", cachedHaResponse);
+            if (debugSerial) Serial.printf("[DEBUG] Using cached HA response (%d bytes)\n", cachedHaResponse.length());
+            return;
+        }
+        
+        // Generate new response and cache it
+        if (debugSerial) Serial.println(F("[DEBUG] Generating new HA response"));
+        
+        // Use String buffer to capture the response for caching
+        String responseBuffer;
+        StringPrint stringBuffer(responseBuffer);
+        streamStatusJson(stringBuffer);
+        cachedHaResponse = responseBuffer;
+        lastHaUpdate = now;
+        
+        // Send the response
+        server.send(200, "application/json", cachedHaResponse);
+        if (debugSerial) Serial.printf("[DEBUG] Sent new HA response (%d bytes)\n", cachedHaResponse.length());
     });
     
     server.on("/api/firmware_info", HTTP_GET, [&](){
@@ -369,6 +416,7 @@ void coreEndpoints(WebServer& server) {
                     }
                     server.sendContent("\n");
                     file = root.openNextFile();
+                    yield(); // Allow other tasks to run during directory scanning
                 }
                 root.close();
             } else {
@@ -499,7 +547,8 @@ void coreEndpoints(WebServer& server) {
     
     server.on("/api/output_mode", HTTP_POST, [&](){
         if (server.hasArg("plain")) {
-            DynamicJsonDocument doc(256);
+            // OPTIMIZATION: Use StaticJsonDocument instead of DynamicJsonDocument for small JSON
+            StaticJsonDocument<256> doc;
             DeserializationError err = deserializeJson(doc, server.arg("plain"));
             if (!err && doc.containsKey("mode")) {
                 String mode = doc["mode"];
@@ -523,7 +572,14 @@ void coreEndpoints(WebServer& server) {
             if (mode == "relay" || mode == "pwm") {
                 // System is always digital - no need to change anything
                 saveSettings();
-                server.send(200, "application/json", "{\"status\":\"ok\",\"mode\":\"" + mode + "\"}");
+                
+                // OPTIMIZATION: Use streaming instead of String concatenation
+                server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+                server.send(200, "application/json", "");
+                server.sendContent("{\"status\":\"ok\",\"mode\":\"");
+                server.sendContent(mode);
+                server.sendContent("\"}");
+                
                 if (debugSerial) Serial.println("[DEBUG] Output mode changed via GET: " + mode);
                 return;
             }
@@ -681,8 +737,12 @@ void stateMachineEndpoints(WebServer& server) {
         char timeBuffer[32];
         strftime(timeBuffer, sizeof(timeBuffer), "%H:%M", scheduleInfo);
         
-        String response = "Scheduled to start at " + String(timeBuffer) + " from beginning";
-        server.send(200, "text/plain", response);
+        // OPTIMIZATION: Use streaming instead of String concatenation
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "text/plain", "");
+        server.sendContent("Scheduled to start at ");
+        server.sendContent(timeBuffer);
+        server.sendContent(" from beginning");
         
         invalidateStatusCache();
     });
@@ -762,8 +822,16 @@ void stateMachineEndpoints(WebServer& server) {
             stageName = activeProgram->customStages[stageIdx].label;
         }
         
-        String response = "Scheduled to start at " + String(timeBuffer) + " at stage " + String(stageIdx + 1) + " (" + stageName + ")";
-        server.send(200, "text/plain", response);
+        // OPTIMIZATION: Use streaming instead of String concatenation
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "text/plain", "");
+        server.sendContent("Scheduled to start at ");
+        server.sendContent(timeBuffer);
+        server.sendContent(" at stage ");
+        server.sendContent(String(stageIdx + 1));
+        server.sendContent(" (");
+        server.sendContent(stageName);
+        server.sendContent(")");
         
         invalidateStatusCache();
     });
@@ -937,6 +1005,9 @@ void manualOutputEndpoints(WebServer& server) {
 // PID Control Endpoints
 void pidControlEndpoints(WebServer& server) {
     server.on("/api/pid", HTTP_GET, [&](){
+        // Ensure PID terms are up to date before returning status
+        updatePIDTerms();
+        
         // Ultra-efficient: Use sprintf with stack buffer instead of String concatenation
         char buffer[128];  // Stack allocated, much more efficient than String objects
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -953,7 +1024,15 @@ void pidControlEndpoints(WebServer& server) {
         server.sendContent(buffer);
         sprintf(buffer, "\"input\":%.1f,", pid.Input);
         server.sendContent(buffer);
-        sprintf(buffer, "\"output\":%.3f", pid.Output);
+        sprintf(buffer, "\"output\":%.3f,", pid.Output);
+        server.sendContent(buffer);
+        sprintf(buffer, "\"pidP\":%.6f,", pid.pidP);
+        server.sendContent(buffer);
+        sprintf(buffer, "\"pidI\":%.6f,", pid.pidI);
+        server.sendContent(buffer);
+        sprintf(buffer, "\"pidD\":%.6f,", pid.pidD);
+        server.sendContent(buffer);
+        sprintf(buffer, "\"sampleTime\":%lu", pid.sampleTime);
         server.sendContent(buffer);
         
         server.sendContent("}");
@@ -1024,6 +1103,7 @@ void pidControlEndpoints(WebServer& server) {
                     if (pid.controller) {
                         pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
                     }
+                    invalidateStatusCache(); // Cache invalidation for PID changes
                     updated = true; // Set updated flag regardless of controller state
                 }
             }
@@ -1099,6 +1179,9 @@ void pidControlEndpoints(WebServer& server) {
                 server.send(400, "application/json", "{\"error\":\"invalid_parameters\",\"message\":\"Invalid or out-of-range parameters\"}");
             }
         } else {
+            // Ensure PID terms are up to date before returning status
+            updatePIDTerms();
+            
             // Return current EMA temperature settings with legacy compatibility
             // Ultra-efficient: Use sprintf with stack buffer instead of String concatenation
             char buffer[128];  // Stack allocated, much more efficient than String objects
@@ -1154,6 +1237,22 @@ void pidControlEndpoints(WebServer& server) {
             sprintf(buffer, ",\"kd\":%.6f", pid.Kd);
             server.sendContent(buffer);
             
+            // Include current PID component terms for tuning interface
+            sprintf(buffer, ",\"pidP\":%.6f", pid.pidP);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"pidI\":%.6f", pid.pidI);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"pidD\":%.6f", pid.pidD);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"output\":%.3f", pid.Output);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"input\":%.1f", pid.Input);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"setpoint\":%.1f", pid.Setpoint);
+            server.sendContent(buffer);
+            sprintf(buffer, ",\"sampleTime\":%lu", pid.sampleTime);
+            server.sendContent(buffer);
+            
             server.sendContent("}");
         }
     });
@@ -1167,23 +1266,24 @@ void pidProfileEndpoints(WebServer& server) {
 }
 
 void homeAssistantEndpoint(WebServer& server) {
-    // Home Assistant integration endpoint (matches template configuration.yaml)
+    // Home Assistant integration endpoint with rotating response sets
     server.on("/ha", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /ha requested"));
+        
+        // Rotating response system - cycle through different data sets
+        static uint8_t responseSet = 0;
+        responseSet = (responseSet + 1) % 4; // 4 different response sets
         
         // OPTIMIZATION: Cache program data to avoid multiple file system calls
         static String cachedProgramName = "";
         static int lastCachedProgramId = -1;
         static Program* cachedProgram = nullptr;
         
-        // CYCLING OPTIMIZATION: Rotate through different data subsets every 30s
-        static unsigned long lastResponseSetChange = 0;
-        static int responseSet = 0;
-        unsigned long now = millis();
-        if (now - lastResponseSetChange >= 30000) {  // 30 seconds
-            responseSet = (responseSet + 1) % 4;  // 4 different response sets
-            lastResponseSetChange = now;
-        }
+        // Cache expensive file system values (update every ~2 minutes)
+        static unsigned long lastFSUpdate = 0;
+        static size_t cachedUsedBytes = 0;
+        static size_t cachedTotalBytes = 0;
+        static String cachedProfileName = "";
         
         if (lastCachedProgramId != programState.activeProgramId) {
             // Only load program from file system when program ID changes
@@ -1198,6 +1298,15 @@ void homeAssistantEndpoint(WebServer& server) {
             }
         }
         
+        // Update expensive filesystem data every 2 minutes only
+        unsigned long now = millis();
+        if (now - lastFSUpdate > 120000 || lastFSUpdate == 0) {
+            cachedUsedBytes = FFat.usedBytes();
+            cachedTotalBytes = FFat.totalBytes();
+            cachedProfileName = getCurrentActiveProfileName();
+            lastFSUpdate = now;
+        }
+        
         // Use efficient streaming instead of string concatenation
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
@@ -1206,43 +1315,156 @@ void homeAssistantEndpoint(WebServer& server) {
         char buffer[64];  // Stack allocated buffer for numeric conversions
         server.sendContent("{");
         
-        // Basic status - matches template expectations
+        // ALWAYS include core status (every response set)
         server.sendContent("\"state\":\"");
         server.sendContent(programState.isRunning ? "running" : "idle");
         server.sendContent("\",\"temperature\":");
-        sprintf(buffer, "%.1f", getAveragedTemperature());
+        float currentTemp = getAveragedTemperature(); // Single temperature reading
+        sprintf(buffer, "%.1f", currentTemp);
         server.sendContent(buffer);
         server.sendContent(",\"setpoint\":");
         sprintf(buffer, "%.1f", pid.Setpoint);
         server.sendContent(buffer);
-        server.sendContent(",");
         
-        // Output states (direct boolean values as expected)
-        server.sendContent("\"motor\":");
-        server.sendContent(outputStates.motor ? "true" : "false");
-        server.sendContent(",\"light\":");
-        server.sendContent(outputStates.light ? "true" : "false");
-        server.sendContent(",\"buzzer\":");
-        server.sendContent(outputStates.buzzer ? "true" : "false");
-        server.sendContent(",\"heater\":");
-        server.sendContent(outputStates.heater ? "true" : "false");
-        server.sendContent(",\"manual_mode\":");
-        server.sendContent(programState.manualMode ? "true" : "false");
-        server.sendContent(",");
-        
-        // CYCLING SYSTEM: Different data sets on each request
+        // Rotating response sets - different data each request
         switch(responseSet) {
-            case 0: { // SET 0: Program & Stage Info
-                // Program and stage info - USE CACHED PROGRAM
-        if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount() && cachedProgram) {
-            server.sendContent("\"program\":\"");
-            server.sendContent(cachedProgramName.c_str());
-            server.sendContent("\",");
-            
-            if (programState.isRunning && programState.customStageIdx < cachedProgram->customStages.size()) {
-                server.sendContent("\"stage\":\"");
-                server.sendContent(cachedProgram->customStages[programState.customStageIdx].label.c_str());
-                server.sendContent("\",");
+            case 0: // SET 0: Basic Control States & Program Info
+                server.sendContent(",\"motor\":");
+                server.sendContent(outputStates.motor ? "true" : "false");
+                server.sendContent(",\"light\":");
+                server.sendContent(outputStates.light ? "true" : "false");
+                server.sendContent(",\"buzzer\":");
+                server.sendContent(outputStates.buzzer ? "true" : "false");
+                server.sendContent(",\"heater\":");
+                server.sendContent(outputStates.heater ? "true" : "false");
+                server.sendContent(",\"manual_mode\":");
+                server.sendContent(programState.manualMode ? "true" : "false");
+                
+                if (cachedProgram && !cachedProgramName.isEmpty()) {
+                    server.sendContent(",\"program\":\"");
+                    server.sendContent(cachedProgramName.c_str());
+                    server.sendContent("\"");
+                    
+                    if (programState.isRunning && programState.customStageIdx < cachedProgram->customStages.size()) {
+                        server.sendContent(",\"stage\":\"");
+                        server.sendContent(cachedProgram->customStages[programState.customStageIdx].label.c_str());
+                        server.sendContent("\"");
+                    } else {
+                        server.sendContent(",\"stage\":\"Idle\"");
+                    }
+                }
+                break;
+                
+            case 1: // SET 1: Timing & Network Info  
+                if (programState.isRunning && cachedProgram && programState.customStageIdx < cachedProgram->customStages.size()) {
+                    unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+                    unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                       cachedProgram->customStages[programState.customStageIdx].isFermentation);
+                    unsigned long stageTimeLeft = (stageTimeMs / 1000) - elapsed;
+                    if (stageTimeLeft < 0) stageTimeLeft = 0;
+                    
+                    server.sendContent(",\"stage_time_left\":");
+                    sprintf(buffer, "%lu", stageTimeLeft / 60);
+                    server.sendContent(buffer);
+                    
+                    time_t currentTime = time(nullptr);
+                    if (currentTime > 1640995200 && stageTimeLeft > 0) { // Valid NTP time
+                        server.sendContent(",\"stage_ready_at\":");
+                        sprintf(buffer, "%lu", (unsigned long)(currentTime + stageTimeLeft));
+                        server.sendContent(buffer);
+                    }
+                }
+                
+                server.sendContent(",\"network\":{\"connected\":");
+                server.sendContent(WiFi.status() == WL_CONNECTED ? "true" : "false");
+                server.sendContent(",\"ssid\":\"");
+                server.sendContent(wifiCache.getSSID());
+                server.sendContent("\",\"rssi\":");
+                sprintf(buffer, "%d", wifiCache.getRSSI());
+                server.sendContent(buffer);
+                server.sendContent(",\"ip\":\"");
+                server.sendContent(wifiCache.getIPString());
+                server.sendContent("\"}");
+                break;
+                
+            case 2: // SET 2: Health & Performance Info
+                server.sendContent(",\"health\":{\"uptime_sec\":");
+                sprintf(buffer, "%lu", millis() / 1000);
+                server.sendContent(buffer);
+                server.sendContent(",\"firmware_version\":\"ESP32-WebServer\"");
+                server.sendContent(",\"free_heap\":");
+                sprintf(buffer, "%lu", (unsigned long)ESP.getFreeHeap());
+                server.sendContent(buffer);
+                server.sendContent(",\"performance\":{\"max_loop_time_us\":");
+                server.sendContent(String(getMaxLoopTime()));
+                server.sendContent(",\"avg_loop_time_us\":");
+                server.sendContent(String(getAverageLoopTime()));
+                server.sendContent("}");
+                
+                if (cachedTotalBytes > 0) {
+                    server.sendContent(",\"filesystem\":{\"usedBytes\":");
+                    server.sendContent(String(cachedUsedBytes));
+                    server.sendContent(",\"totalBytes\":");
+                    server.sendContent(String(cachedTotalBytes));
+                    server.sendContent(",\"utilization\":");
+                    float utilization = ((float)cachedUsedBytes / cachedTotalBytes) * 100.0;
+                    sprintf(buffer, "%.1f", utilization);
+                    server.sendContent(buffer);
+                    server.sendContent("}");
+                }
+                server.sendContent("}");
+                break;
+                
+            case 3: // SET 3: PID & Temperature Control Details
+                server.sendContent(",\"pid\":{\"kp\":");
+                sprintf(buffer, "%.6f", pid.Kp);
+                server.sendContent(buffer);
+                server.sendContent(",\"ki\":");
+                sprintf(buffer, "%.6f", pid.Ki);
+                server.sendContent(buffer);
+                server.sendContent(",\"kd\":");
+                sprintf(buffer, "%.6f", pid.Kd);
+                server.sendContent(buffer);
+                server.sendContent(",\"output\":");
+                sprintf(buffer, "%.2f", pid.Output);
+                server.sendContent(buffer);
+                server.sendContent(",\"input\":");
+                sprintf(buffer, "%.2f", pid.Input);
+                server.sendContent(buffer);
+                
+                if (!cachedProfileName.isEmpty()) {
+                    server.sendContent(",\"active_profile\":\"");
+                    server.sendContent(cachedProfileName.c_str());
+                    server.sendContent("\"");
+                }
+                server.sendContent(",\"auto_switching\":");
+                server.sendContent(pid.autoSwitching ? "true" : "false");
+                server.sendContent("}");
+                
+                server.sendContent(",\"temperature_control\":{\"raw_temp\":");
+                sprintf(buffer, "%.1f", readTemperature());
+                server.sendContent(buffer);
+                server.sendContent(",\"thermal_runaway\":");
+                server.sendContent(thermalRunawayDetected ? "true" : "false");
+                server.sendContent(",\"sensor_fault\":");
+                server.sendContent(sensorFaultDetected ? "true" : "false");
+                server.sendContent(",\"duty_cycle_percent\":");
+                sprintf(buffer, "%.1f", windowSize > 0 ? (onTime * 100.0) / windowSize : 0.0);
+                server.sendContent(buffer);
+                server.sendContent("}");
+                break;
+        }
+        
+        server.sendContent("}"); // Close main object
+        server.sendContent(""); // End chunked response
+        
+        if (debugSerial) Serial.printf("[DEBUG] Sent HA response set %d\n", responseSet);
+    });
+}
+
+void calibrationEndpoints(WebServer& server) {
+    server.on("/api/calibration", HTTP_GET, [&](){
+        // Get current raw ADC reading and temperature
                 
                 // Calculate current stage remaining time only
                 unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
@@ -1286,10 +1508,7 @@ void homeAssistantEndpoint(WebServer& server) {
         } else {
             server.sendContent("\"program\":\"\",\"stage\":\"Idle\",\"stage_time_left\":0,");
         }
-        }
-        break;
-                
-            case 1: { // SET 1: Timing & Timestamps
+        
         // Timing information (Unix timestamps as expected) - USE CACHED PROGRAM
         time_t now = time(nullptr);
         time_t stageReadyAt = 0;
@@ -1332,10 +1551,7 @@ void homeAssistantEndpoint(WebServer& server) {
         sprintf(buffer, "%lu", (unsigned long)programReadyAt);
         server.sendContent(buffer);
         server.sendContent(",");
-        }
-        break;
-                
-            case 2: { // SET 2: Health & Performance
+        
         // Health section (comprehensive system information as expected by template)
         server.sendContent("\"health\":{");
         
@@ -1491,32 +1707,8 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent("}");
         
         server.sendContent("}"); // Close health section
-        }
-        break;
-                
-            case 3: { // SET 3: Network Info & Status
-        server.sendContent("\"network\":{\"connected\":");
-        server.sendContent(WiFi.status() == WL_CONNECTED ? "true" : "false");
-        server.sendContent(",\"ssid\":\"");
-        server.sendContent(wifiCache.getSSID());
-        server.sendContent("\",\"rssi\":");
-        server.sendContent(String(wifiCache.getRSSI()));
-        server.sendContent(",\"ip\":\"");
-        server.sendContent(wifiCache.getIPString());
-        server.sendContent("\",\"reconnect_count\":");
-        server.sendContent(String(getWifiReconnectCount()));
-        server.sendContent("}");
-        }
-        break;
-        }
-        
         server.sendContent("}"); // Close main object
         server.sendContent(""); // End chunked response
-        
-        if (debugSerial) {
-            Serial.printf("[DEBUG] HA endpoint served response set %d in %lums\n", 
-                         responseSet, millis() - now);
-        }
     });
 }
 
@@ -1812,6 +2004,7 @@ void fileEndPoints(WebServer& server) {
                     firstFile = false;
                 }
                 file = root.openNextFile();
+                yield(); // Allow other tasks to run during directory scanning
             }
             root.close();
             
@@ -1985,7 +2178,14 @@ void programsEndpoints(WebServer& server) {
         if (server.hasArg("id")) {
             int id = server.arg("id").toInt();
             if (id >= 0 && id < getProgramCount()) {
-                server.send(200, "application/json", "{\"id\":" + String(id) + ",\"valid\":" + String(isProgramValid(id) ? "true" : "false") + "}");
+                // OPTIMIZATION: Use streaming instead of String concatenation
+                server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+                server.send(200, "application/json", "");
+                server.sendContent("{\"id\":");
+                server.sendContent(String(id));
+                server.sendContent(",\"valid\":");
+                server.sendContent(isProgramValid(id) ? "true" : "false");
+                server.sendContent("}");
                 return;
             }
         }
@@ -2003,11 +2203,24 @@ void otaEndpoints(WebServer& server) {
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
         server.sendContent("{");
-        server.sendContent("\"enabled\":" + String(isOTAEnabled() ? "true" : "false") + ",");
-        server.sendContent("\"inProgress\":" + String(otaStatus.inProgress ? "true" : "false") + ",");
-        server.sendContent("\"progress\":" + String(otaStatus.progress) + ",");
-        server.sendContent("\"hostname\":\"" + getOTAHostname() + "\",");
-        server.sendContent("\"error\":" + (otaStatus.error.length() > 0 ? "\"" + otaStatus.error + "\"" : "null"));
+        
+        // OPTIMIZATION: Remove String concatenation, use pure streaming
+        server.sendContent("\"enabled\":");
+        server.sendContent(isOTAEnabled() ? "true" : "false");
+        server.sendContent(",\"inProgress\":");
+        server.sendContent(otaStatus.inProgress ? "true" : "false");
+        server.sendContent(",\"progress\":");
+        server.sendContent(String(otaStatus.progress));
+        server.sendContent(",\"hostname\":\"");
+        server.sendContent(getOTAHostname());
+        server.sendContent("\",\"error\":");
+        if (otaStatus.error.length() > 0) {
+            server.sendContent("\"");
+            server.sendContent(otaStatus.error);
+            server.sendContent("\"");
+        } else {
+            server.sendContent("null");
+        }
         server.sendContent("}");
     });
     

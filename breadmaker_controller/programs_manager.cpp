@@ -3,12 +3,31 @@
 #include "programs_manager.h"
 #include "globals.h"
 
+// External variables
+extern bool debugSerial;
+
 // --- Programs storage ---
 std::vector<ProgramMetadata> programMetadata;
 Program activeProgram;
 
+// Static caching variables
+static bool metadataLoaded = false;
+
+// Invalidate metadata cache (call when programs are modified)
+void invalidateProgramMetadataCache() {
+  metadataLoaded = false;
+  programMetadata.clear();
+  if (debugSerial) Serial.println("[DEBUG] Program metadata cache invalidated");
+}
+
 // Load only program metadata (names, IDs, basic info) - uses minimal memory
 void loadProgramMetadata() {
+  // OPTIMIZATION: Add caching to prevent repeated file system access
+  if (metadataLoaded && !programMetadata.empty()) {
+    if (debugSerial) Serial.println("[DEBUG] Program metadata already loaded, using cache");
+    return;
+  }
+  
   programMetadata.clear();
   
   // Use lightweight index file instead of full programs.json
@@ -60,6 +79,9 @@ void loadProgramMetadata() {
   }
   
   Serial.printf("[INFO] Loaded metadata for %zu programs\n", programMetadata.size());
+  
+  // Mark metadata as successfully loaded
+  metadataLoaded = true;
 }
 
 // Load full program data for a specific program ID
@@ -272,6 +294,7 @@ bool splitProgramsJson() {
   
   while (mainFile.available()) {
     content += mainFile.readString();
+    yield(); // Allow other tasks to run during large file reading
   }
   mainFile.close();
   
@@ -405,6 +428,7 @@ bool splitProgramsJson() {
                 successCount, ESP.getFreeHeap());
   
   // Reload metadata to reflect changes
+  invalidateProgramMetadataCache();
   loadProgramMetadata();
   
   return successCount > 0;

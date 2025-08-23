@@ -13,7 +13,8 @@ const char* WIFI_FILE = "/wifi.json";
 bool loadWiFiCreds(String &ssid, String &pass) {
   File f = FFat.open(WIFI_FILE, "r");
   if (!f) return false;
-  DynamicJsonDocument doc(256);
+  // OPTIMIZATION: Use StaticJsonDocument instead of DynamicJsonDocument for small JSON
+  StaticJsonDocument<256> doc;
   if (deserializeJson(doc, f)) { f.close(); return false; }
   f.close();
   if (!doc.containsKey("ssid") || !doc.containsKey("pass")) return false;
@@ -70,7 +71,8 @@ void startWiFiManagerPortal() {
     String ssid = WiFi.SSID();
     String pass = WiFi.psk();
     
-    DynamicJsonDocument doc(256);
+    // OPTIMIZATION: Use StaticJsonDocument instead of DynamicJsonDocument for small JSON
+    StaticJsonDocument<256> doc;
     doc["ssid"] = ssid;
     doc["pass"] = pass;
     

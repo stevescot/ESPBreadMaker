@@ -1,0 +1,99 @@
+{
+  "state": "running",
+  "temperature": 22.8,
+  "setpoint": 21.0,
+  "motor": false,
+  "light": false,
+  "buzzer": false,
+  "heater": false,
+  "manual_mode": false,
+  "program": "Bread - Sourdough In-Machine",
+  "stage": "Proof",
+  "stage_time_left": 136,
+  "program_time_left": 211,
+  "stage_ready_at": 1755976856,
+  "program_ready_at": 1755981356,
+  "health": {
+    "uptime_sec": 726,
+    "firmware_version": "ESP32-WebServer",
+    "build_date": "Aug 23 2025 17:52:03",
+    "reset_reason": "3",
+    "chip_id": "736CDDA0",
+    "performance": {
+      "loop_count": 510,
+      "max_loop_time_us": 3143000,
+      "avg_loop_time_us": 1400466,
+      "current_loop_time_us": 1405865,
+      "cpu_usage": 100.0,
+      "wifi_reconnects": 1
+    },
+    "memory": {
+      "free_heap": 128904,
+      "max_free_block": 73716,
+      "heap_size": 302220,
+      "min_free_heap": 134592,
+      "fragmentation": 44.6
+    },
+    "pid": {
+      "kp": 0.13,
+      "ki": 0.0004,
+      "kd": 11.0,
+      "output": 0.0,
+      "input": 22.75,
+      "setpoint": 21.0,
+      "sample_time_ms": 7500,
+      "active_profile": "0-40┬░C (Fermentation)",
+      "auto_switching": true
+    },
+    "flash": {
+      "size": 16777216,
+      "speed": 80000000,
+      "mode": 0
+    },
+    "filesystem": {
+      "usedBytes": 913408,
+      "totalBytes": 10240000,
+      "freeBytes": 9326592,
+      "utilization": 8.9
+    },
+    "error_counts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "watchdog_enabled": false,
+    "startup_complete": true,
+    "watchdog_last_feed": 0,
+    "watchdog_timeout_ms": 0,
+    "temperature_control": {
+      "input": 22.8,
+      "pid_input": 22.7,
+      "output": 0.0,
+      "pid_output": 0.0,
+      "kp": 0.13,
+      "ki": 0.0004,
+      "kd": 11.0,
+      "pid_p": -0.236,
+      "pid_i": -0.505,
+      "pid_d": -0.296,
+      "sample_time_ms": 7500,
+      "raw_temp": 23.1,
+      "thermal_runaway": false,
+      "sensor_fault": false,
+      "window_elapsed_ms": 10001,
+      "window_size_ms": 15000,
+      "on_time_ms": 0,
+      "duty_cycle_percent": 0.0
+    },
+    "network": {
+      "connected": true,
+      "ssid": "RawInternet",
+      "rssi": -66,
+      "ip": "192.168.250.125",
+      "reconnect_count": 1
+    }
+  }
+}

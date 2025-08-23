@@ -22,24 +22,36 @@ function fetchWithTimeout(url, timeout = 10000) {
 // --- Real-time chart update logic ---
 async function updateStatus() {
   try {
-    const response = await fetchWithTimeout('/api/status', 5000);
+    // Reset error counter on successful start
+    if (window.consecutiveErrors > 0) {
+      console.log(`Recovered from ${window.consecutiveErrors} consecutive errors`);
+      window.consecutiveErrors = 0;
+    }
+    
+    // Use longer timeout for status call to prevent timeouts during ESP32 busy periods
+    const response = await fetchWithTimeout('/api/status', 8000);
     if (!response.ok) throw new Error('Failed to fetch status');
     const data = await response.json();
     
-    // Fetch raw temperature from calibration endpoint
+    // Fetch raw temperature from calibration endpoint in parallel (non-blocking)
     let rawTemperature = data.temperature || data.temp; // fallback to averaged
-    try {
-      const calibResponse = await fetchWithTimeout('/api/calibration', 3000);
+    fetchWithTimeout('/api/calibration', 2000).then(calibResponse => {
       if (calibResponse.ok) {
-        const calibData = await calibResponse.json();
-        // Use the 'temp' field from calibration which is the raw reading
-        if (calibData.temp !== undefined) {
-          rawTemperature = calibData.temp;
+        return calibResponse.json();
+      }
+      throw new Error('Calibration fetch failed');
+    }).then(calibData => {
+      // Use the 'temp' field from calibration which is the raw reading
+      if (calibData.temp !== undefined) {
+        rawTemperature = calibData.temp;
+        // Update the raw temperature data point if we got a better value
+        if (chartData.datasets[1].data.length > 0) {
+          chartData.datasets[1].data[chartData.datasets[1].data.length - 1] = rawTemperature;
         }
       }
-    } catch (err) {
+    }).catch(err => {
       console.warn('Failed to fetch raw temperature from calibration endpoint:', err);
-    }
+    });
 
     // PID P, I, D terms - use available data from status API
     if (document.getElementById('pidPTerm')) {
@@ -65,7 +77,7 @@ async function updateStatus() {
     // Averaged temp (map from temperature field)
     chartData.datasets[0].data.push(data.temperature || data.temp);
     if (chartData.datasets[0].data.length > 300) chartData.datasets[0].data.shift();
-    // Raw temp (use raw temperature from calibration endpoint)
+    // Raw temp (use raw temperature - will be updated async if calibration succeeds)
     chartData.datasets[1].data.push(rawTemperature);
     if (chartData.datasets[1].data.length > 300) chartData.datasets[1].data.shift();
     // Setpoint
@@ -89,7 +101,13 @@ async function updateStatus() {
       // D term (Derivative)
       window.pidComponentData.datasets[2].data.push(data.pid_d || 0);
       if (window.pidComponentData.datasets[2].data.length > 300) window.pidComponentData.datasets[2].data.shift();
-      window.pidComponentChart.update();
+      
+      // Use requestAnimationFrame for smoother chart updates (non-blocking)
+      requestAnimationFrame(() => {
+        if (window.pidComponentChart) {
+          window.pidComponentChart.update('none'); // 'none' mode for faster updates
+        }
+      });
     }
 
     // --- Update status display fields ---
@@ -190,7 +208,12 @@ async function updateStatus() {
         document.getElementById('currentTempEffective').textContent = '-- used';
       }
     }
-    temperatureChart.update();
+    // Use requestAnimationFrame for smoother chart updates (non-blocking)
+    requestAnimationFrame(() => {
+      if (temperatureChart) {
+        temperatureChart.update('none'); // 'none' mode for faster updates
+      }
+    });
   } catch (err) {
     showMessage('Error updating chart: ' + err.message, 'error');
   }
@@ -318,7 +341,8 @@ function clearPIDGraph() {
 
 function startStatusUpdates() {
   if (updateInterval) clearInterval(updateInterval);
-  updateInterval = setInterval(updateStatus, 2000);
+  // Start chart updates with longer interval to reduce ESP32 load
+  updateInterval = setInterval(updateStatus, 3000); // Increased from 2000ms to 3000ms
 }
 
 function stopStatusUpdates() {
@@ -573,7 +597,7 @@ async function updatePIDParams() {
     const pidUrl = `/api/pid_params?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}`;
     console.log('PID update URL:', pidUrl);
     
-    const pidResponse = await fetchWithTimeout(pidUrl, 8000);
+    const pidResponse = await fetchWithTimeout(pidUrl, 10000); // Increased timeout
     
     if (!pidResponse.ok) {
       throw new Error(`PID update failed: ${pidResponse.status}`);
@@ -585,7 +609,7 @@ async function updatePIDParams() {
     const tempUrl = `/api/pid_params?temp_alpha=${tempAlpha.toFixed(3)}&temp_interval=${tempUpdateInterval}`;
     console.log('Temp update URL:', tempUrl);
     
-    const tempResponse = await fetchWithTimeout(tempUrl, 8000);
+    const tempResponse = await fetchWithTimeout(tempUrl, 10000); // Increased timeout
     
     if (!tempResponse.ok) {
       throw new Error(`Temperature settings update failed: ${tempResponse.status}`);
@@ -616,7 +640,7 @@ async function updatePIDParams() {
 async function loadCurrentParams() {
   try {
     // Load PID parameters
-    const pidResponse = await fetchWithTimeout('/api/pid', 8000);
+    const pidResponse = await fetchWithTimeout('/api/pid', 10000); // Increased timeout
     const pidData = await pidResponse.json();
     
     document.getElementById('kpInput').value = pidData.kp.toFixed(6);
@@ -631,7 +655,7 @@ async function loadCurrentParams() {
     }
     
     // Load EWMA temperature parameters
-    const ewmaResponse = await fetchWithTimeout('/api/pid_params', 8000);
+    const ewmaResponse = await fetchWithTimeout('/api/pid_params', 10000); // Increased timeout
     const ewmaData = await ewmaResponse.json();
     
     if (ewmaData.temp_alpha !== undefined) {
