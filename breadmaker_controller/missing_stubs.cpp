@@ -10,6 +10,7 @@
 #ifdef ESP32
 #include <esp_system.h>
 #include <WiFi.h>
+#include <FFat.h>
 #endif
 
 // External function declarations
@@ -21,7 +22,7 @@ extern float readTemperature(); // Raw temperature reading from calibration.cpp
 #endif
 
 // Force a rebuild by including current timestamp as comment
-// BUILD_TIMESTAMP: Jul 27 2025 22:30:00
+// BUILD_TIMESTAMP: Aug 23 2025 13:30:00 - FORCE PID PROFILE CREATION DEBUG
 
 // Stub implementations for missing functions
 
@@ -225,27 +226,172 @@ float getHeapFragmentation() {
 }
 
 void checkAndSwitchPIDProfile() {
-  // Only check every 5 seconds to avoid excessive switching
-  if (millis() - pid.lastProfileCheck < 5000) return;
-  pid.lastProfileCheck = millis();
-  
   // Skip if auto-switching is disabled
   if (!pid.autoSwitching) return;
   
-  // Skip if no valid temperature reading
-  if (tempAvg.averagedTemperature <= 0) return;
+  // Skip if no valid setpoint
+  if (pid.Setpoint <= 0) return;
   
-  // Find appropriate profile for current temperature
+  // If no profiles are loaded, load them first
+  if (pid.profiles.empty()) {
+    if (debugSerial) Serial.println("[PID-PROFILE] No profiles loaded, loading default profiles");
+    loadPIDProfiles();
+  }
+  
+  // Find appropriate profile for current setpoint and switch immediately if needed
   for (auto& profile : pid.profiles) {
-    if (tempAvg.averagedTemperature >= profile.minTemp && 
-        tempAvg.averagedTemperature < profile.maxTemp && 
-        profile.name != pid.activeProfile) {
-      Serial.printf("[checkAndSwitchPIDProfile] Temperature %.1f°C - switching from '%s' to '%s'\n",
-                    tempAvg.averagedTemperature, pid.activeProfile.c_str(), profile.name.c_str());
-      switchToProfile(profile.name);
-      saveSettings();
-      break;
+    if (pid.Setpoint >= profile.minTemp && pid.Setpoint < profile.maxTemp) {
+      // Only switch if we're not already using the correct profile
+      if (abs(pid.Kp - profile.kp) > 0.001 || abs(pid.Ki - profile.ki) > 0.0001 || abs(pid.Kd - profile.kd) > 0.01) {
+        if (debugSerial) {
+          Serial.printf("[PID-PROFILE] Setpoint %.1f°C requires '%s' profile (Kp=%.3f, Ki=%.6f, Kd=%.1f)\n",
+                        pid.Setpoint, profile.name.c_str(), profile.kp, profile.ki, profile.kd);
+        }
+        switchToProfile(profile.name);
+        saveSettings();
+      }
+      return; // Found appropriate profile, exit
     }
+  }
+}
+
+String getCurrentActiveProfileName() {
+  if (pid.Setpoint <= 0) {
+    return "None"; // No setpoint, no active profile
+  }
+  
+  // Find appropriate profile for current setpoint
+  for (auto& profile : pid.profiles) {
+    if (pid.Setpoint >= profile.minTemp && pid.Setpoint < profile.maxTemp) {
+      return profile.name;
+    }
+  }
+  
+  return "Unknown"; // Setpoint outside all profile ranges
+}
+
+// Save PID profiles to file
+void savePIDProfiles() {
+  File file = FFat.open("/pid-profiles.json", "w");
+  if (!file) {
+    if (debugSerial) Serial.println("[ERROR] Failed to open pid-profiles.json for writing");
+    return;
+  }
+  
+  // Create JSON document
+  StaticJsonDocument<1024> doc;
+  JsonArray profiles = doc.createNestedArray("pidProfiles");
+  
+  // Add each profile
+  for (const auto& profile : pid.profiles) {
+    JsonObject profileObj = profiles.createNestedObject();
+    profileObj["name"] = profile.name;
+    profileObj["minTemp"] = profile.minTemp;
+    profileObj["maxTemp"] = profile.maxTemp;
+    profileObj["kp"] = profile.kp;
+    profileObj["ki"] = profile.ki;
+    profileObj["kd"] = profile.kd;
+    profileObj["windowMs"] = profile.windowMs;
+    profileObj["description"] = profile.description;
+  }
+  
+  // Add metadata - but NOT activeProfile (it's determined automatically by setpoint)
+  doc["autoSwitching"] = pid.autoSwitching;
+  
+  // Write to file
+  if (serializeJson(doc, file) == 0) {
+    if (debugSerial) Serial.println("[ERROR] Failed to write PID profiles JSON");
+  } else {
+    if (debugSerial) Serial.println("[INFO] PID profiles saved successfully");
+  }
+  
+  file.close();
+}
+
+// Load PID profiles from file
+void loadPIDProfiles() {
+  if (debugSerial) Serial.println("[DEBUG] loadPIDProfiles() called");
+  
+  File file = FFat.open("/pid-profiles.json", "r");
+  if (!file) {
+    if (debugSerial) Serial.println("[WARN] pid-profiles.json not found, creating default profiles");
+    createDefaultPIDProfiles();
+    savePIDProfiles();
+    if (debugSerial) Serial.printf("[DEBUG] After creation: pid.profiles.size() = %d\n", pid.profiles.size());
+    return;
+  }
+  
+  // Create JSON document
+  StaticJsonDocument<1024> doc;
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+  
+  if (error) {
+    if (debugSerial) Serial.printf("[ERROR] Failed to parse pid-profiles.json: %s\n", error.c_str());
+    createDefaultPIDProfiles();
+    return;
+  }
+  
+  // Clear existing profiles
+  pid.profiles.clear();
+  
+  // Load profiles from JSON
+  JsonArray profiles = doc["pidProfiles"];
+  for (JsonObject profile : profiles) {
+    PIDProfile pidProfile;
+    pidProfile.name = profile["name"].as<String>();
+    pidProfile.minTemp = profile["minTemp"];
+    pidProfile.maxTemp = profile["maxTemp"];
+    pidProfile.kp = profile["kp"];
+    pidProfile.ki = profile["ki"];
+    pidProfile.kd = profile["kd"];
+    pidProfile.windowMs = profile["windowMs"] | 15000; // Default 15s if missing
+    pidProfile.description = profile["description"].as<String>();
+    
+    pid.profiles.push_back(pidProfile);
+  }
+  
+  // Load settings - activeProfile is NOT loaded, it's determined automatically
+  pid.autoSwitching = doc["autoSwitching"] | true; // Default to auto-switching enabled
+  
+  if (debugSerial) Serial.printf("[INFO] Loaded %d PID profiles, auto-switching: %s\n", 
+                                 pid.profiles.size(), pid.autoSwitching ? "enabled" : "disabled");
+}
+
+void createDefaultPIDProfiles() {
+  if (debugSerial) Serial.println("[DEBUG] createDefaultPIDProfiles() called - creating 2 clean profiles");
+  pid.profiles.clear();
+  
+  // Low Temperature Range (0-40°C) - Using tuned values from user testing
+  PIDProfile lowRange;
+  lowRange.name = "0-40°C (Fermentation)";
+  lowRange.minTemp = 0;
+  lowRange.maxTemp = 40;
+  lowRange.kp = 0.13;      // User's optimized values
+  lowRange.ki = 0.0004;    // User's optimized values  
+  lowRange.kd = 11.0;      // User's optimized values
+  lowRange.windowMs = 5000;
+  lowRange.description = "Optimized for ambient to fermentation temperatures. Lower derivative for thermal mass.";
+  pid.profiles.push_back(lowRange);
+  
+  // High Temperature Range (40-250°C) - Using tuned values from user testing
+  PIDProfile highRange;
+  highRange.name = "40°C+ (Baking)";
+  highRange.minTemp = 40;
+  highRange.maxTemp = 250;
+  highRange.kp = 0.09;     // User's optimized values
+  highRange.ki = 0.0003;   // User's optimized values
+  highRange.kd = 1.6;      // User's optimized values
+  highRange.windowMs = 12000;
+  highRange.description = "Optimized for baking temperatures. Higher derivative for responsiveness.";
+  pid.profiles.push_back(highRange);
+  
+  // Set defaults - no activeProfile persistence (determined automatically by setpoint)
+  pid.autoSwitching = true;
+  
+  if (debugSerial) {
+    Serial.printf("[INFO] Created %d clean PID profiles: '%s' and '%s'\n", 
+                  pid.profiles.size(), pid.profiles[0].name.c_str(), pid.profiles[1].name.c_str());
   }
 }
 
@@ -418,7 +564,7 @@ void switchToProfile(const String& profileName) {
       pid.Kp = profile.kp;
       pid.Ki = profile.ki;
       pid.Kd = profile.kd;
-      pid.activeProfile = profileName;
+      // NOTE: activeProfile is NOT persisted - it's determined dynamically by setpoint
       
       // Apply to PID controller
       if (pid.controller) {
@@ -470,7 +616,7 @@ void displayMessage(const String& message) {
 // Stream status JSON function - comprehensive implementation
 // This function streams JSON directly without creating large strings in memory
 void streamStatusJson(Print& out) {
-  // Update fermentation cache first (only recalculates when needed)
+  // Re-enable fermentation cache after optimizing the main performance bottlenecks
   updateFermentationCache();
   
   // Variable to store total program remaining time (will be calculated below)
@@ -490,24 +636,41 @@ void streamStatusJson(Print& out) {
   
   // === Program Information ===
   if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
-    Program* p = getActiveProgramMutable();
-    if (p) {
+    // OPTIMIZATION: Cache program data to avoid frequent file system access
+    static String cachedProgramName = "";
+    static int lastCachedProgramId = -1;
+    static Program* cachedProgram = nullptr;
+    
+    if (lastCachedProgramId != programState.activeProgramId) {
+      // Only load program from file system when program ID changes
+      cachedProgram = getActiveProgramMutable();
+      if (cachedProgram) {
+        cachedProgramName = cachedProgram->name;
+        lastCachedProgramId = programState.activeProgramId;
+      } else {
+        cachedProgramName = "Unknown";
+        lastCachedProgramId = -1;
+        cachedProgram = nullptr;
+      }
+    }
+    
+    if (cachedProgramName.length() > 0 && cachedProgram) {
       out.print("\"program\":\"");
-      out.print(p->name);
+      out.print(cachedProgramName);
       out.print("\",");
       
       out.printf("\"programId\":%d,", programState.activeProgramId);
       
       // === Stage Information ===
-      if (programState.customStageIdx < p->customStages.size()) {
-        CustomStage& stage = p->customStages[programState.customStageIdx];
+      if (programState.customStageIdx < cachedProgram->customStages.size()) {
+        CustomStage& stage = cachedProgram->customStages[programState.customStageIdx];
         
         out.print("\"stage\":\"");
         out.print(stage.label);
         out.print("\",");
         
         out.printf("\"stageIdx\":%u,", (unsigned)programState.customStageIdx);
-        out.printf("\"setpoint\":%.1f,", stage.temp);
+        out.printf("\"stageTemperature\":%.1f,", stage.temp);
         
         // Calculate time left in current stage (fermentation-adjusted with periodic updates)
         unsigned long timeLeft = 0;
@@ -524,8 +687,8 @@ void streamStatusJson(Print& out) {
                               (timeSinceLastUpdate > 600000); // 10 minutes = 600,000 ms
             
             if (needsUpdate) {
-              // FIXED: Use original stage time (stage.min), not baseStageDuration which might be pre-adjusted
-              adjustedStageDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, true) / 1000;
+              // Recalculate adjusted duration based on current fermentation conditions
+              adjustedStageDuration = getAdjustedStageTimeMs(baseStageDuration * 1000, true) / 1000;
               programState.adjustedStageDurations[programState.customStageIdx] = adjustedStageDuration;
               programState.lastFermentationUpdate = millis();
             } else {
@@ -577,7 +740,7 @@ void streamStatusJson(Print& out) {
       } else {
         out.print("\"stage\":\"Idle\",");
         out.print("\"stageIdx\":0,");
-        out.print("\"setpoint\":0,");
+        out.print("\"stageTemperature\":0,");
         out.print("\"timeLeft\":0,");
         out.print("\"adjustedTimeLeft\":0,");
         out.print("\"stage_ready_at\":0,");
@@ -588,7 +751,7 @@ void streamStatusJson(Print& out) {
       out.printf("\"programId\":%d,", programState.activeProgramId);
       out.print("\"stage\":\"Idle\",");
       out.print("\"stageIdx\":0,");
-      out.print("\"setpoint\":0,");
+      out.print("\"stageTemperature\":0,");
       out.print("\"timeLeft\":0,");
       out.print("\"adjustedTimeLeft\":0,");
       out.print("\"stage_ready_at\":0,");
@@ -599,7 +762,7 @@ void streamStatusJson(Print& out) {
     out.print("\"programId\":-1,");
     out.print("\"stage\":\"Idle\",");
     out.print("\"stageIdx\":0,");
-    out.print("\"setpoint\":0,");
+    out.print("\"stageTemperature\":0,");
     out.print("\"timeLeft\":0,");
     out.print("\"adjustedTimeLeft\":0,");
     out.print("\"stage_ready_at\":0,");
@@ -616,7 +779,7 @@ void streamStatusJson(Print& out) {
   out.printf("\"rawTemperature\":%.1f,", rawTemp);
   out.printf("\"tempRaw\":%.1f,", rawTemp);
   
-  out.printf("\"setTemp\":%.1f,", pid.Setpoint);
+  out.printf("\"setpoint\":%.1f,", pid.Setpoint);
   
   out.print("\"heater\":");
   out.print(outputStates.heater ? "true" : "false");
@@ -752,6 +915,9 @@ void streamStatusJson(Print& out) {
   out.printf("\"pid_kd\":%.6f,", pid.Kd);
   out.printf("\"pid_output\":%.3f,", pid.Output);
   out.printf("\"pid_input\":%.1f,", pid.Input);
+  out.printf("\"pid_p\":%.3f,", pid.pidP);
+  out.printf("\"pid_i\":%.3f,", pid.pidI);
+  out.printf("\"pid_d\":%.3f,", pid.pidD);
   
   // === Safety System Status ===
   out.print("\"safety\":{");

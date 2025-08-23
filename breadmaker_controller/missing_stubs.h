@@ -26,11 +26,15 @@ bool isStartupDelayComplete();
 // PID and control functions
 void updateTimeProportionalHeater();
 void updatePIDTerms();
+String getCurrentActiveProfileName();
 
 // Settings functions
 void loadSettings();
 void saveSettings();
 void switchToProfile(const String& profileName);
+void savePIDProfiles();
+void loadPIDProfiles();
+void createDefaultPIDProfiles();
 
 // Endpoint functions
 void otaEndpoints(WebServer& server);

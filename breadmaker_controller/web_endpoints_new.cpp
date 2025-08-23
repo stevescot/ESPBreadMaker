@@ -29,6 +29,28 @@ class StringPrint : public Print {
     }
 };
 
+// WebServerPrint class for direct streaming to web client (no buffer needed!)
+class WebServerPrint : public Print {
+  WebServer& server;
+  public:
+    WebServerPrint(WebServer& s) : server(s) {}
+    size_t write(uint8_t c) override { 
+      char buf[2] = {(char)c, 0};
+      server.sendContent(buf); 
+      return 1; 
+    }
+    size_t write(const uint8_t* buffer, size_t size) override {
+      // Convert to String with exact size to avoid null termination issues
+      String content;
+      content.reserve(size + 1);
+      for (size_t i = 0; i < size; i++) {
+        content += (char)buffer[i];
+      }
+      server.sendContent(content);
+      return size;
+    }
+};
+
 // Performance tracking variables
 static unsigned long loopCount = 0;
 static unsigned long lastLoopTime = 0;
@@ -97,17 +119,6 @@ extern Program* getActiveProgramMutable();
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 #endif
-
-// Note: getStatusJsonString is deprecated - use direct streaming with streamStatusJson() instead
-// This function is kept for backward compatibility but creates strings in memory
-String getStatusJsonString() {
-  String response;
-  response.reserve(800); // MEMORY OPTIMIZATION: Reduced from 2048 to 800 bytes
-  
-  StringPrint stringPrint(response);
-  streamStatusJson(stringPrint);
-  return response;
-}
 
 // Helper function to serve static files from FFat
 bool serveStaticFile(WebServer& server, const String& path) {
@@ -242,13 +253,7 @@ void coreEndpoints(WebServer& server) {
                         Serial.printf("[UPLOAD] Failed: %s\n", upload.filename.c_str());
                     } else {
                         Serial.printf("[UPLOAD] Success: %s (%u bytes)\n", upload.filename.c_str(), upload.totalSize);
-                        
-                        // Check if main programs.json was uploaded - trigger split
-                        String filename = upload.filename;
-                        if (filename == "/programs.json") {
-                            if (debugSerial) Serial.println("[UPLOAD] Main programs.json detected - triggering split to individual files");
-                            splitProgramsJson();
-                        }
+                        // Server-side splitting removed - client now handles individual file uploads
                     }
                 }
             }
@@ -291,13 +296,12 @@ void coreEndpoints(WebServer& server) {
         trackWebActivity(); // Track web activity for screensaver
         if (debugSerial) Serial.println(F("[DEBUG] /status requested"));
         
-        // Use String buffer for status JSON (status is frequently accessed, needs fast response)
-        String statusBuffer;
-        statusBuffer.reserve(800); // MEMORY OPTIMIZATION: Reduced from 1200 to 800 bytes
-        StringPrint stringPrint(statusBuffer);
-        streamStatusJson(stringPrint);
-        
-        server.send(200, "application/json", statusBuffer);
+        // Stream directly to client - no buffer needed, unlimited size, better memory usage
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        WebServerPrint webPrint(server);
+        streamStatusJson(webPrint);
+        server.sendContent(""); // End chunked response
     });
     
     // Add missing /api/status endpoint for frontend compatibility
@@ -305,13 +309,12 @@ void coreEndpoints(WebServer& server) {
         trackWebActivity(); // Track web activity for screensaver
         if (debugSerial) Serial.println(F("[DEBUG] /api/status requested"));
         
-        // Use String buffer for status JSON (status is frequently accessed, needs fast response)
-        String statusBuffer;
-        statusBuffer.reserve(800); // MEMORY OPTIMIZATION: Reduced from 1200 to 800 bytes
-        StringPrint stringPrint(statusBuffer);
-        streamStatusJson(stringPrint);
-        
-        server.send(200, "application/json", statusBuffer);
+        // Stream directly to client - no buffer needed, unlimited size, better memory usage
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        WebServerPrint webPrint(server);
+        streamStatusJson(webPrint);
+        server.sendContent(""); // End chunked response
     });
     
     server.on("/api/firmware_info", HTTP_GET, [&](){
@@ -325,48 +328,62 @@ void coreEndpoints(WebServer& server) {
         server.sendContent(""); // End chunked response
     });
     
-    // Debug endpoint to check filesystem
+    // Debug endpoint to check filesystem - OPTIMIZED FOR STREAMING
     server.on("/debug/fs", HTTP_GET, [&](){
-        String response = "=== DEBUG TEST ===\n";
-        response += "This is a test line\n\n";
+        // Use streaming to avoid large string buffer
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "text/plain", "");
         
-        response += "FATFS Debug:\n\n";
+        server.sendContent("=== DEBUG TEST ===\n");
+        server.sendContent("This is a test line\n\n");
+        
+        server.sendContent("FATFS Debug:\n\n");
         
         // Check if FATFS is mounted
         if (!FFat.begin()) {
-            response += "ERROR: FATFS not mounted!\n";
+            server.sendContent("ERROR: FATFS not mounted!\n");
         } else {
-            response += "✓ FFat mounted successfully\n";
-            response += "Total: " + String(FFat.totalBytes()) + " bytes\n";
-            response += "Used: " + String(FFat.usedBytes()) + " bytes\n";
-            response += "Free: " + String(FFat.totalBytes() - FFat.usedBytes()) + " bytes\n\n";
+            server.sendContent("✓ FFat mounted successfully\n");
+            server.sendContent("Total: ");
+            server.sendContent(String(FFat.totalBytes()));
+            server.sendContent(" bytes\n");
+            server.sendContent("Used: ");
+            server.sendContent(String(FFat.usedBytes()));
+            server.sendContent(" bytes\n");
+            server.sendContent("Free: ");
+            server.sendContent(String(FFat.totalBytes() - FFat.usedBytes()));
+            server.sendContent(" bytes\n\n");
             
             // List files in root
-            response += "Root directory contents:\n";
+            server.sendContent("Root directory contents:\n");
             File root = FFat.open("/");
             if (root) {
                 File file = root.openNextFile();
                 while (file) {
-                    response += (file.isDirectory() ? "[DIR] " : "[FILE] ");
-                    response += String(file.name());
+                    server.sendContent(file.isDirectory() ? "[DIR] " : "[FILE] ");
+                    server.sendContent(String(file.name()));
                     if (!file.isDirectory()) {
-                        response += " (" + String(file.size()) + " bytes)";
+                        server.sendContent(" (");
+                        server.sendContent(String(file.size()));
+                        server.sendContent(" bytes)");
                     }
-                    response += "\n";
+                    server.sendContent("\n");
                     file = root.openNextFile();
                 }
                 root.close();
             } else {
-                response += "ERROR: Cannot open root directory\n";
+                server.sendContent("ERROR: Cannot open root directory\n");
             }
             
             // Test specific files
-            response += "\nFile existence tests:\n";
-            response += "/index.html: " + String(FFat.exists("/index.html") ? "EXISTS" : "NOT FOUND") + "\n";
-            response += "index.html: " + String(FFat.exists("index.html") ? "EXISTS" : "NOT FOUND") + "\n";
+            server.sendContent("\nFile existence tests:\n");
+            server.sendContent("/index.html: ");
+            server.sendContent(FFat.exists("/index.html") ? "EXISTS" : "NOT FOUND");
+            server.sendContent("\n");
+            server.sendContent("index.html: ");
+            server.sendContent(FFat.exists("index.html") ? "EXISTS" : "NOT FOUND");
+            server.sendContent("\n");
         }
-        
-        server.send(200, "text/plain", response);
     });
     
     // Simple file upload interface
@@ -811,27 +828,16 @@ void stateMachineEndpoints(WebServer& server) {
         resetFermentationTracking(getAveragedTemperature());
         invalidateStatusCache();
         saveResumeState();
-        
+
         if (debugSerial) Serial.printf("[MANUAL ADVANCE] Advanced to stage %d\n", (int)programState.customStageIdx);
-        
-        // Create a string stream for the JSON output  
-        String jsonOutput = "";
-        class StringPrint : public Print {
-            String* str;
-        public:
-            StringPrint(String* s) : str(s) {}
-            size_t write(uint8_t c) override { *str += (char)c; return 1; }
-            size_t write(const uint8_t *buffer, size_t size) override {
-                for (size_t i = 0; i < size; i++) *str += (char)buffer[i];
-                return size;
-            }
-        };
-        StringPrint stringPrint(&jsonOutput);
-        streamStatusJson(stringPrint);
-        server.send(200, "application/json", jsonOutput);
-    });
-    
-    // Override stage duration endpoint
+
+        // Stream status response directly - no buffer needed
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        WebServerPrint webPrint(server);
+        streamStatusJson(webPrint);
+        server.sendContent(""); // End chunked response
+    });    // Override stage duration endpoint
     server.on("/api/override_stage_duration", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[ACTION] /api/override_stage_duration called"));
         
@@ -881,12 +887,13 @@ void stateMachineEndpoints(WebServer& server) {
         
         if (debugSerial) Serial.printf("[STAGE DURATION OVERRIDE] Stage %d duration set to %d minutes\n", 
                                      (int)programState.customStageIdx, newDurationMinutes);
-        
-        // Create a string stream for the JSON output  
-        String jsonOutput = "";
-        StringPrint stringPrint(jsonOutput);
-        streamStatusJson(stringPrint);
-        server.send(200, "application/json", jsonOutput);
+
+        // Stream status response directly - no buffer needed
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        WebServerPrint webPrint(server);
+        streamStatusJson(webPrint);
+        server.sendContent(""); // End chunked response
     });
 }
 
@@ -961,7 +968,10 @@ void pidControlEndpoints(WebServer& server) {
                 if (doc.containsKey("kp")) pid.Kp = doc["kp"];
                 if (doc.containsKey("ki")) pid.Ki = doc["ki"];
                 if (doc.containsKey("kd")) pid.Kd = doc["kd"];
-                if (doc.containsKey("setpoint")) pid.Setpoint = doc["setpoint"];
+                if (doc.containsKey("setpoint")) {
+                    pid.Setpoint = doc["setpoint"];
+                    checkAndSwitchPIDProfile(); // Auto-switch profile based on new setpoint
+                }
                 
                 if (pid.controller) {
                     pid.controller->SetTunings(pid.Kp, pid.Ki, pid.Kd);
@@ -1161,6 +1171,24 @@ void homeAssistantEndpoint(WebServer& server) {
     server.on("/ha", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /ha requested"));
         
+        // OPTIMIZATION: Cache program data to avoid multiple file system calls
+        static String cachedProgramName = "";
+        static int lastCachedProgramId = -1;
+        static Program* cachedProgram = nullptr;
+        
+        if (lastCachedProgramId != programState.activeProgramId) {
+            // Only load program from file system when program ID changes
+            cachedProgram = getActiveProgramMutable();
+            if (cachedProgram) {
+                cachedProgramName = cachedProgram->name;
+                lastCachedProgramId = programState.activeProgramId;
+            } else {
+                cachedProgramName = "";
+                lastCachedProgramId = -1;
+                cachedProgram = nullptr;
+            }
+        }
+        
         // Use efficient streaming instead of string concatenation
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
@@ -1193,66 +1221,61 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent(programState.manualMode ? "true" : "false");
         server.sendContent(",");
         
-        // Program and stage info
-        if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
-            Program* p = getActiveProgramMutable();
-            if (p) {
-                server.sendContent("\"program\":\"");
-                server.sendContent(p->name.c_str());
+        // Program and stage info - USE CACHED PROGRAM
+        if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount() && cachedProgram) {
+            server.sendContent("\"program\":\"");
+            server.sendContent(cachedProgramName.c_str());
+            server.sendContent("\",");
+            
+            if (programState.isRunning && programState.customStageIdx < cachedProgram->customStages.size()) {
+                server.sendContent("\"stage\":\"");
+                server.sendContent(cachedProgram->customStages[programState.customStageIdx].label.c_str());
                 server.sendContent("\",");
                 
-                if (programState.isRunning && programState.customStageIdx < p->customStages.size()) {
-                    server.sendContent("\"stage\":\"");
-                    server.sendContent(p->customStages[programState.customStageIdx].label.c_str());
-                    server.sendContent("\",");
-                    
-                    // Calculate current stage remaining time only
-                    unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-                    unsigned long stageTimeMs = getAdjustedStageTimeMs(p->customStages[programState.customStageIdx].min * 60 * 1000, 
-                                                                       p->customStages[programState.customStageIdx].isFermentation);
-                    unsigned long stageTimeLeft = (stageTimeMs / 1000) - elapsed;
-                    if (stageTimeLeft < 0) stageTimeLeft = 0;
-                    
-                    // Calculate total program remaining time (stage + all remaining stages)
-                    unsigned long totalRemainingTime = stageTimeLeft;
-                    for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
-                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
-                                                                                  p->customStages[i].isFermentation);
-                        totalRemainingTime += adjustedDurationMs / 1000;
-                    }
-                    
-                    server.sendContent("\"stage_time_left\":");
-                    sprintf(buffer, "%lu", stageTimeLeft / 60); // Current stage time only (in minutes)
-                    server.sendContent(buffer);
-                    server.sendContent(",\"program_time_left\":");
-                    sprintf(buffer, "%lu", totalRemainingTime / 60); // Total program time (in minutes)
-                    server.sendContent(buffer);
-                    server.sendContent(",");
-                } else if (!programState.isRunning) {
-                    // Not running - calculate total program time if started now
-                    server.sendContent("\"stage\":\"Idle\",");
-                    
-                    unsigned long totalProgramTime = 0;
-                    for (size_t i = 0; i < p->customStages.size(); ++i) {
-                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
-                                                                                  p->customStages[i].isFermentation);
-                        totalProgramTime += adjustedDurationMs / 1000;
-                    }
-                    server.sendContent("\"stage_time_left\":");
-                    sprintf(buffer, "%lu", totalProgramTime / 60); // Convert to minutes for Home Assistant
-                    server.sendContent(buffer);
-                    server.sendContent(",");
-                } else {
-                    server.sendContent("\"stage\":\"Idle\",\"stage_time_left\":0,");
+                // Calculate current stage remaining time only
+                unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+                unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation);
+                unsigned long stageTimeLeft = (stageTimeMs / 1000) - elapsed;
+                if (stageTimeLeft < 0) stageTimeLeft = 0;
+                
+                // Calculate total program remaining time (stage + all remaining stages)
+                unsigned long totalRemainingTime = stageTimeLeft;
+                for (size_t i = programState.customStageIdx + 1; i < cachedProgram->customStages.size(); ++i) {
+                    unsigned long adjustedDurationMs = getAdjustedStageTimeMs(cachedProgram->customStages[i].min * 60 * 1000, 
+                                                                              cachedProgram->customStages[i].isFermentation);
+                    totalRemainingTime += adjustedDurationMs / 1000;
                 }
+                
+                server.sendContent("\"stage_time_left\":");
+                sprintf(buffer, "%lu", stageTimeLeft / 60); // Current stage time only (in minutes)
+                server.sendContent(buffer);
+                server.sendContent(",\"program_time_left\":");
+                sprintf(buffer, "%lu", totalRemainingTime / 60); // Total program time (in minutes)
+                server.sendContent(buffer);
+                server.sendContent(",");
+            } else if (!programState.isRunning) {
+                // Not running - calculate total program time if started now
+                server.sendContent("\"stage\":\"Idle\",");
+                
+                unsigned long totalProgramTime = 0;
+                for (size_t i = 0; i < cachedProgram->customStages.size(); ++i) {
+                    unsigned long adjustedDurationMs = getAdjustedStageTimeMs(cachedProgram->customStages[i].min * 60 * 1000, 
+                                                                              cachedProgram->customStages[i].isFermentation);
+                    totalProgramTime += adjustedDurationMs / 1000;
+                }
+                server.sendContent("\"stage_time_left\":");
+                sprintf(buffer, "%lu", totalProgramTime / 60); // Convert to minutes for Home Assistant
+                server.sendContent(buffer);
+                server.sendContent(",");
             } else {
-                server.sendContent("\"program\":\"\",\"stage\":\"Idle\",\"stage_time_left\":0,");
+                server.sendContent("\"stage\":\"Idle\",\"stage_time_left\":0,");
             }
         } else {
             server.sendContent("\"program\":\"\",\"stage\":\"Idle\",\"stage_time_left\":0,");
         }
         
-        // Timing information (Unix timestamps as expected)
+        // Timing information (Unix timestamps as expected) - USE CACHED PROGRAM
         time_t now = time(nullptr);
         time_t stageReadyAt = 0;
         time_t programReadyAt = 0;
@@ -1260,12 +1283,11 @@ void homeAssistantEndpoint(WebServer& server) {
         // Check if NTP time is valid (reasonable epoch time)
         bool ntpValid = (now > 1640995200); // Jan 1, 2022 - if before this, NTP failed
         
-        if (programState.isRunning && programState.activeProgramId >= 0) {
-            Program* p = getActiveProgramMutable();
-            if (p && programState.customStageIdx < p->customStages.size()) {
+        if (programState.isRunning && programState.activeProgramId >= 0 && cachedProgram) {
+            if (cachedProgram && programState.customStageIdx < cachedProgram->customStages.size()) {
                 unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-                unsigned long stageTimeMs = getAdjustedStageTimeMs(p->customStages[programState.customStageIdx].min * 60 * 1000, 
-                                                                   p->customStages[programState.customStageIdx].isFermentation);
+                unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation);
                 int timeLeftSec = (stageTimeMs / 1000) - elapsed;
                 if (timeLeftSec < 0) timeLeftSec = 0;
                 
@@ -1275,9 +1297,9 @@ void homeAssistantEndpoint(WebServer& server) {
                     
                     // Calculate total program time remaining using fermentation adjustments
                     programReadyAt = now + timeLeftSec;
-                    for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); ++i) {
-                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(p->customStages[i].min * 60 * 1000, 
-                                                                                  p->customStages[i].isFermentation);
+                    for (size_t i = programState.customStageIdx + 1; i < cachedProgram->customStages.size(); ++i) {
+                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(cachedProgram->customStages[i].min * 60 * 1000, 
+                                                                                  cachedProgram->customStages[i].isFermentation);
                         programReadyAt += adjustedDurationMs / 1000;
                     }
                 } else {
@@ -1362,7 +1384,7 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent(",\"sample_time_ms\":");
         server.sendContent(String(pid.sampleTime));
         server.sendContent(",\"active_profile\":\"");
-        server.sendContent(pid.activeProfile);
+        server.sendContent(getCurrentActiveProfileName());
         server.sendContent("\",\"auto_switching\":");
         server.sendContent(pid.autoSwitching ? "true" : "false");
         server.sendContent("},");
@@ -2171,18 +2193,56 @@ void otaEndpoints(WebServer& server) {
         server.send(200, "application/json", "{\"status\":\"activity_updated\"}");
     });
     
-    // Missing /api/pid_profile endpoint for PID profile management
+    // PID profile endpoint - returns actual profiles from profile system
     server.on("/api/pid_profile", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile GET requested"));
+        
+        // Load profiles if empty
+        if (pid.profiles.empty()) {
+            loadPIDProfiles();
+        }
         
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
         server.sendContent("{\"profiles\":[");
-        server.sendContent("{\"key\":\"default\",\"kp\":" + String(pid.Kp) + ",");
-        server.sendContent("\"ki\":" + String(pid.Ki) + ",");
-        server.sendContent("\"kd\":" + String(pid.Kd) + ",");
-        server.sendContent("\"windowMs\":" + String(pid.sampleTime) + "}");
-        server.sendContent("]}");
+        
+        for (size_t i = 0; i < pid.profiles.size(); i++) {
+            if (i > 0) server.sendContent(",");
+            
+            const PIDProfile& profile = pid.profiles[i];
+            String profileKey = profile.name;
+            profileKey.toLowerCase();
+            profileKey.replace(" ", "_");
+            profileKey.replace("°", "");
+            profileKey.replace("(", "");
+            profileKey.replace(")", "");
+            
+            server.sendContent("{\"key\":\"" + profileKey + "\",");
+            server.sendContent("\"name\":\"" + profile.name + "\",");
+            server.sendContent("\"kp\":" + String(profile.kp, 6) + ",");
+            server.sendContent("\"ki\":" + String(profile.ki, 6) + ",");
+            server.sendContent("\"kd\":" + String(profile.kd, 6) + ",");
+            server.sendContent("\"windowMs\":" + String(profile.windowMs) + ",");
+            server.sendContent("\"minTemp\":" + String(profile.minTemp) + ",");
+            server.sendContent("\"maxTemp\":" + String(profile.maxTemp) + ",");
+            server.sendContent("\"description\":\"" + profile.description + "\"}");
+        }
+        
+        server.sendContent("],\"autoSwitching\":" + String(pid.autoSwitching ? "true" : "false"));
+        server.sendContent(",\"activeProfile\":\"" + getCurrentActiveProfileName() + "\"}");
+    });
+    
+    // Force profile creation endpoint for debugging
+    server.on("/api/pid_profile/create", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile/create GET requested"));
+        
+        // Force creation of default profiles
+        createDefaultPIDProfiles();
+        savePIDProfiles();
+        
+        server.send(200, "application/json", 
+                   "{\"status\":\"ok\",\"message\":\"Profiles created\",\"count\":" + 
+                   String(pid.profiles.size()) + "}");
     });
     
     server.on("/api/pid_profile", HTTP_POST, [&](){
@@ -2209,7 +2269,7 @@ void otaEndpoints(WebServer& server) {
                     pid.controller->SetTunings(kp, ki, kd);
                 }
                 
-                // savePIDProfiles(); // TODO: Implement savePIDProfiles() function
+                savePIDProfiles(); // Save changes to file
                 
                 server.send(200, "application/json", "{\"status\":\"ok\",\"kp\":" + String(kp) + ",\"ki\":" + String(ki) + ",\"kd\":" + String(kd) + "}");
                 if (debugSerial) Serial.printf("[DEBUG] PID parameters updated: Kp=%.3f, Ki=%.3f, Kd=%.3f\n", kp, ki, kd);
@@ -2240,7 +2300,7 @@ void otaEndpoints(WebServer& server) {
                 pid.controller->SetTunings(kp, ki, kd);
             }
             
-            // savePIDProfiles(); // TODO: Implement savePIDProfiles() function
+            savePIDProfiles(); // Save changes to file
             
             server.send(200, "application/json", "{\"status\":\"ok\",\"kp\":" + String(kp) + ",\"ki\":" + String(ki) + ",\"kd\":" + String(kd) + "}");
             if (debugSerial) Serial.printf("[DEBUG] PID parameters updated via GET: Kp=%.3f, Ki=%.3f, Kd=%.3f\n", kp, ki, kd);
@@ -2498,6 +2558,7 @@ void registerWebEndpoints(WebServer& server) {
             }
             // Set PID setpoint for manual temperature control
             pid.Setpoint = setpoint;
+            checkAndSwitchPIDProfile(); // Auto-switch profile based on new setpoint
             invalidateStatusCache();
             server.send(200, "application/json", "{\"status\":\"ok\",\"setpoint\":" + String(setpoint) + "}");
         } else {
@@ -2554,6 +2615,18 @@ void registerWebEndpoints(WebServer& server) {
     });
     
     // Handle static files (catch-all)
+    // Force save PID profiles (for testing/debugging)
+    server.on("/api/force_save_profiles", HTTP_GET, [&](){
+        savePIDProfiles();
+        server.send(200, "application/json", "{\"status\":\"profiles saved\"}");
+    });
+    
+    // Force load PID profiles (for testing/debugging)
+    server.on("/api/force_load_profiles", HTTP_GET, [&](){
+        loadPIDProfiles();
+        server.send(200, "application/json", "{\"status\":\"profiles loaded\"}");
+    });
+    
     server.onNotFound([&](){
         String path = server.uri();
         if (serveStaticFile(server, path)) {

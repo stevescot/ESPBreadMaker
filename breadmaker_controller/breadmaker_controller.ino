@@ -414,6 +414,9 @@ void setup() {
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   
   // --- Initialize PID controller ---
+  // Load PID profiles first
+  loadPIDProfiles();
+  
   if (pid.controller) {
     pid.controller->SetMode(AUTOMATIC);
     pid.controller->SetOutputLimits(0, 1);  // Output range: 0 (0% duty) to 1 (100% duty)
@@ -960,17 +963,17 @@ void loop() {
   static unsigned long lastMainLoopUpdate = 0;
   unsigned long nowMs = millis();
   
-  // Dynamic loop timing: faster during heating, slower when idle
-  unsigned long loopInterval = 50; // Default 50ms
+  // Dynamic loop timing: faster for web responsiveness, moderate when heating
+  unsigned long loopInterval = 20; // Default 20ms for good web responsiveness
   if (programState.isRunning && outputStates.heater) {
-    loopInterval = 25; // 25ms when heater is on for better PID responsiveness  
+    loopInterval = 15; // 15ms when heater is on for excellent PID responsiveness  
   } else if (!programState.isRunning) {
-    loopInterval = 100; // 100ms when idle to save CPU
+    loopInterval = 50; // 50ms when idle (reduced from 100ms)
   }
   
   if (nowMs - lastMainLoopUpdate < loopInterval) {
     yield();
-    delay(5); // Reduced delay for better responsiveness
+    // Removed delay(5) for better web responsiveness
     return;
   }
   lastMainLoopUpdate = nowMs;
@@ -998,11 +1001,11 @@ void loop() {
     checkDelayedResume();
     handleManualMode();
     handleScheduledStart(scheduledStartTriggered);
-    yield(); delay(100); return;  // Increased delay for idle state
+    yield(); return;  // Removed delay(100) for better web responsiveness
   }
   if (getProgramCount() == 0 || programState.activeProgramId >= getProgramCount()) {
     stageJustAdvanced = false;
-    stopBreadmaker(); yield(); delay(100); return;  // Increased delay for error state
+    stopBreadmaker(); yield(); return;  // Removed delay(100) for better web responsiveness
   }
   handleCustomStages(stageJustAdvanced);
   temp = getAveragedTemperature();
@@ -1273,6 +1276,7 @@ void handleCustomStages(bool &stageJustAdvanced) {
   }
   CustomStage &st = p->customStages[programState.customStageIdx];
     pid.Setpoint = st.temp;
+    checkAndSwitchPIDProfile(); // Auto-switch profile when stage changes temperature
     pid.Input = getAveragedTemperature();
     
     // Track fermentation stage transitions to prevent continuous reset calls

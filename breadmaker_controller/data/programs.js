@@ -338,48 +338,103 @@ function renderPrograms(progs) {
         saveBtn.style.opacity = '0.6';
         
         // Add timeout and better error handling
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+        const timeoutId = setTimeout(() => {
+          throw new Error('Save operation timed out after 5 minutes');
+        }, 300000); // 5 minute timeout for sequential uploads
         
-        console.log(`Saving ${progs.length} programs (${sizeKB}KB)...`);
+        console.log(`Saving ${progs.length} programs (${sizeKB}KB) with sequential client-side splitting...`);
         
-        // Use file upload endpoint instead of /api/programs
-        const formData = new FormData();
-        const blob = new Blob([jsonString], { type: 'application/json' });
-        formData.append('file', blob, 'programs.json');
+        // CLIENT-SIDE PROGRAM SPLITTING - SEQUENTIAL UPLOADS WITH PROGRESS
+        let successCount = 0;
+        let totalFiles = 2 + progs.length; // main + index + individual programs
         
-        const response = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-          signal: controller.signal
-        });
+        // Helper function to update progress
+        const updateProgress = (current, total, message) => {
+          saveBtn.textContent = `Uploading ${current}/${total}: ${message}`;
+          console.log(`[${current}/${total}] ${message}`);
+        };
+        
+        // Helper function to upload a single file
+        const uploadFile = async (formData, filename, fileNumber) => {
+          updateProgress(fileNumber, totalFiles, filename);
+          
+          const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Failed to upload ${filename}: ${response.status} ${response.statusText}`);
+          }
+          
+          const responseText = await response.text();
+          if (responseText === 'Upload complete' || responseText.includes('"status":"uploaded"')) {
+            successCount++;
+            console.log(`✅ [${fileNumber}/${totalFiles}] ${filename} uploaded successfully`);
+            return true;
+          } else {
+            throw new Error(`Unexpected response for ${filename}: ${responseText}`);
+          }
+        };
+        
+        // 1. Upload main programs.json first
+        const mainFormData = new FormData();
+        const mainBlob = new Blob([jsonString], { type: 'application/json' });
+        mainFormData.append('file', mainBlob, 'programs.json');
+        await uploadFile(mainFormData, 'programs.json', 1);
+        
+        // 2. Upload individual program files sequentially
+        let fileCounter = 2;
+        for (const program of progs) {
+          if (program && typeof program === 'object' && program.id !== undefined) {
+            const programJson = JSON.stringify(program, null, 2);
+            const programFormData = new FormData();
+            const programBlob = new Blob([programJson], { type: 'application/json' });
+            const filename = `programs/program_${program.id}.json`;
+            programFormData.append('file', programBlob, filename);
+            
+            await uploadFile(programFormData, filename, fileCounter);
+            fileCounter++;
+            
+            // Small delay between uploads to prevent overwhelming the ESP32
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+        
+        // 3. Upload programs_index.json last
+        const metadata = progs.map(p => ({
+          id: p.id,
+          name: p.name,
+          ...(p.notes && { notes: p.notes }),
+          ...(p.icon && { icon: p.icon }),
+          ...(p.fermentBaselineTemp && { fermentBaselineTemp: p.fermentBaselineTemp }),
+          ...(p.fermentQ10 && { fermentQ10: p.fermentQ10 })
+        }));
+        
+        const indexJson = JSON.stringify(metadata, null, 2);
+        const indexFormData = new FormData();
+        const indexBlob = new Blob([indexJson], { type: 'application/json' });
+        indexFormData.append('file', indexBlob, 'programs_index.json');
+        await uploadFile(indexFormData, 'programs_index.json', totalFiles);
         
         clearTimeout(timeoutId);
         
-        if (!response.ok) {
-          throw new Error(`Server error: ${response.status} ${response.statusText}`);
-        }
+        console.log(`✅ Save successful: ${successCount} files uploaded (${progs.length} programs, ${sizeKB}KB)`);
+        alert(`Programs saved successfully! (${successCount} files uploaded: main + ${progs.length} individual programs + index)`);
         
-        const responseText = await response.text();
-        
-        if (responseText === 'Upload complete') {
-          console.log(`✅ Save successful: ${progs.length} programs (${sizeKB}KB)`);
-          alert(`Programs saved successfully! (${progs.length} programs, ${sizeKB}KB)`);
-          // Refresh shared cache after save
-          window.cachedPrograms = JSON.parse(JSON.stringify(progs));
-          // Reload programs from server to ensure consistency
-          setTimeout(() => {
-            window.cachedPrograms = null; // Clear cache
-            loadProgramsEditor(true); // Force refresh
-          }, 500);
-        } else {
-          throw new Error('Unexpected server response: ' + responseText);
-        }
+        // Refresh shared cache after save
+        window.cachedPrograms = JSON.parse(JSON.stringify(progs));
+        // Reload programs from server to ensure consistency
+        setTimeout(() => {
+          window.cachedPrograms = null; // Clear cache
+          loadProgramsEditor(true); // Force refresh
+        }, 500);
         
       } catch (error) {
         console.error('❌ Save error:', error);
+        clearTimeout(timeoutId);
         
-        if (error.name === 'AbortError') {
+        if (error.message.includes('timed out')) {
           alert('Save operation timed out. The server may be overloaded. Please try again.');
         } else if (error.message.includes('Failed to fetch')) {
           alert('Network error: Unable to connect to the server. Check your connection and try again.');

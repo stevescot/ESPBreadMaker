@@ -69,24 +69,25 @@ async function updateStatus() {
     chartData.datasets[1].data.push(rawTemperature);
     if (chartData.datasets[1].data.length > 300) chartData.datasets[1].data.shift();
     // Setpoint
-    chartData.datasets[2].data.push(data.setpoint);
+    chartData.datasets[2].data.push(data.setpoint || 0);
     if (chartData.datasets[2].data.length > 300) chartData.datasets[2].data.shift();
     // PID output (map from pid_output field)
     chartData.datasets[3].data.push((data.pid_output || 0) * 100);
     if (chartData.datasets[3].data.length > 300) chartData.datasets[3].data.shift();
 
     // --- PID Component Chart ---
-    // Since individual P, I, D terms aren't available in status API, 
-    // we'll skip this chart update or use dummy values
+    // Use actual P, I, D terms from status API
     if (window.pidComponentChart && window.pidComponentData) {
       window.pidComponentData.labels.push(elapsed);
       if (window.pidComponentData.labels.length > 300) window.pidComponentData.labels.shift();
-      // Use dummy values since individual terms aren't available
-      window.pidComponentData.datasets[0].data.push(0);
+      // P term (Proportional)
+      window.pidComponentData.datasets[0].data.push(data.pid_p || 0);
       if (window.pidComponentData.datasets[0].data.length > 300) window.pidComponentData.datasets[0].data.shift();
-      window.pidComponentData.datasets[1].data.push(0);
+      // I term (Integral)
+      window.pidComponentData.datasets[1].data.push(data.pid_i || 0);
       if (window.pidComponentData.datasets[1].data.length > 300) window.pidComponentData.datasets[1].data.shift();
-      window.pidComponentData.datasets[2].data.push(0);
+      // D term (Derivative)
+      window.pidComponentData.datasets[2].data.push(data.pid_d || 0);
       if (window.pidComponentData.datasets[2].data.length > 300) window.pidComponentData.datasets[2].data.shift();
       window.pidComponentChart.update();
     }
@@ -797,6 +798,9 @@ document.addEventListener('DOMContentLoaded', function() {
   initPIDComponentChart();
   loadCurrentParams();
   
+  // Load PID profiles from API instead of hardcoded data
+  loadPIDProfilesFromAPI();
+  
   // Add auto-tune method change handler
   document.getElementById('autoTuneMethod').addEventListener('change', function() {
     updateAutoTuneMethodDescription();
@@ -859,79 +863,102 @@ function forceStatusRefresh() {
   }, 1500);
 }
 
-// Temperature-dependent PID parameter suggestions based on user tuning experience
-const temperaturePIDSuggestions = [
-  { 
-    key: "room",
-    min: 0, max: 35, 
-    name: "Room Temperature (0-35°C)",
-    kp: 0.5, ki: 0.00001, kd: 2.0,
-    windowMs: 60000, // Longer window for gentle control
-    description: "Very gentle control - minimal heat to prevent long thermal mass rises. Use longer windows (60s) to reduce heat frequency."
-  },
-  { 
-    key: "lowFerm",
-    min: 35, max: 50, 
-    name: "Low Fermentation (35-50°C)",
-    kp: 0.3, ki: 0.00002, kd: 3.0,
-    windowMs: 45000, // Still long window
-    description: "Gentle warming prevents thermal mass overshoot. Even small heat pulses cause long temperature rises at these levels."
-  },
-  { 
-    key: "medFerm",
-    min: 50, max: 70, 
-    name: "Medium Fermentation (50-70°C)", 
-    kp: 0.2, ki: 0.00005, kd: 5.0,
-    windowMs: 30000, // Moderate window
-    description: "Balanced control for typical fermentation temps. Higher derivative starts to help with thermal prediction."
-  },
-  { 
-    key: "highFerm",
-    min: 70, max: 100, 
-    name: "High Fermentation (70-100°C)",
-    kp: 0.15, ki: 0.00008, kd: 6.0,
-    windowMs: 25000,
-    description: "More responsive for higher fermentation temps. Thermal mass less problematic, faster response possible."
-  },
-  { 
-    key: "baking",
-    min: 100, max: 150, 
-    name: "Baking Heat (100-150°C)",
-    kp: 0.11, ki: 0.00005, kd: 10.0, // Your current settings
-    windowMs: 15000, // Your current setting
-    description: "Your current range - balanced for baking. High derivative (10) provides excellent control."
-  },
-  { 
-    key: "highBaking",
-    min: 150, max: 200, 
-    name: "High Baking (150-200°C)",
-    kp: 0.08, ki: 0.00003, kd: 10.0,
-    windowMs: 15000,
-    description: "Higher derivative to prevent overshoot. Very responsive control needed at high temperatures."
-  },
-  { 
-    key: "extreme",
-    min: 200, max: 250, 
-    name: "Extreme Heat (200-250°C)",
-    kp: 0.015, ki: 0.00015, kd: 10.0, // Your exact high-temp settings
-    windowMs: 10000,
-    description: "Your exact tuned settings - maximum derivative control. Perfect for extreme temperatures where overshoot must be prevented."
-  }
-];
+// Temperature-dependent PID parameter suggestions - loaded from API
+let temperaturePIDSuggestions = [];
 
 // Range configuration tracking
-let rangeConfigurationStatus = {
-  room: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
-  lowFerm: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
-  medFerm: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
-  highFerm: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
-  baking: { configured: true, kp: 0.11, ki: 0.00005, kd: 10.0, windowMs: 15000 }, // Default configured
-  highBaking: { configured: false, kp: null, ki: null, kd: null, windowMs: null },
-  extreme: { configured: false, kp: null, ki: null, kd: null, windowMs: null }
-};
+let rangeConfigurationStatus = {};
 
-let currentRangeIndex = 4; // Start with baking range
+let currentRangeIndex = 0;
 let isRangeConfigurationMode = false;
+
+// Load PID profiles from the API
+async function loadPIDProfilesFromAPI() {
+  try {
+    console.log('Loading PID profiles from API...');
+    const response = await fetch('/api/pid_profile');
+    if (!response.ok) throw new Error('Failed to fetch PID profiles');
+    const data = await response.json();
+    
+    console.log('API response:', data);
+    
+    // Clear existing data
+    temperaturePIDSuggestions = [];
+    rangeConfigurationStatus = {};
+    
+    // Convert API profiles to our format
+    if (data.profiles && data.profiles.length > 0) {
+      data.profiles.forEach(profile => {
+        const suggestion = {
+          key: profile.key,
+          min: profile.minTemp,
+          max: profile.maxTemp,
+          name: profile.name,
+          kp: profile.kp,
+          ki: profile.ki,
+          kd: profile.kd,
+          windowMs: profile.windowMs,
+          description: profile.description || "Optimized PID settings for this temperature range"
+        };
+        temperaturePIDSuggestions.push(suggestion);
+        
+        // Mark as configured since it came from API
+        rangeConfigurationStatus[profile.key] = {
+          configured: true,
+          kp: profile.kp,
+          ki: profile.ki,
+          kd: profile.kd,
+          windowMs: profile.windowMs
+        };
+      });
+      
+      console.log(`Loaded ${temperaturePIDSuggestions.length} PID profiles from API:`, temperaturePIDSuggestions);
+    } else {
+      console.warn('No profiles received from API, using fallback');
+      createFallbackProfiles();
+    }
+    
+    // Update UI after loading
+    updateRangeStatusDisplay();
+    if (temperaturePIDSuggestions.length > 0) {
+      currentRangeIndex = 0;
+      detectRangeFromSetpoint();
+    }
+    
+  } catch (error) {
+    console.error('Failed to load PID profiles from API:', error);
+    createFallbackProfiles();
+  }
+}
+
+// Create fallback profiles if API fails
+function createFallbackProfiles() {
+  temperaturePIDSuggestions = [
+    { 
+      key: "0-40c_fermentation",
+      min: 0, max: 40, 
+      name: "0-40°C (Fermentation)",
+      kp: 0.13, ki: 0.0004, kd: 11.0,
+      windowMs: 5000,
+      description: "Optimized for ambient to fermentation temperatures. Lower derivative for thermal mass."
+    },
+    { 
+      key: "40c+_baking",
+      min: 40, max: 250, 
+      name: "40°C+ (Baking)",
+      kp: 0.09, ki: 0.0003, kd: 1.6,
+      windowMs: 12000,
+      description: "Optimized for baking temperatures. Higher derivative for responsiveness."
+    }
+  ];
+  
+  rangeConfigurationStatus = {
+    "0-40c_fermentation": { configured: true, kp: 0.13, ki: 0.0004, kd: 11.0, windowMs: 5000 },
+    "40c+_baking": { configured: true, kp: 0.09, ki: 0.0003, kd: 1.6, windowMs: 12000 }
+  };
+  
+  console.log('Using fallback PID profiles');
+}
 
 // Detect temperature range from setpoint and highlight it
 function detectRangeFromSetpoint() {

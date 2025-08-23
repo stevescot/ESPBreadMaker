@@ -69,13 +69,13 @@
     },
     {
       "label": "Knockdown",
-      "min": 5,
+      "min": 1,
       "temp": 0,
       "mixPattern": [
         {
           "mixSec": 2,
           "waitSec": 20,
-          "durationSec": 300
+          "durationSec": 60
         }
       ],
       "instructions": "Degas dough gently, then rest."

@@ -587,9 +587,9 @@ function updateStatusInternal(s) {
 
   // Update manual temperature input field
   const manualTempInput = document.getElementById('manualTempInput');
-  if (manualTempInput && s && s.manualMode && typeof s.setTemp === 'number' && s.setTemp > 0) {
-    if (!manualTempInput.value || parseFloat(manualTempInput.value) !== s.setTemp) {
-      manualTempInput.value = s.setTemp.toFixed(0);
+  if (manualTempInput && s && s.manualMode && typeof s.setpoint === 'number' && s.setpoint > 0) {
+    if (!manualTempInput.value || parseFloat(manualTempInput.value) !== s.setpoint) {
+      manualTempInput.value = s.setpoint.toFixed(0);
     }
   }
 
@@ -636,8 +636,8 @@ function updateStatusInternal(s) {
   if (document.getElementById('temp')) document.getElementById('temp').innerHTML = (typeof s.temp === 'number' ? s.temp.toFixed(1) : '--') + '&deg;C';
   if (document.getElementById('setTemp')) {
     let setTempText = '';
-    if (typeof s.setTemp === 'number' && s.setTemp > 0) {
-      setTempText = 'Set: ' + s.setTemp.toFixed(1) + '&deg;C';
+    if (typeof s.setpoint === 'number' && s.setpoint > 0) {
+      setTempText = 'Set: ' + s.setpoint.toFixed(1) + '&deg;C';
       if (s.manualMode) {
         setTempText += ' (Manual)';
       }
@@ -655,8 +655,8 @@ function updateStatusInternal(s) {
 
   // ---- Track temperature history for chart ----
   const now = Date.now();
-  if (typeof s.temp === 'number' && typeof s.setTemp === 'number') {
-    tempHistory.push({ time: now, temp: s.temp, setTemp: s.setTemp });
+  if (typeof s.temp === 'number' && typeof s.setpoint === 'number') {
+    tempHistory.push({ time: now, temp: s.temp, setTemp: s.setpoint });
     // Keep only last 5 minutes
     const cutoff = now - 5 * 60 * 1000;
     tempHistory = tempHistory.filter(pt => pt.time >= cutoff);

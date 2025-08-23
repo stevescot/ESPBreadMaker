@@ -1,76 +1,26 @@
 {
   "pidProfiles": [
     {
-      "name": "Room Temperature",
+      "name": "Low Temperature Range",
       "minTemp": 0,
-      "maxTemp": 35,
+      "maxTemp": 40,
       "kp": 0.11,
       "ki": 0.00005,
-      "kd": 10,
+      "kd": 7.0,
       "windowMs": 15000,
-      "description": "Baseline tested settings - consistent across all ranges"
+      "description": "Optimized for ambient to fermentation temperatures (0-40°C). Lower derivative for thermal mass."
     },
     {
-      "name": "Low Fermentation", 
-      "minTemp": 35,
-      "maxTemp": 50,
-      "kp": 0.11,
-      "ki": 0.00005,
-      "kd": 10,
-      "windowMs": 15000,
-      "description": "Baseline tested settings - consistent across all ranges"
-    },
-    {
-      "name": "Medium Fermentation",
-      "minTemp": 50,
-      "maxTemp": 70,
-      "kp": 0.11,
-      "ki": 0.00005,
-      "kd": 10,
-      "windowMs": 15000,
-      "description": "Baseline tested settings - consistent across all ranges"
-    },
-    {
-      "name": "High Fermentation",
-      "minTemp": 70,
-      "maxTemp": 100,
-      "kp": 0.11,
-      "ki": 0.00005,
-      "kd": 10,
-      "windowMs": 15000,
-      "description": "Baseline tested settings - consistent across all ranges"
-    },
-    {
-      "name": "Baking Heat",
-      "minTemp": 100,
-      "maxTemp": 150,
-      "kp": 0.11,
-      "ki": 0.00005,
-      "kd": 10,
-      "windowMs": 15000,
-      "description": "Baseline tested settings - consistent across all ranges"
-    },
-    {
-      "name": "High Baking",
-      "minTemp": 150,
-      "maxTemp": 200,
-      "kp": 0.11,
-      "ki": 0.00005,
-      "kd": 10,
-      "windowMs": 15000,
-      "description": "Baseline tested settings - consistent across all ranges"
-    },
-    {
-      "name": "Extreme Heat",
-      "minTemp": 200,
+      "name": "High Temperature Range",
+      "minTemp": 40,
       "maxTemp": 250,
       "kp": 0.11,
       "ki": 0.00005,
-      "kd": 10,
-      "windowMs": 15000,
-      "description": "Baseline tested settings - consistent across all ranges"
+      "kd": 10.0,
+      "windowMs": 10000,
+      "description": "Optimized for fermentation to baking temperatures (40-250°C). Higher derivative for responsiveness."
     }
   ],
-  "activeProfile": "Baking Heat",
+  "activeProfile": "Low Temperature Range",
   "autoSwitching": true
 }
