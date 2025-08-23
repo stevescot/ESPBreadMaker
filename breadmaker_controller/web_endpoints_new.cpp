@@ -1162,7 +1162,29 @@ void pidControlEndpoints(WebServer& server) {
 // Placeholder implementations for remaining endpoints
 void pidProfileEndpoints(WebServer& server) {
     server.on("/api/pid_profiles", HTTP_GET, [&](){
-        server.send(200, "application/json", "{\"profiles\":[]}");
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profiles GET requested"));
+        
+        // Create JSON response with actual PID profiles
+        String response = "{\"profiles\":[";
+        for (size_t i = 0; i < pid.profiles.size(); i++) {
+            if (i > 0) response += ",";
+            const PIDProfile& profile = pid.profiles[i];
+            response += "{";
+            response += "\"name\":\"" + profile.name + "\",";
+            response += "\"minTemp\":" + String(profile.minTemp) + ",";
+            response += "\"maxTemp\":" + String(profile.maxTemp) + ",";
+            response += "\"kp\":" + String(profile.kp, 6) + ",";
+            response += "\"ki\":" + String(profile.ki, 6) + ",";
+            response += "\"kd\":" + String(profile.kd, 6) + ",";
+            response += "\"windowMs\":" + String(profile.windowMs) + ",";
+            response += "\"description\":\"" + profile.description + "\"";
+            response += "}";
+        }
+        response += "],";
+        response += "\"autoSwitching\":" + String(pid.autoSwitching ? "true" : "false");
+        response += "}";
+        
+        server.send(200, "application/json", response);
     });
 }
 
@@ -1175,15 +1197,6 @@ void homeAssistantEndpoint(WebServer& server) {
         static String cachedProgramName = "";
         static int lastCachedProgramId = -1;
         static Program* cachedProgram = nullptr;
-        
-        // CYCLING OPTIMIZATION: Rotate through different data subsets every 30s
-        static unsigned long lastResponseSetChange = 0;
-        static int responseSet = 0;
-        unsigned long now = millis();
-        if (now - lastResponseSetChange >= 30000) {  // 30 seconds
-            responseSet = (responseSet + 1) % 4;  // 4 different response sets
-            lastResponseSetChange = now;
-        }
         
         if (lastCachedProgramId != programState.activeProgramId) {
             // Only load program from file system when program ID changes
@@ -1230,10 +1243,7 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent(programState.manualMode ? "true" : "false");
         server.sendContent(",");
         
-        // CYCLING SYSTEM: Different data sets on each request
-        switch(responseSet) {
-            case 0: { // SET 0: Program & Stage Info
-                // Program and stage info - USE CACHED PROGRAM
+        // Program and stage info - USE CACHED PROGRAM
         if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount() && cachedProgram) {
             server.sendContent("\"program\":\"");
             server.sendContent(cachedProgramName.c_str());
@@ -1286,10 +1296,7 @@ void homeAssistantEndpoint(WebServer& server) {
         } else {
             server.sendContent("\"program\":\"\",\"stage\":\"Idle\",\"stage_time_left\":0,");
         }
-        }
-        break;
-                
-            case 1: { // SET 1: Timing & Timestamps
+        
         // Timing information (Unix timestamps as expected) - USE CACHED PROGRAM
         time_t now = time(nullptr);
         time_t stageReadyAt = 0;
@@ -1332,10 +1339,7 @@ void homeAssistantEndpoint(WebServer& server) {
         sprintf(buffer, "%lu", (unsigned long)programReadyAt);
         server.sendContent(buffer);
         server.sendContent(",");
-        }
-        break;
-                
-            case 2: { // SET 2: Health & Performance
+        
         // Health section (comprehensive system information as expected by template)
         server.sendContent("\"health\":{");
         
@@ -1491,32 +1495,8 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent("}");
         
         server.sendContent("}"); // Close health section
-        }
-        break;
-                
-            case 3: { // SET 3: Network Info & Status
-        server.sendContent("\"network\":{\"connected\":");
-        server.sendContent(WiFi.status() == WL_CONNECTED ? "true" : "false");
-        server.sendContent(",\"ssid\":\"");
-        server.sendContent(wifiCache.getSSID());
-        server.sendContent("\",\"rssi\":");
-        server.sendContent(String(wifiCache.getRSSI()));
-        server.sendContent(",\"ip\":\"");
-        server.sendContent(wifiCache.getIPString());
-        server.sendContent("\",\"reconnect_count\":");
-        server.sendContent(String(getWifiReconnectCount()));
-        server.sendContent("}");
-        }
-        break;
-        }
-        
         server.sendContent("}"); // Close main object
         server.sendContent(""); // End chunked response
-        
-        if (debugSerial) {
-            Serial.printf("[DEBUG] HA endpoint served response set %d in %lums\n", 
-                         responseSet, millis() - now);
-        }
     });
 }
 
@@ -2235,56 +2215,18 @@ void otaEndpoints(WebServer& server) {
         server.send(200, "application/json", "{\"status\":\"activity_updated\"}");
     });
     
-    // PID profile endpoint - returns actual profiles from profile system
+    // Missing /api/pid_profile endpoint for PID profile management
     server.on("/api/pid_profile", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile GET requested"));
-        
-        // Load profiles if empty
-        if (pid.profiles.empty()) {
-            loadPIDProfiles();
-        }
         
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
         server.sendContent("{\"profiles\":[");
-        
-        for (size_t i = 0; i < pid.profiles.size(); i++) {
-            if (i > 0) server.sendContent(",");
-            
-            const PIDProfile& profile = pid.profiles[i];
-            String profileKey = profile.name;
-            profileKey.toLowerCase();
-            profileKey.replace(" ", "_");
-            profileKey.replace("°", "");
-            profileKey.replace("(", "");
-            profileKey.replace(")", "");
-            
-            server.sendContent("{\"key\":\"" + profileKey + "\",");
-            server.sendContent("\"name\":\"" + profile.name + "\",");
-            server.sendContent("\"kp\":" + String(profile.kp, 6) + ",");
-            server.sendContent("\"ki\":" + String(profile.ki, 6) + ",");
-            server.sendContent("\"kd\":" + String(profile.kd, 6) + ",");
-            server.sendContent("\"windowMs\":" + String(profile.windowMs) + ",");
-            server.sendContent("\"minTemp\":" + String(profile.minTemp) + ",");
-            server.sendContent("\"maxTemp\":" + String(profile.maxTemp) + ",");
-            server.sendContent("\"description\":\"" + profile.description + "\"}");
-        }
-        
-        server.sendContent("],\"autoSwitching\":" + String(pid.autoSwitching ? "true" : "false"));
-        server.sendContent(",\"activeProfile\":\"" + getCurrentActiveProfileName() + "\"}");
-    });
-    
-    // Force profile creation endpoint for debugging
-    server.on("/api/pid_profile/create", HTTP_GET, [&](){
-        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile/create GET requested"));
-        
-        // Force creation of default profiles
-        createDefaultPIDProfiles();
-        savePIDProfiles();
-        
-        server.send(200, "application/json", 
-                   "{\"status\":\"ok\",\"message\":\"Profiles created\",\"count\":" + 
-                   String(pid.profiles.size()) + "}");
+        server.sendContent("{\"key\":\"default\",\"kp\":" + String(pid.Kp) + ",");
+        server.sendContent("\"ki\":" + String(pid.Ki) + ",");
+        server.sendContent("\"kd\":" + String(pid.Kd) + ",");
+        server.sendContent("\"windowMs\":" + String(pid.sampleTime) + "}");
+        server.sendContent("]}");
     });
     
     server.on("/api/pid_profile", HTTP_POST, [&](){

@@ -22,36 +22,24 @@ function fetchWithTimeout(url, timeout = 10000) {
 // --- Real-time chart update logic ---
 async function updateStatus() {
   try {
-    // Reset error counter on successful start
-    if (window.consecutiveErrors > 0) {
-      console.log(`Recovered from ${window.consecutiveErrors} consecutive errors`);
-      window.consecutiveErrors = 0;
-    }
-    
-    // Use longer timeout for status call to prevent timeouts during ESP32 busy periods
-    const response = await fetchWithTimeout('/api/status', 8000);
+    const response = await fetchWithTimeout('/api/status', 5000);
     if (!response.ok) throw new Error('Failed to fetch status');
     const data = await response.json();
     
-    // Fetch raw temperature from calibration endpoint in parallel (non-blocking)
+    // Fetch raw temperature from calibration endpoint
     let rawTemperature = data.temperature || data.temp; // fallback to averaged
-    fetchWithTimeout('/api/calibration', 2000).then(calibResponse => {
+    try {
+      const calibResponse = await fetchWithTimeout('/api/calibration', 3000);
       if (calibResponse.ok) {
-        return calibResponse.json();
-      }
-      throw new Error('Calibration fetch failed');
-    }).then(calibData => {
-      // Use the 'temp' field from calibration which is the raw reading
-      if (calibData.temp !== undefined) {
-        rawTemperature = calibData.temp;
-        // Update the raw temperature data point if we got a better value
-        if (chartData.datasets[1].data.length > 0) {
-          chartData.datasets[1].data[chartData.datasets[1].data.length - 1] = rawTemperature;
+        const calibData = await calibResponse.json();
+        // Use the 'temp' field from calibration which is the raw reading
+        if (calibData.temp !== undefined) {
+          rawTemperature = calibData.temp;
         }
       }
-    }).catch(err => {
+    } catch (err) {
       console.warn('Failed to fetch raw temperature from calibration endpoint:', err);
-    });
+    }
 
     // PID P, I, D terms - use available data from status API
     if (document.getElementById('pidPTerm')) {
@@ -77,7 +65,7 @@ async function updateStatus() {
     // Averaged temp (map from temperature field)
     chartData.datasets[0].data.push(data.temperature || data.temp);
     if (chartData.datasets[0].data.length > 300) chartData.datasets[0].data.shift();
-    // Raw temp (use raw temperature - will be updated async if calibration succeeds)
+    // Raw temp (use raw temperature from calibration endpoint)
     chartData.datasets[1].data.push(rawTemperature);
     if (chartData.datasets[1].data.length > 300) chartData.datasets[1].data.shift();
     // Setpoint
@@ -102,11 +90,22 @@ async function updateStatus() {
       window.pidComponentData.datasets[2].data.push(data.pid_d || 0);
       if (window.pidComponentData.datasets[2].data.length > 300) window.pidComponentData.datasets[2].data.shift();
       
-      // Use requestAnimationFrame for smoother chart updates (non-blocking)
-      requestAnimationFrame(() => {
-        if (window.pidComponentChart) {
-          window.pidComponentChart.update('none'); // 'none' mode for faster updates
-        }
+      // Debug: Log PID values every 10 updates
+      if (window.pidComponentData.labels.length % 10 === 0) {
+        console.log('PID Update:', {
+          elapsed: elapsed,
+          pid_p: data.pid_p,
+          pid_i: data.pid_i, 
+          pid_d: data.pid_d,
+          dataPoints: window.pidComponentData.datasets[0].data.length
+        });
+      }
+      
+      window.pidComponentChart.update();
+    } else {
+      console.log('PID chart not available:', {
+        chart: !!window.pidComponentChart,
+        data: !!window.pidComponentData
       });
     }
 
@@ -208,16 +207,12 @@ async function updateStatus() {
         document.getElementById('currentTempEffective').textContent = '-- used';
       }
     }
-    // Use requestAnimationFrame for smoother chart updates (non-blocking)
-    requestAnimationFrame(() => {
-      if (temperatureChart) {
-        temperatureChart.update('none'); // 'none' mode for faster updates
-      }
-    });
+    temperatureChart.update();
   } catch (err) {
     showMessage('Error updating chart: ' + err.message, 'error');
   }
-// ...existing code...
+}
+
 // --- PID Component Chart Setup ---
 window.pidComponentData = {
   labels: [],
@@ -254,7 +249,6 @@ window.pidComponentData = {
     }
   ]
 };
-}
 
 window.pidComponentChart = null;
 
@@ -341,8 +335,7 @@ function clearPIDGraph() {
 
 function startStatusUpdates() {
   if (updateInterval) clearInterval(updateInterval);
-  // Start chart updates with longer interval to reduce ESP32 load
-  updateInterval = setInterval(updateStatus, 3000); // Increased from 2000ms to 3000ms
+  updateInterval = setInterval(updateStatus, 2000);
 }
 
 function stopStatusUpdates() {
@@ -597,7 +590,7 @@ async function updatePIDParams() {
     const pidUrl = `/api/pid_params?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}`;
     console.log('PID update URL:', pidUrl);
     
-    const pidResponse = await fetchWithTimeout(pidUrl, 10000); // Increased timeout
+    const pidResponse = await fetchWithTimeout(pidUrl, 8000);
     
     if (!pidResponse.ok) {
       throw new Error(`PID update failed: ${pidResponse.status}`);
@@ -609,7 +602,7 @@ async function updatePIDParams() {
     const tempUrl = `/api/pid_params?temp_alpha=${tempAlpha.toFixed(3)}&temp_interval=${tempUpdateInterval}`;
     console.log('Temp update URL:', tempUrl);
     
-    const tempResponse = await fetchWithTimeout(tempUrl, 10000); // Increased timeout
+    const tempResponse = await fetchWithTimeout(tempUrl, 8000);
     
     if (!tempResponse.ok) {
       throw new Error(`Temperature settings update failed: ${tempResponse.status}`);
@@ -640,7 +633,7 @@ async function updatePIDParams() {
 async function loadCurrentParams() {
   try {
     // Load PID parameters
-    const pidResponse = await fetchWithTimeout('/api/pid', 10000); // Increased timeout
+    const pidResponse = await fetchWithTimeout('/api/pid', 8000);
     const pidData = await pidResponse.json();
     
     document.getElementById('kpInput').value = pidData.kp.toFixed(6);
@@ -655,7 +648,7 @@ async function loadCurrentParams() {
     }
     
     // Load EWMA temperature parameters
-    const ewmaResponse = await fetchWithTimeout('/api/pid_params', 10000); // Increased timeout
+    const ewmaResponse = await fetchWithTimeout('/api/pid_params', 8000);
     const ewmaData = await ewmaResponse.json();
     
     if (ewmaData.temp_alpha !== undefined) {
@@ -803,8 +796,15 @@ if (!document.getElementById('messageAnimations')) {
 }
 
 // Initialize page
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
   console.log('DOM Content Loaded - starting PID tune page initialization');
+  
+  // Load PID profiles from device first
+  const profilesLoaded = await loadPIDProfiles();
+  if (!profilesLoaded) {
+    console.error('Failed to load PID profiles from device - using empty array');
+    showMessage('Failed to load PID profiles from device', 'error', 5000);
+  }
   
   // Check if Chart.js is loaded
   if (typeof Chart === 'undefined') {
@@ -821,9 +821,6 @@ document.addEventListener('DOMContentLoaded', function() {
   initChart();
   initPIDComponentChart();
   loadCurrentParams();
-  
-  // Load PID profiles from API instead of hardcoded data
-  loadPIDProfilesFromAPI();
   
   // Add auto-tune method change handler
   document.getElementById('autoTuneMethod').addEventListener('change', function() {
@@ -887,105 +884,70 @@ function forceStatusRefresh() {
   }, 1500);
 }
 
-// Temperature-dependent PID parameter suggestions - loaded from API
+// Temperature-dependent PID parameter suggestions based on user tuning experience
+// PID profiles loaded dynamically from the device
 let temperaturePIDSuggestions = [];
+let pidProfilesLoaded = false;
 
-// Range configuration tracking
-let rangeConfigurationStatus = {};
-
-let currentRangeIndex = 0;
-let isRangeConfigurationMode = false;
-
-// Load PID profiles from the API
-async function loadPIDProfilesFromAPI() {
+// Load PID profiles from the device
+async function loadPIDProfiles() {
   try {
-    console.log('Loading PID profiles from API...');
-    const response = await fetch('/api/pid_profile');
+    const response = await fetchWithTimeout('/api/pid_profiles', 5000);
     if (!response.ok) throw new Error('Failed to fetch PID profiles');
     const data = await response.json();
     
-    console.log('API response:', data);
+    // Convert server profiles to the format expected by the UI
+    temperaturePIDSuggestions = data.profiles.map(profile => ({
+      key: profile.name.toLowerCase().replace(/[^a-z0-9]/g, ''), // Generate simple key
+      min: profile.minTemp,
+      max: profile.maxTemp,
+      name: profile.name,
+      kp: profile.kp,
+      ki: profile.ki,
+      kd: profile.kd,
+      windowMs: profile.windowMs,
+      description: profile.description
+    }));
     
-    // Clear existing data
-    temperaturePIDSuggestions = [];
+    pidProfilesLoaded = true;
+    console.log('Loaded', temperaturePIDSuggestions.length, 'PID profiles from device');
+    
+    // Initialize range configuration status based on loaded profiles
     rangeConfigurationStatus = {};
+    temperaturePIDSuggestions.forEach(profile => {
+      rangeConfigurationStatus[profile.key] = {
+        configured: true, // All server profiles are considered configured
+        kp: profile.kp,
+        ki: profile.ki,
+        kd: profile.kd,
+        windowMs: profile.windowMs
+      };
+    });
     
-    // Convert API profiles to our format
-    if (data.profiles && data.profiles.length > 0) {
-      data.profiles.forEach(profile => {
-        const suggestion = {
-          key: profile.key,
-          min: profile.minTemp,
-          max: profile.maxTemp,
-          name: profile.name,
-          kp: profile.kp,
-          ki: profile.ki,
-          kd: profile.kd,
-          windowMs: profile.windowMs,
-          description: profile.description || "Optimized PID settings for this temperature range"
-        };
-        temperaturePIDSuggestions.push(suggestion);
-        
-        // Mark as configured since it came from API
-        rangeConfigurationStatus[profile.key] = {
-          configured: true,
-          kp: profile.kp,
-          ki: profile.ki,
-          kd: profile.kd,
-          windowMs: profile.windowMs
-        };
-      });
-      
-      console.log(`Loaded ${temperaturePIDSuggestions.length} PID profiles from API:`, temperaturePIDSuggestions);
-    } else {
-      console.warn('No profiles received from API, using fallback');
-      createFallbackProfiles();
-    }
-    
-    // Update UI after loading
-    updateRangeStatusDisplay();
-    if (temperaturePIDSuggestions.length > 0) {
-      currentRangeIndex = 0;
-      detectRangeFromSetpoint();
-    }
-    
+    return true;
   } catch (error) {
-    console.error('Failed to load PID profiles from API:', error);
-    createFallbackProfiles();
+    console.error('Failed to load PID profiles:', error);
+    // Fallback to empty array if loading fails
+    temperaturePIDSuggestions = [];
+    pidProfilesLoaded = false;
+    return false;
   }
 }
 
-// Create fallback profiles if API fails
-function createFallbackProfiles() {
-  temperaturePIDSuggestions = [
-    { 
-      key: "0-40c_fermentation",
-      min: 0, max: 40, 
-      name: "0-40°C (Fermentation)",
-      kp: 0.13, ki: 0.0004, kd: 11.0,
-      windowMs: 5000,
-      description: "Optimized for ambient to fermentation temperatures. Lower derivative for thermal mass."
-    },
-    { 
-      key: "40c+_baking",
-      min: 40, max: 250, 
-      name: "40°C+ (Baking)",
-      kp: 0.09, ki: 0.0003, kd: 1.6,
-      windowMs: 12000,
-      description: "Optimized for baking temperatures. Higher derivative for responsiveness."
-    }
-  ];
-  
-  rangeConfigurationStatus = {
-    "0-40c_fermentation": { configured: true, kp: 0.13, ki: 0.0004, kd: 11.0, windowMs: 5000 },
-    "40c+_baking": { configured: true, kp: 0.09, ki: 0.0003, kd: 1.6, windowMs: 12000 }
-  };
-  
-  console.log('Using fallback PID profiles');
-}
+// Range configuration tracking - dynamically initialized when profiles are loaded
+let rangeConfigurationStatus = {};
+
+let currentRangeIndex = 0; // Start with first range (will be updated when profiles load)
+let isRangeConfigurationMode = false;
 
 // Detect temperature range from setpoint and highlight it
 function detectRangeFromSetpoint() {
+  // Ensure profiles are loaded
+  if (!pidProfilesLoaded || temperaturePIDSuggestions.length === 0) {
+    showMessage('PID profiles not loaded yet. Please wait...', 'warning', 3000);
+    return;
+  }
+  
   const setpoint = parseFloat(document.getElementById('targetSetpoint').value);
   if (isNaN(setpoint)) {
     showMessage('Please enter a valid temperature setpoint', 'error', 3000);
@@ -998,7 +960,9 @@ function detectRangeFromSetpoint() {
   );
 
   if (!detectedRange) {
-    showMessage('Temperature out of supported range (0-250°C)', 'error', 3000);
+    const minTemp = Math.min(...temperaturePIDSuggestions.map(r => r.min));
+    const maxTemp = Math.max(...temperaturePIDSuggestions.map(r => r.max));
+    showMessage(`Temperature out of supported range (${minTemp}-${maxTemp}°C)`, 'error', 3000);
     return;
   }
 
