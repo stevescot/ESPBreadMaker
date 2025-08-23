@@ -20,26 +20,23 @@ function fetchWithTimeout(url, timeout = 10000) {
 }
 
 // --- Real-time chart update logic ---
+let updateInProgress = false;
 async function updateStatus() {
+  // Prevent request backup - skip if already updating
+  if (updateInProgress) {
+    console.log('Skipping update - previous request still in progress');
+    return;
+  }
+  
+  updateInProgress = true;
   try {
-    const response = await fetchWithTimeout('/api/status', 5000);
-    if (!response.ok) throw new Error('Failed to fetch status');
+    // Use lightweight PID status endpoint instead of full status
+    const response = await fetchWithTimeout('/api/pid_status', 5000);
+    if (!response.ok) throw new Error('Failed to fetch PID status');
     const data = await response.json();
     
-    // Fetch raw temperature from calibration endpoint
-    let rawTemperature = data.temperature || data.temp; // fallback to averaged
-    try {
-      const calibResponse = await fetchWithTimeout('/api/calibration', 3000);
-      if (calibResponse.ok) {
-        const calibData = await calibResponse.json();
-        // Use the 'temp' field from calibration which is the raw reading
-        if (calibData.temp !== undefined) {
-          rawTemperature = calibData.temp;
-        }
-      }
-    } catch (err) {
-      console.warn('Failed to fetch raw temperature from calibration endpoint:', err);
-    }
+    // Use raw temperature directly from lightweight endpoint
+    let rawTemperature = data.rawTemperature || data.temperature;
 
     // PID P, I, D terms - use available data from status API
     if (document.getElementById('pidPTerm')) {
@@ -210,6 +207,8 @@ async function updateStatus() {
     temperatureChart.update();
   } catch (err) {
     showMessage('Error updating chart: ' + err.message, 'error');
+  } finally {
+    updateInProgress = false;
   }
 }
 
@@ -835,7 +834,9 @@ document.addEventListener('DOMContentLoaded', async function() {
   
   // Start periodic status updates (slower when not testing)
   setInterval(() => {
-    if (!updateInterval) {
+    // Don't start new updates if there's already a faster update interval running
+    // or if an update is already in progress to prevent request backup
+    if (!updateInterval && !updateInProgress) {
       updateStatus();
     }
   }, 5000);

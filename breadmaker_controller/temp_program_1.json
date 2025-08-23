@@ -20,14 +20,14 @@
           "durationSec": 240
         }
       ],
-      "instructions": "Add 500g flour and 320g water"
+      "instructions": "Pre-mix flour and water before adding starter and salt."
     },
     {
       "label": "Autolyse",
       "min": 30,
       "temp": 0,
       "noMix": true,
-      "instructions": "Add 10g salt and 100g starter"
+      "instructions": "Add 400g bread flour and 280g water at the beginning of this stage."
     },
     {
       "label": "Mix",

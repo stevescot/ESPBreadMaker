@@ -22,7 +22,7 @@ extern float readTemperature(); // Raw temperature reading from calibration.cpp
 #endif
 
 // Force a rebuild by including current timestamp as comment
-// BUILD_TIMESTAMP: Aug 23 2025 13:30:00 - FORCE PID PROFILE CREATION DEBUG
+// BUILD_TIMESTAMP: Jul 27 2025 22:30:00
 
 // Stub implementations for missing functions
 
@@ -232,17 +232,10 @@ void checkAndSwitchPIDProfile() {
   // Skip if no valid setpoint
   if (pid.Setpoint <= 0) return;
   
-  // If no profiles are loaded, load them first (with caching to prevent repeated loading)
+  // If no profiles are loaded, load them first
   if (pid.profiles.empty()) {
-    static bool pidProfileLoadAttempted = false;
-    if (!pidProfileLoadAttempted) {
-      if (debugSerial) Serial.println("[PID-PROFILE] No profiles loaded, loading default profiles");
-      loadPIDProfiles();
-      pidProfileLoadAttempted = true; // Prevent repeated file system access if loading fails
-    } else {
-      // Profiles failed to load previously, don't keep trying
-      return;
-    }
+    if (debugSerial) Serial.println("[PID-PROFILE] No profiles loaded, loading default profiles");
+    loadPIDProfiles();
   }
   
   // Find appropriate profile for current setpoint and switch immediately if needed
@@ -277,7 +270,7 @@ String getCurrentActiveProfileName() {
   return "Unknown"; // Setpoint outside all profile ranges
 }
 
-// Save PID profiles to file - OPTIMIZED with streaming to reduce memory usage
+// Save PID profiles to file
 void savePIDProfiles() {
   File file = FFat.open("/pid-profiles.json", "w");
   if (!file) {
@@ -285,51 +278,43 @@ void savePIDProfiles() {
     return;
   }
   
-  // OPTIMIZATION: Use streaming JSON generation to avoid memory allocation
-  file.print("{\"pidProfiles\":[");
+  // Create JSON document
+  StaticJsonDocument<1024> doc;
+  JsonArray profiles = doc.createNestedArray("pidProfiles");
   
-  for (size_t i = 0; i < pid.profiles.size(); i++) {
-    if (i > 0) file.print(",");
-    const auto& profile = pid.profiles[i];
-    
-    file.print("{\"name\":\"");
-    file.print(profile.name);
-    file.print("\",\"minTemp\":");
-    file.print(profile.minTemp, 1);
-    file.print(",\"maxTemp\":");
-    file.print(profile.maxTemp, 1);
-    file.print(",\"kp\":");
-    file.print(profile.kp, 6);
-    file.print(",\"ki\":");
-    file.print(profile.ki, 6);
-    file.print(",\"kd\":");
-    file.print(profile.kd, 2);
-    file.print(",\"windowMs\":");
-    file.print(profile.windowMs);
-    file.print(",\"description\":\"");
-    file.print(profile.description);
-    file.print("\"}");
+  // Add each profile
+  for (const auto& profile : pid.profiles) {
+    JsonObject profileObj = profiles.createNestedObject();
+    profileObj["name"] = profile.name;
+    profileObj["minTemp"] = profile.minTemp;
+    profileObj["maxTemp"] = profile.maxTemp;
+    profileObj["kp"] = profile.kp;
+    profileObj["ki"] = profile.ki;
+    profileObj["kd"] = profile.kd;
+    profileObj["windowMs"] = profile.windowMs;
+    profileObj["description"] = profile.description;
   }
   
-  file.print("],\"autoSwitching\":");
-  file.print(pid.autoSwitching ? "true" : "false");
-  file.print("}");
+  // Add metadata - but NOT activeProfile (it's determined automatically by setpoint)
+  doc["autoSwitching"] = pid.autoSwitching;
+  
+  // Write to file
+  if (serializeJson(doc, file) == 0) {
+    if (debugSerial) Serial.println("[ERROR] Failed to write PID profiles JSON");
+  } else {
+    if (debugSerial) Serial.println("[INFO] PID profiles saved successfully");
+  }
   
   file.close();
-  
-  if (debugSerial) Serial.println("[INFO] PID profiles saved successfully using streaming");
 }
 
 // Load PID profiles from file
 void loadPIDProfiles() {
-  if (debugSerial) Serial.println("[DEBUG] loadPIDProfiles() called");
-  
   File file = FFat.open("/pid-profiles.json", "r");
   if (!file) {
     if (debugSerial) Serial.println("[WARN] pid-profiles.json not found, creating default profiles");
     createDefaultPIDProfiles();
     savePIDProfiles();
-    if (debugSerial) Serial.printf("[DEBUG] After creation: pid.profiles.size() = %d\n", pid.profiles.size());
     return;
   }
   
@@ -371,7 +356,6 @@ void loadPIDProfiles() {
 }
 
 void createDefaultPIDProfiles() {
-  if (debugSerial) Serial.println("[DEBUG] createDefaultPIDProfiles() called - creating 2 clean profiles");
   pid.profiles.clear();
   
   // Low Temperature Range (0-40°C) - Using tuned values from user testing
@@ -402,8 +386,7 @@ void createDefaultPIDProfiles() {
   pid.autoSwitching = true;
   
   if (debugSerial) {
-    Serial.printf("[INFO] Created %d clean PID profiles: '%s' and '%s'\n", 
-                  pid.profiles.size(), pid.profiles[0].name.c_str(), pid.profiles[1].name.c_str());
+    Serial.println("[INFO] Created 2 clean PID profiles: 0-40°C (Fermentation) and 40°C+ (Baking)");
   }
 }
 
@@ -518,15 +501,9 @@ void updateTimeProportionalHeater() {
         dynamicRestart.dynamicRestartCount++;
         
         if (needMoreHeat) {
-          // OPTIMIZATION: Use snprintf instead of String concatenation
-          char buffer[64];
-          snprintf(buffer, sizeof(buffer), "Need more heat (output increased to %.1f%%)", pid.Output * 100);
-          dynamicRestart.lastDynamicRestartReason = buffer;
+          dynamicRestart.lastDynamicRestartReason = "Need more heat (output increased to " + String((pid.Output*100), 1) + "%)";
         } else {
-          // OPTIMIZATION: Use snprintf instead of String concatenation
-          char buffer[64];
-          snprintf(buffer, sizeof(buffer), "Reduce heat (output decreased to %.1f%%)", pid.Output * 100);
-          dynamicRestart.lastDynamicRestartReason = buffer;
+          dynamicRestart.lastDynamicRestartReason = "Reduce heat (output decreased to " + String((pid.Output*100), 1) + "%)";
         }
         
         if (debugSerial) {
@@ -604,42 +581,25 @@ void updatePIDTerms() {
   static unsigned long lastSampleTime = 0;
   unsigned long now = millis();
   
-  // For PID tuning interface, update more frequently (every 200ms instead of sampleTime)
-  // This provides better responsiveness for the tuning graphs
-  unsigned long updateInterval = min(pid.sampleTime, 200UL);
-  
-  if (now - lastSampleTime >= updateInterval) {
+  if (now - lastSampleTime >= pid.sampleTime) {
     double error = pid.Setpoint - pid.Input;
     double dInput = pid.Input - pid.lastInput;
     
     // Calculate P term
     pid.pidP = pid.Kp * error;
     
-    // Calculate I term (accumulated integral) - use same calculation as main PID
-    double sampleTimeSec = updateInterval / 1000.0;
-    pid.lastITerm += (pid.Ki * error * sampleTimeSec);
-    
-    // Apply integral windup protection (same as main PID)
-    if (pid.lastITerm > 1.0) pid.lastITerm = 1.0;
+    // Calculate I term (accumulated integral)
+    pid.lastITerm += (pid.Ki * error);
+    if (pid.lastITerm > 1.0) pid.lastITerm = 1.0;  // Windup protection
     else if (pid.lastITerm < 0.0) pid.lastITerm = 0.0;
     pid.pidI = pid.lastITerm;
     
-    // Calculate D term (derivative on input, not error)
-    if (lastSampleTime > 0) { // Ensure we have a previous sample
-      pid.pidD = -pid.Kd * (dInput / sampleTimeSec);
-    } else {
-      pid.pidD = 0; // First sample, no derivative
-    }
+    // Calculate D term
+    pid.pidD = -pid.Kd * dInput;  // Negative because we use derivative on input
     
-    // Store for next calculation - only update if we actually calculated
+    // Store for next calculation
     pid.lastInput = pid.Input;
     lastSampleTime = now;
-    
-    // Optional debug output for tuning
-    if (debugSerial && (now % 5000 < updateInterval)) { // Log every 5 seconds
-      Serial.printf("[PID-TERMS] P=%.3f, I=%.3f, D=%.3f, Output=%.3f, Error=%.2f, dInput=%.2f\n",
-                    pid.pidP, pid.pidI, pid.pidD, pid.Output, error, dInput);
-    }
   }
 }
 
@@ -714,12 +674,12 @@ void streamStatusJson(Print& out) {
           unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
           unsigned long baseStageDuration = stage.min * 60;
           
-          // Get or calculate adjusted stage duration with periodic updates (every 30 minutes for better performance)
+          // Get or calculate adjusted stage duration with periodic updates (every 10 minutes)
           unsigned long adjustedStageDuration = baseStageDuration;
           if (stage.isFermentation) {
             unsigned long timeSinceLastUpdate = millis() - programState.lastFermentationUpdate;
             bool needsUpdate = (programState.adjustedStageDurations[programState.customStageIdx] == 0) || 
-                              (timeSinceLastUpdate > 1800000); // 30 minutes = 1,800,000 ms
+                              (timeSinceLastUpdate > 600000); // 10 minutes = 600,000 ms
             
             if (needsUpdate) {
               // Recalculate adjusted duration based on current fermentation conditions
@@ -732,50 +692,33 @@ void streamStatusJson(Print& out) {
             }
           }
           
-          // Original time left (non-adjusted) - ADD SAFETY CHECKS
-          if (elapsed < baseStageDuration) {
-            timeLeft = baseStageDuration - elapsed;
-          } else {
-            timeLeft = 0; // Stage should have ended
-            if (debugSerial) Serial.printf("[TIMING-SAFETY] Stage %d elapsed (%lu) > duration (%lu), setting timeLeft=0\n", 
-                                          programState.customStageIdx, elapsed, baseStageDuration);
-          }
+          // Original time left (non-adjusted)
+          timeLeft = (elapsed < baseStageDuration) ? (baseStageDuration - elapsed) : 0;
           
-          // Fermentation-adjusted time left (using periodically updated duration) - ADD SAFETY CHECKS
-          if (elapsed < adjustedStageDuration) {
-            adjustedTimeLeft = adjustedStageDuration - elapsed;
-          } else {
-            adjustedTimeLeft = 0; // Stage should have ended
-            if (debugSerial) Serial.printf("[TIMING-SAFETY] Stage %d elapsed (%lu) > adjusted duration (%lu), setting adjustedTimeLeft=0\n", 
-                                          programState.customStageIdx, elapsed, adjustedStageDuration);
-          }
+          // Fermentation-adjusted time left (using periodically updated duration)
+          adjustedTimeLeft = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
         }
         out.printf("\"timeLeft\":%lu,", timeLeft);
         out.printf("\"adjustedTimeLeft\":%lu,", adjustedTimeLeft);
         
-        // Calculate total program remaining time (current stage + all future stages with cached fermentation adjustment)
+        // Calculate total program remaining time (current stage + all future stages with periodic fermentation adjustment)
         totalProgramRemainingTime = adjustedTimeLeft; // Start with current stage time left
         const Program* p = getActiveProgram();
         if (p && programState.isRunning) {
-          // Use cached remaining time if available and valid (refreshed with fermentation cache)
-          if (fermentCache.isValid && fermentCache.cachedRemainingTime > 0) {
-            totalProgramRemainingTime = fermentCache.cachedRemainingTime;
-          } else {
-            // Add time for all remaining stages after current one (fallback calculation)
-            for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); i++) {
-              const CustomStage& futureStage = p->customStages[i];
-              unsigned long adjustedDurationMs;
-              
-              if (futureStage.isFermentation) {
-                // For future fermentation stages, use current fermentation conditions
-                // This will be updated every 30 minutes when those stages are reached
-                adjustedDurationMs = getAdjustedStageTimeMs(futureStage.min * 60 * 1000, true);
-              } else {
-                // Non-fermentation stages use original duration
-                adjustedDurationMs = futureStage.min * 60 * 1000;
-              }
-              totalProgramRemainingTime += adjustedDurationMs / 1000;
+          // Add time for all remaining stages after current one
+          for (size_t i = programState.customStageIdx + 1; i < p->customStages.size(); i++) {
+            const CustomStage& futureStage = p->customStages[i];
+            unsigned long adjustedDurationMs;
+            
+            if (futureStage.isFermentation) {
+              // For future fermentation stages, use current fermentation conditions
+              // This will be updated every 10 minutes when those stages are reached
+              adjustedDurationMs = getAdjustedStageTimeMs(futureStage.min * 60 * 1000, true);
+            } else {
+              // Non-fermentation stages use original duration
+              adjustedDurationMs = futureStage.min * 60 * 1000;
             }
+            totalProgramRemainingTime += adjustedDurationMs / 1000;
           }
         }
         
@@ -1120,32 +1063,18 @@ unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentat
     return baseTimeMs; // No fermentation adjustment
   }
   
-  // SAFETY CHECK: Prevent extremely large fermentation factors from causing overflow
-  if (fermentState.fermentationFactor < 0.01f || fermentState.fermentationFactor > 100.0f) {
-    if (debugSerial) Serial.printf("[FERMENT-SAFETY] Invalid fermentation factor %.3f, using 1.0\n", fermentState.fermentationFactor);
-    return baseTimeMs; // Use original time if factor is invalid
-  }
-  
-  // Apply current fermentation factor with overflow protection
-  double result = (double)baseTimeMs * fermentState.fermentationFactor;
-  
-  // SAFETY CHECK: Prevent integer overflow (limit to ~24 hours = 86,400,000 ms)
-  if (result > 86400000.0) {
-    if (debugSerial) Serial.printf("[FERMENT-SAFETY] Calculated time %.0f ms too large, capping at 24 hours\n", result);
-    return 86400000; // Cap at 24 hours
-  }
-  
-  return (unsigned long)result;
+  // Apply current fermentation factor
+  return (unsigned long)(baseTimeMs * fermentState.fermentationFactor);
 }
 
 // Update fermentation cache - only recalculate when program or stage changes
 // NOTE: Cache now uses fermentState.predictedCompleteTime for consistency with programReadyAt
 void updateFermentationCache() {
-  // Check if cache is still valid - increased to 15 seconds for better performance
+  // Check if cache is still valid
   bool cacheValid = fermentCache.isValid && 
                    fermentCache.cachedProgramId == programState.activeProgramId &&
                    fermentCache.cachedStageIdx == programState.customStageIdx &&
-                   (millis() - fermentCache.lastCacheUpdate) < 15000; // Refresh every 15 seconds max
+                   (millis() - fermentCache.lastCacheUpdate) < 5000; // Refresh every 5 seconds max
   
   if (cacheValid) {
     return; // Use existing cache
@@ -1182,7 +1111,8 @@ void updateFermentationCache() {
   }
   
   // Calculate stage end times
-  unsigned long runningTime = 0; // Always start from 0 for cumulative durations
+  time_t currentTime = time(nullptr);
+  time_t runningTime = currentTime;
   
   if (programState.isRunning && programState.customStageStart > 0) {
     // Running: calculate from current stage position
@@ -1191,24 +1121,28 @@ void updateFermentationCache() {
     unsigned long adjustedStageDuration = getAdjustedStageTimeMs(currentStage.min * 60 * 1000, currentStage.isFermentation) / 1000;
     unsigned long remaining = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
     
-    // Calculate cumulative durations for completed stages
+    // runningTime should accumulate total program duration, not reset to remaining time
+    runningTime = 0; // Reset to calculate total program duration from scratch
+    
+    // Cache times for stages already completed
     for (size_t i = 0; i < programState.customStageIdx && i < 20; i++) {
+      fermentCache.cachedStageEndTimes[i] = programState.actualStageStartTimes[i + 1];
+      // Add completed stage durations to total
       CustomStage& completedStage = p->customStages[i];
       unsigned long completedDuration = getAdjustedStageTimeMs(completedStage.min * 60 * 1000, completedStage.isFermentation) / 1000;
       runningTime += completedDuration;
-      fermentCache.cachedStageEndTimes[i] = runningTime; // Store cumulative duration
     }
     
     // Add current stage total duration (not just remaining)
     runningTime += adjustedStageDuration;
     
-    // Cache current stage end time (cumulative duration from program start)
-    time_t currentTime = time(nullptr);
+    // Cache current stage end time (program start + elapsed time + remaining time for current stage)
     time_t programStart = programState.actualStageStartTimes[0];
-    unsigned long elapsedProgramTime = (currentTime > programStart && programStart > 0) ? (currentTime - programStart) : runningTime;
+    time_t currentTime = time(nullptr);
+    unsigned long elapsedProgramTime = (currentTime > programStart) ? (currentTime - programStart) : 0;
     
     if (programState.customStageIdx < 20) {
-      fermentCache.cachedStageEndTimes[programState.customStageIdx] = runningTime;
+      fermentCache.cachedStageEndTimes[programState.customStageIdx] = programStart + elapsedProgramTime + remaining;
     }
     
     // Calculate remaining stages - accumulate durations
@@ -1216,24 +1150,24 @@ void updateFermentationCache() {
       CustomStage& stage = p->customStages[i];
       unsigned long adjustedDuration = getAdjustedStageTimeMs(stage.min * 60 * 1000, stage.isFermentation) / 1000;
       runningTime += adjustedDuration;
-      // Stage end time = cumulative duration up to this point
-      fermentCache.cachedStageEndTimes[i] = runningTime;
+      // Stage end time = program start + total elapsed + remaining current + all future stages up to this point
+      fermentCache.cachedStageEndTimes[i] = programStart + elapsedProgramTime + remaining + 
+                                          (runningTime - adjustedStageDuration); // Subtract current stage since it's included in remaining calculation
     }
     
     // Calculate timing data for UI using the correctly calculated program end time
     if (programState.actualStageStartTimes[0] > 0) {
-      // Calculate absolute program end time for display
+      // We already calculated programStart and currentTime above, reuse them
       time_t programEndTime = programStart + runningTime;
       fermentCache.cachedProgramEndTime = programEndTime; // Absolute end timestamp
       fermentCache.cachedTotalDuration = runningTime; // Total duration in seconds
-      fermentCache.cachedElapsedTime = elapsedProgramTime;
+      fermentCache.cachedElapsedTime = (currentTime > programStart) ? (currentTime - programStart) : 0;
       fermentCache.cachedRemainingTime = (programEndTime > currentTime) ? 
                                         (programEndTime - currentTime) : 0;
     } else {
-      fermentCache.cachedProgramEndTime = 0;
-      fermentCache.cachedTotalDuration = runningTime;
+      fermentCache.cachedTotalDuration = 0;
       fermentCache.cachedElapsedTime = 0;
-      fermentCache.cachedRemainingTime = runningTime;
+      fermentCache.cachedRemainingTime = 0;
     }
   } else {
     // Not running - calculate full program preview from now

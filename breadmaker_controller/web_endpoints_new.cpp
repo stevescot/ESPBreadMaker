@@ -1164,27 +1164,29 @@ void pidProfileEndpoints(WebServer& server) {
     server.on("/api/pid_profiles", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profiles GET requested"));
         
-        // Create JSON response with actual PID profiles
-        String response = "{\"profiles\":[";
-        for (size_t i = 0; i < pid.profiles.size(); i++) {
-            if (i > 0) response += ",";
-            const PIDProfile& profile = pid.profiles[i];
-            response += "{";
-            response += "\"name\":\"" + profile.name + "\",";
-            response += "\"minTemp\":" + String(profile.minTemp) + ",";
-            response += "\"maxTemp\":" + String(profile.maxTemp) + ",";
-            response += "\"kp\":" + String(profile.kp, 6) + ",";
-            response += "\"ki\":" + String(profile.ki, 6) + ",";
-            response += "\"kd\":" + String(profile.kd, 6) + ",";
-            response += "\"windowMs\":" + String(profile.windowMs) + ",";
-            response += "\"description\":\"" + profile.description + "\"";
-            response += "}";
-        }
-        response += "],";
-        response += "\"autoSwitching\":" + String(pid.autoSwitching ? "true" : "false");
-        response += "}";
+        // Create JSON response with actual PID profiles using chunked response to avoid String concatenation
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
         
-        server.send(200, "application/json", response);
+        server.sendContent("{\"profiles\":[");
+        for (size_t i = 0; i < pid.profiles.size(); i++) {
+            if (i > 0) server.sendContent(",");
+            const PIDProfile& profile = pid.profiles[i];
+            server.sendContent("{");
+            server.sendContent("\"name\":\"" + profile.name + "\",");
+            server.sendContent("\"minTemp\":" + String(profile.minTemp) + ",");
+            server.sendContent("\"maxTemp\":" + String(profile.maxTemp) + ",");
+            server.sendContent("\"kp\":" + String(profile.kp, 6) + ",");
+            server.sendContent("\"ki\":" + String(profile.ki, 6) + ",");
+            server.sendContent("\"kd\":" + String(profile.kd, 6) + ",");
+            server.sendContent("\"windowMs\":" + String(profile.windowMs) + ",");
+            server.sendContent("\"description\":\"" + profile.description + "\"");
+            server.sendContent("}");
+        }
+        server.sendContent("],");
+        server.sendContent("\"autoSwitching\":" + String(pid.autoSwitching ? "true" : "false"));
+        server.sendContent("}");
+        server.sendContent("");  // End chunked response
     });
 }
 
@@ -2609,6 +2611,39 @@ void registerWebEndpoints(WebServer& server) {
     server.on("/api/force_load_profiles", HTTP_GET, [&](){
         loadPIDProfiles();
         server.send(200, "application/json", "{\"status\":\"profiles loaded\"}");
+    });
+    
+    // Lightweight status endpoint for PID tuning (excludes large arrays)
+    server.on("/api/pid_status", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_status requested"));
+        
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        server.sendHeader("Pragma", "no-cache");
+        server.sendHeader("Expires", "-1");
+        
+        // Send minimal JSON for PID tuning page using chunked response to avoid String concatenation
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        
+        server.sendContent("{");
+        server.sendContent("\"temperature\":" + String(getAveragedTemperature(), 1) + ",");
+        server.sendContent("\"rawTemperature\":" + String(readTemperature(), 1) + ",");
+        server.sendContent("\"setpoint\":" + String(pid.Setpoint, 1) + ",");
+        server.sendContent("\"heater\":" + String(outputStates.heater ? "true" : "false") + ",");
+        server.sendContent("\"motor\":" + String(outputStates.motor ? "true" : "false") + ",");
+        server.sendContent("\"running\":" + String(programState.isRunning ? "true" : "false") + ",");
+        server.sendContent("\"pid_kp\":" + String(pid.Kp, 6) + ",");
+        server.sendContent("\"pid_ki\":" + String(pid.Ki, 6) + ",");
+        server.sendContent("\"pid_kd\":" + String(pid.Kd, 6) + ",");
+        server.sendContent("\"pid_output\":" + String(pid.Output, 3) + ",");
+        server.sendContent("\"pid_input\":" + String(pid.Input, 1) + ",");
+        server.sendContent("\"pid_p\":" + String(pid.pidP, 3) + ",");
+        server.sendContent("\"pid_i\":" + String(pid.pidI, 3) + ",");
+        server.sendContent("\"pid_d\":" + String(pid.pidD, 3) + ",");
+        server.sendContent("\"uptime_sec\":" + String(millis() / 1000) + ",");
+        server.sendContent("\"free_heap\":" + String(ESP.getFreeHeap()));
+        server.sendContent("}");
+        server.sendContent("");  // End chunked response
     });
     
     server.onNotFound([&](){

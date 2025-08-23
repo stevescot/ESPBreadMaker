@@ -390,7 +390,7 @@ function renderPrograms(progs) {
             const programJson = JSON.stringify(program, null, 2);
             const programFormData = new FormData();
             const programBlob = new Blob([programJson], { type: 'application/json' });
-            const filename = `programs/program_${program.id}.json`;
+            const filename = `program_${program.id}.json`;  // Fixed: removed 'programs/' subfolder
             programFormData.append('file', programBlob, filename);
             
             await uploadFile(programFormData, filename, fileCounter);

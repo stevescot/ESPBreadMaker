@@ -1156,11 +1156,11 @@ function showPlanSummary(s) {
       let durationCell = '';
       if (skipped) {
         durationCell = `<span title="Skipped stage">Skipped</span>`;
-      } else if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i]) {
+      } else if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i] > 0) {
         // For completed stages, calculate actual duration
         let elapsedSec = 0;
-        if (s.actualStageStartTimes[i+1]) {
-          // Next stage started - use that as end time
+        if (s.actualStageStartTimes[i+1] && s.actualStageStartTimes[i+1] > 0) {
+          // Next stage started - use that as end time (only if both timestamps are valid)
           elapsedSec = (s.actualStageStartTimes[i+1] - s.actualStageStartTimes[i]);
         } else if (i === currentStageIdx - 1 && typeof s.programStartTime === 'number' && typeof s.stageStartTime === 'number') {
           // This is the most recently completed stage - use current stage start as end time
@@ -1170,11 +1170,12 @@ function showPlanSummary(s) {
           elapsedSec = (s.customStageStart / 1000 - s.actualStageStartTimes[i]);
         }
         
-        if (elapsedSec > 0) {
+        // Validate elapsed time is reasonable (between 0 and 24 hours)
+        if (elapsedSec > 0 && elapsedSec < 86400) {
           durationCell = `<span title="Actual elapsed time" style="color: #2d8c2d; font-weight: bold;">${formatDuration(elapsedSec)}</span>`;
         } else {
-          // Fallback to planned duration if we can't calculate actual time
-          durationCell = `<span title="Planned duration (actual time unavailable)">${formatDuration(st.min * 60)}<br><small>(${st.min.toFixed(1)} min planned)</small></span>`;
+          // Fallback to planned duration if elapsed time is invalid
+          durationCell = `<span title="Planned duration (actual time invalid or unavailable)">${formatDuration(st.min * 60)}<br><small>(${st.min.toFixed(1)} min planned)</small></span>`;
         }
       } else if (rowClass === 'active' && typeof s.timeLeft === 'number' && i === currentStageIdx && s.running) {
         // Show actual time left for the active stage - use adjustedTimeLeft for fermentation stages
@@ -1470,7 +1471,7 @@ window.addEventListener('DOMContentLoaded', () => {
     populateProgramSelect();
     // Immediately update status after programs are loaded
     window.updateStatus();
-    // Set up periodic status updates to keep everything in sync (reduced frequency for better performance)
+    // Set up periodic status updates to keep everything in sync
     setInterval(() => {
       fetch('/status')
         .then(r => r.json())
@@ -1478,7 +1479,7 @@ window.addEventListener('DOMContentLoaded', () => {
           window.updateStatus(s);
         })
         .catch(err => console.error('Status poll failed:', err));
-    }, 5000); // Increased from 3 seconds to 5 seconds
+    }, 3000);
   });
 
   // Manual Mode toggle logic
