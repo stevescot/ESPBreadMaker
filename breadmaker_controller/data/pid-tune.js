@@ -587,13 +587,19 @@ async function updatePIDParams() {
     showMessage('Updating parameters... (1/2)', 'info');
     
     // First, update PID parameters using GET (much more memory-efficient)
-    const pidUrl = `/api/pid_params?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}`;
-    console.log('PID update URL:', pidUrl);
+    // Use the new profile-aware endpoint that updates the correct temperature profile
+    const pidUrl = `/api/pid_profile/update_current?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}`;
+    console.log('PID profile update URL:', pidUrl);
     
     const pidResponse = await fetchWithTimeout(pidUrl, 8000);
     
     if (!pidResponse.ok) {
-      throw new Error(`PID update failed: ${pidResponse.status}`);
+      throw new Error(`PID profile update failed: ${pidResponse.status}`);
+    }
+    
+    const pidResult = await pidResponse.json();
+    if (pidResult.profile_updated) {
+      console.log('Profile updated successfully for current setpoint');
     }
     
     showMessage('Updating parameters... (2/2)', 'info');
@@ -609,7 +615,7 @@ async function updatePIDParams() {
     }
     
     // Success!
-    showMessage('All parameters updated successfully! (Memory-safe method)', 'success');
+    showMessage('All parameters updated successfully! Profile updated for current temperature range.', 'success');
     
     // Update display values
     document.getElementById('currentKp').textContent = kp.toFixed(6);

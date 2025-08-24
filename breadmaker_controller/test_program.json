@@ -1,0 +1,16 @@
+{
+  "id": 1,
+  "name": "Test Program",
+  "fermentBaselineTemp": 20,
+  "fermentQ10": 2,
+  "customStages": [
+    {
+      "label": "Test Proof",
+      "min": 10,
+      "temp": 25,
+      "noMix": true,
+      "instructions": "Test temperature parsing",
+      "isFermentation": false
+    }
+  ]
+}
