@@ -422,19 +422,20 @@ function updateStageProgress(currentStage, statusData) {
         }
       }
     } else if (!isIdle && i > activeIdx) {
-      // Show planned duration for future stages using firmware predictions
+      // Show planned duration for future stages using new duration-based data
       const stage = customStages[i];
       let plannedDuration = stage.min * 60; // Default to raw duration
       
-      // Use firmware's predictedStageEndTimes if available (already fermentation-adjusted)
-      if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.predictedStageEndTimes[i-1]) {
-        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.predictedStageEndTimes[i-1];
-      } else if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.programStart && i === 0) {
-        // For first stage, use programStart as reference
-        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.programStart;
+      // Use server-provided planned durations if available (already fermentation-adjusted)
+      if (Array.isArray(statusData.stagePlannedSeconds) && statusData.stagePlannedSeconds[i] > 0) {
+        plannedDuration = statusData.stagePlannedSeconds[i];
+      } else if (Array.isArray(statusData.stageRemainingSeconds) && statusData.stageRemainingSeconds[i] > 0) {
+        // Fallback to remaining time data
+        plannedDuration = statusData.stageRemainingSeconds[i];
       }
       
-      if (plannedDuration > 0) {
+      // Only show duration if it's reasonable (between 1 minute and 48 hours)
+      if (plannedDuration > 60 && plannedDuration < 172800) {
         const span = document.createElement('span');
         span.className = 'stage-planned';
         span.textContent = ' (' + formatDuration(plannedDuration) + ')';
@@ -1038,47 +1039,32 @@ function showPlanSummary(s) {
     let summary = '<table class="plan-summary-table"><tr><th>Stage</th><th>Temp</th><th>Mix Pattern</th><th>Duration</th><th>Instructions</th><th>Calendar</th></tr>';
 
     // --- Use firmware-provided timing data ---
-    // Use firmware-provided predicted stage end times (already fermentation-adjusted)
-    const predictedStageEndTimes = Array.isArray(s.predictedStageEndTimes) ? s.predictedStageEndTimes : null;
-
+    // Use new duration-based arrays (eliminates timestamp arithmetic issues)
+    
     prog.customStages.forEach((st, i) => {
       const color = st.color || palette[i % palette.length];
       let calCell = '';
       // Use actual start time if available (stage has started), otherwise use estimated time
       let stStart = null;
-      if (Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i] > 0) {
-        // Stage has actually started - use actual time
+      if (Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i] > 1640995200) {
+        // Stage has actually started - use actual time (only if timestamp is valid - after 2022)
         stStart = new Date(s.actualStageStartTimes[i] * 1000);
-      } else if (Array.isArray(s.stageStartTimes) && s.stageStartTimes[i]) {
-        // Stage hasn't started yet - use estimated time
+      } else if (Array.isArray(s.stageStartTimes) && s.stageStartTimes[i] && s.stageStartTimes[i] > 1640995200) {
+        // Stage hasn't started yet - use estimated time (only if valid)
         stStart = new Date(s.stageStartTimes[i] * 1000);
       } else if (!s.running && s.fermentationFactor > 0) {
-        // Preview: use now or previous stage end time from firmware predictions
+        // Preview: use now for first stage
         if (i === 0) {
           stStart = new Date();
-        } else if (predictedStageEndTimes && predictedStageEndTimes[i-1]) {
-          stStart = new Date(predictedStageEndTimes[i-1] * 1000);
         }
       }
       
-      // Use firmware-provided predicted stage end times and durations
-      let predictedEnd = null;
+      // Use duration-based data (much simpler and more reliable than timestamp arithmetic)
       let predictedDurationMin = null;
-      if (predictedStageEndTimes && predictedStageEndTimes[i]) {
-        predictedEnd = new Date(predictedStageEndTimes[i] * 1000);
-        // For duration, use difference between this and previous stage end (or start)
-        if (i === 0) {
-          // First stage: duration is end - start (use stStart if available)
-          if (stStart) {
-            predictedDurationMin = (predictedStageEndTimes[0] - (stStart.getTime() / 1000)) / 60;
-          }
-        } else {
-          predictedDurationMin = (predictedStageEndTimes[i] - predictedStageEndTimes[i-1]) / 60;
-        }
-        // Only keep predictedDurationMin if it's a valid positive number
-        if (typeof predictedDurationMin !== 'number' || isNaN(predictedDurationMin) || predictedDurationMin < 0) {
-          predictedDurationMin = null; // Clear invalid predictions
-        }
+      if (Array.isArray(s.stagePlannedSeconds) && s.stagePlannedSeconds[i] > 0) {
+        predictedDurationMin = s.stagePlannedSeconds[i] / 60; // Convert seconds to minutes
+      } else if (Array.isArray(s.stageRemainingSeconds) && s.stageRemainingSeconds[i] > 0) {
+        predictedDurationMin = s.stageRemainingSeconds[i] / 60; // Convert seconds to minutes
       }
       // Only show calendar if we can calculate timing and this stage requires user interaction
       let stEnd = null;
@@ -1156,10 +1142,10 @@ function showPlanSummary(s) {
       let durationCell = '';
       if (skipped) {
         durationCell = `<span title="Skipped stage">Skipped</span>`;
-      } else if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i] > 0) {
-        // For completed stages, calculate actual duration
+      } else if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i] > 1640995200) {
+        // For completed stages, calculate actual duration (only if timestamp is valid - after 2022)
         let elapsedSec = 0;
-        if (s.actualStageStartTimes[i+1] && s.actualStageStartTimes[i+1] > 0) {
+        if (s.actualStageStartTimes[i+1] && s.actualStageStartTimes[i+1] > 1640995200) {
           // Next stage started - use that as end time (only if both timestamps are valid)
           elapsedSec = (s.actualStageStartTimes[i+1] - s.actualStageStartTimes[i]);
         } else if (i === currentStageIdx - 1 && typeof s.programStartTime === 'number' && typeof s.stageStartTime === 'number') {
@@ -1170,8 +1156,8 @@ function showPlanSummary(s) {
           elapsedSec = (s.customStageStart / 1000 - s.actualStageStartTimes[i]);
         }
         
-        // Validate elapsed time is reasonable (between 0 and 24 hours)
-        if (elapsedSec > 0 && elapsedSec < 86400) {
+        // Validate elapsed time is reasonable (between 30 seconds and 24 hours)
+        if (elapsedSec > 30 && elapsedSec < 86400) {
           durationCell = `<span title="Actual elapsed time" style="color: #2d8c2d; font-weight: bold;">${formatDuration(elapsedSec)}</span>`;
         } else {
           // Fallback to planned duration if elapsed time is invalid
