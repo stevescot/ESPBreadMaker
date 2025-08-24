@@ -46,13 +46,129 @@ function formatDateTime(ts) {
   return date + ' ' + time;
 }
 
+// ---- Non-Stacking Status Polling Manager ----
+// Prevents multiple concurrent status requests from stacking up
+class StatusPollingManager {
+  constructor() {
+    this.isPolling = false;
+    this.pollInterval = null;
+    this.callbacks = new Set();
+    this.lastStatus = null;
+    this.pollIntervalMs = 3000; // Default interval
+  }
+
+  // Add a callback function that will receive status updates
+  addCallback(callback) {
+    this.callbacks.add(callback);
+  }
+
+  // Remove a callback function
+  removeCallback(callback) {
+    this.callbacks.delete(callback);
+  }
+
+  // Start polling with the specified interval
+  startPolling(intervalMs = 3000) {
+    this.pollIntervalMs = intervalMs;
+    
+    // Clear any existing interval
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+    }
+    
+    // Start immediate poll
+    this.pollOnce();
+    
+    // Set up interval for future polls
+    this.pollInterval = setInterval(() => {
+      this.pollOnce();
+    }, this.pollIntervalMs);
+    
+    console.log(`[STATUS-POLL] Started polling every ${intervalMs}ms`);
+  }
+
+  // Stop polling
+  stopPolling() {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+    console.log('[STATUS-POLL] Stopped polling');
+  }
+
+  // Perform a single poll (only if not already polling)
+  async pollOnce() {
+    if (this.isPolling) {
+      console.log('[STATUS-POLL] Skipping poll - previous request still in progress');
+      return this.lastStatus; // Return cached status
+    }
+
+    this.isPolling = true;
+    
+    try {
+      const response = await fetch('/status');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const status = await response.json();
+      this.lastStatus = status;
+      
+      // Call all registered callbacks with the new status
+      this.callbacks.forEach(callback => {
+        try {
+          callback(status);
+        } catch (error) {
+          console.error('[STATUS-POLL] Callback error:', error);
+        }
+      });
+      
+      return status;
+    } catch (error) {
+      console.error('[STATUS-POLL] Failed to fetch status:', error);
+      // Still call callbacks with null status to let them handle the error
+      this.callbacks.forEach(callback => {
+        try {
+          callback(null, error);
+        } catch (callbackError) {
+          console.error('[STATUS-POLL] Callback error during error handling:', callbackError);
+        }
+      });
+      return null;
+    } finally {
+      this.isPolling = false;
+    }
+  }
+
+  // Get the last cached status without making a new request
+  getLastStatus() {
+    return this.lastStatus;
+  }
+}
+
+// Global status polling manager instance
+window.statusPollingManager = new StatusPollingManager();
+
 // ---- Status Polling ----
 function pollStatusAndRenderIcons(iconRow, intervalMs=2000) {
-  function poll() {
-    fetch('/status').then(r => r.json()).then(status => renderIcons(status, iconRow));
+  function renderIconsCallback(status) {
+    if (status) {
+      renderIcons(status, iconRow);
+    }
   }
-  poll();
-  return setInterval(poll, intervalMs);
+  
+  // Add callback to global manager
+  window.statusPollingManager.addCallback(renderIconsCallback);
+  
+  // Start polling if not already started, or update interval if needed
+  if (!window.statusPollingManager.pollInterval || window.statusPollingManager.pollIntervalMs !== intervalMs) {
+    window.statusPollingManager.startPolling(intervalMs);
+  }
+  
+  // Return a cleanup function
+  return () => {
+    window.statusPollingManager.removeCallback(renderIconsCallback);
+  };
 }
 
 // ---- Shared Device Icons ----

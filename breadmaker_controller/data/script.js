@@ -528,12 +528,26 @@ function updateStatusInternal(s) {
   if (s && typeof s.wifiRssi !== 'undefined') {
     updateWifiIcon(s.wifiRssi, s.wifiConnected !== false);
   }
-  // If no status object provided, fetch it from server
+  // If no status object provided, use cached status or trigger a poll
   if (!s || typeof s !== 'object') {
-    fetch('/status')
-      .then(r => r.json())
-      .then(data => updateStatusInternal(data))
-      .catch(err => console.error('Failed to fetch status:', err));
+    // Try to get cached status first
+    if (window.statusPollingManager && window.statusPollingManager.getLastStatus()) {
+      updateStatusInternal(window.statusPollingManager.getLastStatus());
+      return;
+    }
+    
+    // If no cached status available, trigger a single poll
+    if (window.statusPollingManager) {
+      window.statusPollingManager.pollOnce().then(data => {
+        if (data) updateStatusInternal(data);
+      });
+    } else {
+      // Fallback for older browsers
+      fetch('/status')
+        .then(r => r.json())
+        .then(data => updateStatusInternal(data))
+        .catch(err => console.error('Failed to fetch status:', err));
+    }
     return;
   }
   
@@ -575,11 +589,14 @@ function updateStatusInternal(s) {
   
   // ---- Plan Summary (stages table) ----
   // Ensure programs are loaded before showing plan summary for fermentation calculations
+  console.log('Status update - checking programs for plan summary. cachedPrograms:', !!window.cachedPrograms, 'program name:', s.program);
   if (window.cachedPrograms) {
     showPlanSummary(s);
   } else if (typeof s.program === "string" && s.program.length > 0) {
+    console.log('Programs not loaded, fetching before showing plan summary');
     fetchProgramsOnce(() => showPlanSummary(s));
   } else {
+    console.log('No program specified, showing default plan summary');
     showPlanSummary(s); // Still show even without program for "No program selected" message
   }
   
@@ -602,11 +619,29 @@ function updateStatusInternal(s) {
   if (s.stage !== 'Idle' && s.running) {
     btnPauseResume.style.display = '';
     btnPauseResume.textContent = 'Pause';
-    btnPauseResume.onclick = () => fetch('/pause').then(r => r.json()).then(window.updateStatus);
+    btnPauseResume.onclick = () => {
+      fetch('/pause').then(r => r.json()).then(status => {
+        // Trigger an immediate status update instead of calling updateStatus directly
+        if (window.statusPollingManager) {
+          window.statusPollingManager.pollOnce();
+        } else {
+          window.updateStatus(status);
+        }
+      });
+    };
   } else if (s.stage !== 'Idle' && !s.running) {
     btnPauseResume.style.display = '';
     btnPauseResume.textContent = 'Resume';
-    btnPauseResume.onclick = () => fetch('/resume').then(r => r.json()).then(window.updateStatus);
+    btnPauseResume.onclick = () => {
+      fetch('/resume').then(r => r.json()).then(status => {
+        // Trigger an immediate status update instead of calling updateStatus directly
+        if (window.statusPollingManager) {
+          window.statusPollingManager.pollOnce();
+        } else {
+          window.updateStatus(status);
+        }
+      });
+    };
   } else {
     btnPauseResume.style.display = 'none';
   }
@@ -984,8 +1019,10 @@ function hideLoadingIndicator() {
 }
 
 function showPlanSummary(s) {
+  console.log('showPlanSummary called with status:', s);
   const planSummary = document.getElementById('planSummary');
   if (!planSummary || !s || !s.program) {
+    console.log('showPlanSummary: missing planSummary div, status, or program');
     if (planSummary) {
       hideLoadingIndicator();
       planSummary.innerHTML = '<i>No bread program selected.</i>';
@@ -1068,10 +1105,7 @@ function showPlanSummary(s) {
       }
       // Only show calendar if we can calculate timing and this stage requires user interaction
       let stEnd = null;
-      if (predictedEnd) {
-        // Use firmware-provided end time
-        stEnd = predictedEnd;
-      } else if (stStart && predictedDurationMin) {
+      if (stStart && predictedDurationMin) {
         // Calculate end time from firmware-provided duration
         stEnd = new Date(stStart.getTime() + (predictedDurationMin * 60000));
       } else if (stStart) {
@@ -1455,17 +1489,32 @@ window.addEventListener('DOMContentLoaded', () => {
   fetchProgramsOnce(() => {
     // Populate program selector after programs are loaded
     populateProgramSelect();
-    // Immediately update status after programs are loaded
-    window.updateStatus();
-    // Set up periodic status updates to keep everything in sync
-    setInterval(() => {
-      fetch('/status')
-        .then(r => r.json())
-        .then(s => {
-          window.updateStatus(s);
-        })
-        .catch(err => console.error('Status poll failed:', err));
-    }, 3000);
+    
+    // Set up status polling with the centralized manager (prevents stacking)
+    if (window.statusPollingManager) {
+      // Add our main status update callback
+      window.statusPollingManager.addCallback((status, error) => {
+        if (status) {
+          window.updateStatus(status);
+        } else if (error) {
+          console.error('Status update failed:', error);
+        }
+      });
+      
+      // Start polling every 3 seconds
+      window.statusPollingManager.startPolling(3000);
+    } else {
+      // Fallback for older browsers or if common.js isn't loaded
+      console.warn('[MAIN] StatusPollingManager not available, using fallback polling');
+      setInterval(() => {
+        fetch('/status')
+          .then(r => r.json())
+          .then(s => {
+            window.updateStatus(s);
+          })
+          .catch(err => console.error('Status poll failed:', err));
+      }, 3000);
+    }
   });
 
   // Manual Mode toggle logic
