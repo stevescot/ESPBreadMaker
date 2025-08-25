@@ -422,20 +422,19 @@ function updateStageProgress(currentStage, statusData) {
         }
       }
     } else if (!isIdle && i > activeIdx) {
-      // Show planned duration for future stages using new duration-based data
+      // Show planned duration for future stages using firmware predictions
       const stage = customStages[i];
       let plannedDuration = stage.min * 60; // Default to raw duration
       
-      // Use server-provided planned durations if available (already fermentation-adjusted)
-      if (Array.isArray(statusData.stagePlannedSeconds) && statusData.stagePlannedSeconds[i] > 0) {
-        plannedDuration = statusData.stagePlannedSeconds[i];
-      } else if (Array.isArray(statusData.stageRemainingSeconds) && statusData.stageRemainingSeconds[i] > 0) {
-        // Fallback to remaining time data
-        plannedDuration = statusData.stageRemainingSeconds[i];
+      // Use firmware's predictedStageEndTimes if available (already fermentation-adjusted)
+      if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.predictedStageEndTimes[i-1]) {
+        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.predictedStageEndTimes[i-1];
+      } else if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.programStart && i === 0) {
+        // For first stage, use programStart as reference
+        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.programStart;
       }
       
-      // Only show duration if it's reasonable (between 1 minute and 48 hours)
-      if (plannedDuration > 60 && plannedDuration < 172800) {
+      if (plannedDuration > 0) {
         const span = document.createElement('span');
         span.className = 'stage-planned';
         span.textContent = ' (' + formatDuration(plannedDuration) + ')';
@@ -528,26 +527,12 @@ function updateStatusInternal(s) {
   if (s && typeof s.wifiRssi !== 'undefined') {
     updateWifiIcon(s.wifiRssi, s.wifiConnected !== false);
   }
-  // If no status object provided, use cached status or trigger a poll
+  // If no status object provided, fetch it from server
   if (!s || typeof s !== 'object') {
-    // Try to get cached status first
-    if (window.statusPollingManager && window.statusPollingManager.getLastStatus()) {
-      updateStatusInternal(window.statusPollingManager.getLastStatus());
-      return;
-    }
-    
-    // If no cached status available, trigger a single poll
-    if (window.statusPollingManager) {
-      window.statusPollingManager.pollOnce().then(data => {
-        if (data) updateStatusInternal(data);
-      });
-    } else {
-      // Fallback for older browsers
-      fetch('/status')
-        .then(r => r.json())
-        .then(data => updateStatusInternal(data))
-        .catch(err => console.error('Failed to fetch status:', err));
-    }
+    fetch('/status')
+      .then(r => r.json())
+      .then(data => updateStatusInternal(data))
+      .catch(err => console.error('Failed to fetch status:', err));
     return;
   }
   
@@ -589,14 +574,11 @@ function updateStatusInternal(s) {
   
   // ---- Plan Summary (stages table) ----
   // Ensure programs are loaded before showing plan summary for fermentation calculations
-  console.log('Status update - checking programs for plan summary. cachedPrograms:', !!window.cachedPrograms, 'program name:', s.program);
   if (window.cachedPrograms) {
     showPlanSummary(s);
   } else if (typeof s.program === "string" && s.program.length > 0) {
-    console.log('Programs not loaded, fetching before showing plan summary');
     fetchProgramsOnce(() => showPlanSummary(s));
   } else {
-    console.log('No program specified, showing default plan summary');
     showPlanSummary(s); // Still show even without program for "No program selected" message
   }
   
@@ -619,29 +601,11 @@ function updateStatusInternal(s) {
   if (s.stage !== 'Idle' && s.running) {
     btnPauseResume.style.display = '';
     btnPauseResume.textContent = 'Pause';
-    btnPauseResume.onclick = () => {
-      fetch('/pause').then(r => r.json()).then(status => {
-        // Trigger an immediate status update instead of calling updateStatus directly
-        if (window.statusPollingManager) {
-          window.statusPollingManager.pollOnce();
-        } else {
-          window.updateStatus(status);
-        }
-      });
-    };
+    btnPauseResume.onclick = () => fetch('/pause').then(r => r.json()).then(window.updateStatus);
   } else if (s.stage !== 'Idle' && !s.running) {
     btnPauseResume.style.display = '';
     btnPauseResume.textContent = 'Resume';
-    btnPauseResume.onclick = () => {
-      fetch('/resume').then(r => r.json()).then(status => {
-        // Trigger an immediate status update instead of calling updateStatus directly
-        if (window.statusPollingManager) {
-          window.statusPollingManager.pollOnce();
-        } else {
-          window.updateStatus(status);
-        }
-      });
-    };
+    btnPauseResume.onclick = () => fetch('/resume').then(r => r.json()).then(window.updateStatus);
   } else {
     btnPauseResume.style.display = 'none';
   }
@@ -1019,10 +983,8 @@ function hideLoadingIndicator() {
 }
 
 function showPlanSummary(s) {
-  console.log('showPlanSummary called with status:', s);
   const planSummary = document.getElementById('planSummary');
   if (!planSummary || !s || !s.program) {
-    console.log('showPlanSummary: missing planSummary div, status, or program');
     if (planSummary) {
       hideLoadingIndicator();
       planSummary.innerHTML = '<i>No bread program selected.</i>';
@@ -1076,36 +1038,54 @@ function showPlanSummary(s) {
     let summary = '<table class="plan-summary-table"><tr><th>Stage</th><th>Temp</th><th>Mix Pattern</th><th>Duration</th><th>Instructions</th><th>Calendar</th></tr>';
 
     // --- Use firmware-provided timing data ---
-    // Use new duration-based arrays (eliminates timestamp arithmetic issues)
-    
+    // Use firmware-provided predicted stage end times (already fermentation-adjusted)
+    const predictedStageEndTimes = Array.isArray(s.predictedStageEndTimes) ? s.predictedStageEndTimes : null;
+
     prog.customStages.forEach((st, i) => {
       const color = st.color || palette[i % palette.length];
       let calCell = '';
       // Use actual start time if available (stage has started), otherwise use estimated time
       let stStart = null;
-      if (Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i] > 1640995200) {
-        // Stage has actually started - use actual time (only if timestamp is valid - after 2022)
+      if (Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i] > 0) {
+        // Stage has actually started - use actual time
         stStart = new Date(s.actualStageStartTimes[i] * 1000);
-      } else if (Array.isArray(s.stageStartTimes) && s.stageStartTimes[i] && s.stageStartTimes[i] > 1640995200) {
-        // Stage hasn't started yet - use estimated time (only if valid)
+      } else if (Array.isArray(s.stageStartTimes) && s.stageStartTimes[i]) {
+        // Stage hasn't started yet - use estimated time
         stStart = new Date(s.stageStartTimes[i] * 1000);
       } else if (!s.running && s.fermentationFactor > 0) {
-        // Preview: use now for first stage
+        // Preview: use now or previous stage end time from firmware predictions
         if (i === 0) {
           stStart = new Date();
+        } else if (predictedStageEndTimes && predictedStageEndTimes[i-1]) {
+          stStart = new Date(predictedStageEndTimes[i-1] * 1000);
         }
       }
       
-      // Use duration-based data (much simpler and more reliable than timestamp arithmetic)
+      // Use firmware-provided predicted stage end times and durations
+      let predictedEnd = null;
       let predictedDurationMin = null;
-      if (Array.isArray(s.stagePlannedSeconds) && s.stagePlannedSeconds[i] > 0) {
-        predictedDurationMin = s.stagePlannedSeconds[i] / 60; // Convert seconds to minutes
-      } else if (Array.isArray(s.stageRemainingSeconds) && s.stageRemainingSeconds[i] > 0) {
-        predictedDurationMin = s.stageRemainingSeconds[i] / 60; // Convert seconds to minutes
+      if (predictedStageEndTimes && predictedStageEndTimes[i]) {
+        predictedEnd = new Date(predictedStageEndTimes[i] * 1000);
+        // For duration, use difference between this and previous stage end (or start)
+        if (i === 0) {
+          // First stage: duration is end - start (use stStart if available)
+          if (stStart) {
+            predictedDurationMin = (predictedStageEndTimes[0] - (stStart.getTime() / 1000)) / 60;
+          }
+        } else {
+          predictedDurationMin = (predictedStageEndTimes[i] - predictedStageEndTimes[i-1]) / 60;
+        }
+        // Only keep predictedDurationMin if it's a valid positive number
+        if (typeof predictedDurationMin !== 'number' || isNaN(predictedDurationMin) || predictedDurationMin < 0) {
+          predictedDurationMin = null; // Clear invalid predictions
+        }
       }
       // Only show calendar if we can calculate timing and this stage requires user interaction
       let stEnd = null;
-      if (stStart && predictedDurationMin) {
+      if (predictedEnd) {
+        // Use firmware-provided end time
+        stEnd = predictedEnd;
+      } else if (stStart && predictedDurationMin) {
         // Calculate end time from firmware-provided duration
         stEnd = new Date(stStart.getTime() + (predictedDurationMin * 60000));
       } else if (stStart) {
@@ -1176,10 +1156,10 @@ function showPlanSummary(s) {
       let durationCell = '';
       if (skipped) {
         durationCell = `<span title="Skipped stage">Skipped</span>`;
-      } else if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i] > 1640995200) {
-        // For completed stages, calculate actual duration (only if timestamp is valid - after 2022)
+      } else if (rowClass === 'done' && Array.isArray(s.actualStageStartTimes) && s.actualStageStartTimes[i] && s.actualStageStartTimes[i] > 0) {
+        // For completed stages, calculate actual duration
         let elapsedSec = 0;
-        if (s.actualStageStartTimes[i+1] && s.actualStageStartTimes[i+1] > 1640995200) {
+        if (s.actualStageStartTimes[i+1] && s.actualStageStartTimes[i+1] > 0) {
           // Next stage started - use that as end time (only if both timestamps are valid)
           elapsedSec = (s.actualStageStartTimes[i+1] - s.actualStageStartTimes[i]);
         } else if (i === currentStageIdx - 1 && typeof s.programStartTime === 'number' && typeof s.stageStartTime === 'number') {
@@ -1190,8 +1170,8 @@ function showPlanSummary(s) {
           elapsedSec = (s.customStageStart / 1000 - s.actualStageStartTimes[i]);
         }
         
-        // Validate elapsed time is reasonable (between 30 seconds and 24 hours)
-        if (elapsedSec > 30 && elapsedSec < 86400) {
+        // Validate elapsed time is reasonable (between 0 and 24 hours)
+        if (elapsedSec > 0 && elapsedSec < 86400) {
           durationCell = `<span title="Actual elapsed time" style="color: #2d8c2d; font-weight: bold;">${formatDuration(elapsedSec)}</span>`;
         } else {
           // Fallback to planned duration if elapsed time is invalid
@@ -1489,32 +1469,17 @@ window.addEventListener('DOMContentLoaded', () => {
   fetchProgramsOnce(() => {
     // Populate program selector after programs are loaded
     populateProgramSelect();
-    
-    // Set up status polling with the centralized manager (prevents stacking)
-    if (window.statusPollingManager) {
-      // Add our main status update callback
-      window.statusPollingManager.addCallback((status, error) => {
-        if (status) {
-          window.updateStatus(status);
-        } else if (error) {
-          console.error('Status update failed:', error);
-        }
-      });
-      
-      // Start polling every 3 seconds
-      window.statusPollingManager.startPolling(3000);
-    } else {
-      // Fallback for older browsers or if common.js isn't loaded
-      console.warn('[MAIN] StatusPollingManager not available, using fallback polling');
-      setInterval(() => {
-        fetch('/status')
-          .then(r => r.json())
-          .then(s => {
-            window.updateStatus(s);
-          })
-          .catch(err => console.error('Status poll failed:', err));
-      }, 3000);
-    }
+    // Immediately update status after programs are loaded
+    window.updateStatus();
+    // Set up periodic status updates to keep everything in sync
+    setInterval(() => {
+      fetch('/status')
+        .then(r => r.json())
+        .then(s => {
+          window.updateStatus(s);
+        })
+        .catch(err => console.error('Status poll failed:', err));
+    }, 3000);
   });
 
   // Manual Mode toggle logic

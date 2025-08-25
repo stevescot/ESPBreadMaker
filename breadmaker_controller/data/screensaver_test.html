@@ -127,15 +127,7 @@
             logDiv.scrollTop = logDiv.scrollHeight;
         }
 
-        let isCheckingStatus = false;
-
         async function checkStatus() {
-            if (isCheckingStatus) {
-                log('Skipping status check - request already in progress');
-                return;
-            }
-            
-            isCheckingStatus = true;
             try {
                 log('Checking screensaver status...');
                 const response = await fetch('/api/display/screensaver/status');
@@ -148,8 +140,6 @@
                 log(`Status: ${data.active ? 'ACTIVE' : 'INACTIVE'}`);
             } catch (error) {
                 log(`Error checking status: ${error.message}`);
-            } finally {
-                isCheckingStatus = false;
             }
         }
 

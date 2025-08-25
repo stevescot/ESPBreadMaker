@@ -91,13 +91,6 @@ void setBuzzer(bool on) {
   buzzActive = on; if (on) buzzStart = millis();
 }
 void outputsManagerInit() {
-  // CRITICAL: Set all pins to LOW BEFORE configuring as outputs
-  // This prevents brief HIGH state during GPIO initialization
-  digitalWrite(PIN_HEATER, LOW);
-  digitalWrite(PIN_MOTOR, LOW);
-  digitalWrite(PIN_LIGHT, LOW);
-  digitalWrite(PIN_BUZZER, LOW);
-  
   // Set pin modes for all outputs (digital only)
   pinMode(PIN_HEATER, OUTPUT);
   pinMode(PIN_MOTOR, OUTPUT);

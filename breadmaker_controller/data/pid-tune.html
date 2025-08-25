@@ -533,56 +533,7 @@
   </div>
 
   <!-- JavaScript Files -->
-  <script src="script.js"></script>
+  <script src="common.js"></script>
   <script src="pid-tune.js"></script>
-  <script>
-  // Live PID/Temp Control Monitoring - Optimized for reduced load
-  let livePollInterval = null;
-  let isLivePolling = false;
-  
-  async function pollLivePidStatus() {
-    if (isLivePolling) return; // Prevent overlapping requests
-    isLivePolling = true;
-    
-    try {
-      // Use lightweight PID status endpoint instead of full status
-      const resp = await fetch('/api/pid_status');
-      if (!resp.ok) return;
-      const data = await resp.json();
-      
-      // Update only essential live values to reduce DOM manipulation
-      document.getElementById('liveKp').textContent = data.kp ?? '--';
-      document.getElementById('liveKi').textContent = data.ki ?? '--';
-      document.getElementById('liveKd').textContent = data.kd ?? '--';
-      document.getElementById('liveSetpoint').textContent = data.setpoint ?? '--';
-      document.getElementById('liveOutput').textContent = data.pid_output ?? '--';
-      document.getElementById('liveCurrentTemp').textContent = data.temperature ?? '--';
-      document.getElementById('liveRawTemp').textContent = data.rawTemperature ?? '--';
-      
-      // Update less critical values less frequently (every other poll)
-      if (Math.random() < 0.5) {
-        document.getElementById('liveSampleTime').textContent = data.pid_sample_time ?? data.temp_sample_interval_ms ?? '--';
-        document.getElementById('liveWindowSize').textContent = data.window_size_ms ?? '--';
-        document.getElementById('liveOnTime').textContent = data.on_time ?? '--';
-        document.getElementById('liveTempAlpha').textContent = data.temp_alpha ?? '--';
-        document.getElementById('liveTempInterval').textContent = data.temp_sample_interval ?? '--';
-        document.getElementById('liveManualMode').textContent = data.manualMode ?? '--';
-        document.getElementById('livePhase').textContent = data.phase ?? '--';
-        document.getElementById('liveHeater').textContent = data.heater ?? '--';
-        document.getElementById('livePidP').textContent = data.pidP ?? '--';
-        document.getElementById('livePidI').textContent = data.pidI ?? '--';
-        document.getElementById('livePidD').textContent = data.pidD ?? '--';
-      }
-    } catch (e) {
-      // Ignore errors
-    } finally {
-      isLivePolling = false;
-    }
-  }
-  
-  // Start with much slower update rate (10 seconds) to reduce server load
-  livePollInterval = setInterval(pollLivePidStatus, 10000);
-  window.addEventListener('DOMContentLoaded', pollLivePidStatus);
-  </script>
 </body>
 </html>

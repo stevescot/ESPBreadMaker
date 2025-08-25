@@ -732,63 +732,6 @@ void streamStatusJson(Print& out) {
           out.print("\"stageReadyAt\":0");
         }
         out.print(",");
-        
-        // === NEW: Duration-based stage data (eliminates timestamp arithmetic issues) ===
-        // Stage planned durations (with fermentation adjustments)
-        out.print("\"stagePlannedSeconds\":[");
-        for (int i = 0; i < 20; i++) {
-          if (i > 0) out.print(",");
-          
-          if (i < cachedProgram->customStages.size()) {
-            const CustomStage& stage = cachedProgram->customStages[i];
-            unsigned long plannedDuration = stage.min * 60; // Base duration in seconds
-            
-            // Apply fermentation adjustment if this is a fermentation stage
-            if (stage.isFermentation) {
-              plannedDuration = getAdjustedStageTimeMs(plannedDuration * 1000, true) / 1000;
-            }
-            
-            out.printf("%lu", plannedDuration);
-          } else {
-            out.print("0");
-          }
-        }
-        out.print("],");
-        
-        // Stage remaining seconds (0 for past stages, actual remaining for current/future)
-        out.print("\"stageRemainingSeconds\":[");
-        if (programState.isRunning) {
-          for (int i = 0; i < 20; i++) {
-            if (i > 0) out.print(",");
-            
-            if (i < cachedProgram->customStages.size()) {
-              if (i < programState.customStageIdx) {
-                // Past stage - 0 remaining
-                out.print("0");
-              } else if (i == programState.customStageIdx) {
-                // Current stage - use calculated timeLeft
-                out.printf("%lu", adjustedTimeLeft);
-              } else {
-                // Future stage - use planned duration (with fermentation adjustment)
-                const CustomStage& stage = cachedProgram->customStages[i];
-                unsigned long plannedDuration = stage.min * 60;
-                if (stage.isFermentation) {
-                  plannedDuration = getAdjustedStageTimeMs(plannedDuration * 1000, true) / 1000;
-                }
-                out.printf("%lu", plannedDuration);
-              }
-            } else {
-              out.print("0");
-            }
-          }
-        } else {
-          // Not running - all zeros
-          for (int i = 0; i < 20; i++) {
-            if (i > 0) out.print(",");
-            out.print("0");
-          }
-        }
-        out.print("],");
       } else {
         out.print("\"stage\":\"Idle\",");
         out.print("\"stageIdx\":0,");
@@ -888,6 +831,19 @@ void streamStatusJson(Print& out) {
   out.printf("\"fermentScheduledElapsed\":%.1f,", fermentState.scheduledElapsedSeconds);
   out.printf("\"fermentRealElapsed\":%.1f,", fermentState.realElapsedSeconds);
   out.printf("\"fermentAccumulatedMinutes\":%.2f,", fermentState.accumulatedFermentMinutes);
+  
+  // === Predicted Stage End Times (Fermentation-Adjusted) ===
+  out.print("\"predictedStageEndTimes\":[");
+  if (fermentCache.isValid && programState.activeProgramId >= 0) {
+    Program* p = getActiveProgramMutable();
+    if (p && p->customStages.size() > 0) {
+      for (size_t i = 0; i < p->customStages.size() && i < 20; i++) {
+        if (i > 0) out.print(",");
+        out.printf("%lu", fermentCache.cachedStageEndTimes[i]);
+      }
+    }
+  }
+  out.print("],");
   
   // === Predicted Program End Time ===
   out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)fermentCache.cachedProgramEndTime);

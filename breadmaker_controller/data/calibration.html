@@ -90,15 +90,7 @@
       }, 3000);
     }
 
-    let isLoadingCalib = false;
-
     function loadCalib() {
-      if (isLoadingCalib) {
-        console.log('[CALIB] Skipping load - request in progress');
-        return;
-      }
-      
-      isLoadingCalib = true;
       fetch('/api/calibration')
         .then(r => r.json())
         .then(d => {
@@ -112,9 +104,6 @@
           console.error('Failed to load calibration:', err);
           document.getElementById('rawReading').textContent = 'Error';
           document.getElementById('currentTemp').textContent = 'Error';
-        })
-        .finally(() => {
-          isLoadingCalib = false;
         });
     }
 

@@ -1247,6 +1247,167 @@ void homeAssistantEndpoint(WebServer& server) {
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
         
+        // CYCLING OPTIMIZATION: Rotate through different data sections to reduce processing load
+        static int cycleCounter = 0;
+        cycleCounter = (cycleCounter + 1) % 4;  // Cycle through 4 different data sets
+        
+        // Stream JSON directly to avoid memory allocation issues
+        char buffer[64];  // Stack allocated buffer for numeric conversions
+        server.sendContent("{");
+        
+        // Always include basic status and temperature (Home Assistant needs this)
+        server.sendContent("\"state\":\"");
+        server.sendContent(programState.isRunning ? "running" : "idle");
+        server.sendContent("\",\"temperature\":");
+        sprintf(buffer, "%.1f", getAveragedTemperature());
+        server.sendContent(buffer);
+        server.sendContent(",\"setpoint\":");
+        sprintf(buffer, "%.1f", pid.Setpoint);
+        server.sendContent(buffer);
+        server.sendContent(",\"heater\":");
+        server.sendContent(outputStates.heater ? "true" : "false");
+        server.sendContent(",");
+        
+        // Cycle through different data sections based on request count
+        switch (cycleCounter) {
+            case 0: // Basic outputs and program info
+                server.sendContent("\"motor\":");
+                server.sendContent(outputStates.motor ? "true" : "false");
+                server.sendContent(",\"light\":");
+                server.sendContent(outputStates.light ? "true" : "false");
+                server.sendContent(",\"buzzer\":");
+                server.sendContent(outputStates.buzzer ? "true" : "false");
+                server.sendContent(",\"manual_mode\":");
+                server.sendContent(programState.manualMode ? "true" : "false");
+                server.sendContent(",");
+                
+                // Program and stage info - USE CACHED PROGRAM
+                if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount() && cachedProgram) {
+                    server.sendContent("\"program\":\"");
+                    server.sendContent(cachedProgramName.c_str());
+                    server.sendContent("\",");
+                    
+                    if (programState.isRunning && programState.customStageIdx < cachedProgram->customStages.size()) {
+                        server.sendContent("\"stage\":\"");
+                        server.sendContent(cachedProgram->customStages[programState.customStageIdx].label.c_str());
+                        server.sendContent("\",");
+                        
+                        // Calculate current stage remaining time only
+                        unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+                        unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                           cachedProgram->customStages[programState.customStageIdx].isFermentation);
+                        unsigned long stageTimeLeft = (stageTimeMs / 1000) - elapsed;
+                        if (stageTimeLeft < 0) stageTimeLeft = 0;
+                        
+                        server.sendContent("\"stage_time_left\":");
+                        sprintf(buffer, "%lu", stageTimeLeft / 60); // Current stage time only (in minutes)
+                        server.sendContent(buffer);
+                        server.sendContent(",");
+                    } else {
+                        server.sendContent("\"stage\":\"Idle\",\"stage_time_left\":0,");
+                    }
+                } else {
+                    server.sendContent("\"program\":\"\",\"stage\":\"Idle\",\"stage_time_left\":0,");
+                }
+                break;
+                
+            case 1: // Health and performance metrics
+                server.sendContent("\"health\":{");
+                server.sendContent("\"uptime_sec\":");
+                sprintf(buffer, "%lu", millis() / 1000);
+                server.sendContent(buffer);
+                server.sendContent(",\"free_heap\":");
+                server.sendContent(String(ESP.getFreeHeap()));
+                server.sendContent(",\"max_loop_time_us\":");
+                server.sendContent(String(getMaxLoopTime()));
+                server.sendContent(",\"avg_loop_time_us\":");
+                server.sendContent(String(getAverageLoopTime()));
+                server.sendContent(",\"wifi_reconnects\":");
+                server.sendContent(String(getWifiReconnectCount()));
+                server.sendContent("},");
+                break;
+                
+            case 2: // PID controller detailed information
+                server.sendContent("\"pid\":{\"kp\":");
+                server.sendContent(String(pid.Kp, 6));
+                server.sendContent(",\"ki\":");
+                server.sendContent(String(pid.Ki, 6));
+                server.sendContent(",\"kd\":");
+                server.sendContent(String(pid.Kd, 6));
+                server.sendContent(",\"output\":");
+                server.sendContent(String(pid.Output, 2));
+                server.sendContent(",\"input\":");
+                server.sendContent(String(pid.Input, 2));
+                server.sendContent(",\"pid_p\":");
+                server.sendContent(String(pid.pidP, 3));
+                server.sendContent(",\"pid_i\":");
+                server.sendContent(String(pid.pidI, 3));
+                server.sendContent(",\"pid_d\":");
+                server.sendContent(String(pid.pidD, 3));
+                server.sendContent(",\"raw_temp\":");
+                server.sendContent(String(readTemperature(), 1));
+                server.sendContent("},");
+                break;
+                
+            case 3: // Network and filesystem info
+                server.sendContent("\"network\":{\"connected\":");
+                server.sendContent(WiFi.status() == WL_CONNECTED ? "true" : "false");
+                server.sendContent(",\"ssid\":\"");
+                server.sendContent(wifiCache.getSSID());
+                server.sendContent("\",\"rssi\":");
+                server.sendContent(String(wifiCache.getRSSI()));
+                server.sendContent(",\"ip\":\"");
+                server.sendContent(wifiCache.getIPString());
+                server.sendContent("\"},");
+                server.sendContent("\"filesystem\":{\"usedBytes\":");
+                server.sendContent(String(FFat.usedBytes()));
+                server.sendContent(",\"totalBytes\":");
+                server.sendContent(String(FFat.totalBytes()));
+                server.sendContent(",\"freeBytes\":");
+                server.sendContent(String(FFat.totalBytes() - FFat.usedBytes()));
+                server.sendContent("},");
+                break;
+        }
+        
+        // Always include timing information (Home Assistant needs this)
+        time_t now = time(nullptr);
+        time_t stageReadyAt = 0;
+        time_t programReadyAt = 0;
+        bool ntpValid = (now > 1640995200); // Jan 1, 2022 - if before this, NTP failed
+        
+        if (programState.isRunning && programState.activeProgramId >= 0 && cachedProgram) {
+            if (cachedProgram && programState.customStageIdx < cachedProgram->customStages.size()) {
+                unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
+                unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation);
+                int timeLeftSec = (stageTimeMs / 1000) - elapsed;
+                if (timeLeftSec < 0) timeLeftSec = 0;
+                
+                if (ntpValid && timeLeftSec > 0) {
+                    stageReadyAt = now + timeLeftSec;
+                    programReadyAt = now + timeLeftSec;
+                    for (size_t i = programState.customStageIdx + 1; i < cachedProgram->customStages.size(); ++i) {
+                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(cachedProgram->customStages[i].min * 60 * 1000, 
+                                                                                  cachedProgram->customStages[i].isFermentation);
+                        programReadyAt += adjustedDurationMs / 1000;
+                    }
+                }
+            }
+        }
+        
+        server.sendContent("\"stage_ready_at\":");
+        sprintf(buffer, "%lu", (unsigned long)stageReadyAt);
+        server.sendContent(buffer);
+        server.sendContent(",\"program_ready_at\":");
+        sprintf(buffer, "%lu", (unsigned long)programReadyAt);
+        server.sendContent(buffer);
+        server.sendContent(",\"cycle\":");
+        sprintf(buffer, "%d", cycleCounter);
+        server.sendContent(buffer);
+        
+        // Remove the old massive content and replace with cycling system
+        /*
+        // OLD MASSIVE CONTENT REPLACED WITH CYCLING SYSTEM ABOVE
         // Stream JSON directly to avoid memory allocation issues
         char buffer[64];  // Stack allocated buffer for numeric conversions
         server.sendContent("{");
@@ -1527,6 +1688,11 @@ void homeAssistantEndpoint(WebServer& server) {
         server.sendContent("}");
         
         server.sendContent("}"); // Close health section
+        server.sendContent("}"); // Close main object
+        server.sendContent(""); // End chunked response
+        */
+        
+        // Close JSON properly
         server.sendContent("}"); // Close main object
         server.sendContent(""); // End chunked response
     });
@@ -2324,6 +2490,68 @@ void otaEndpoints(WebServer& server) {
             server.send(400, "application/json", "{\"error\":\"Missing PID parameters (kp, ki, kd required)\"}");
         }
     });
+
+    // Update specific profile by temperature range
+    server.on("/api/pid_profile/update_range", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile/update_range GET requested"));
+        
+        if (server.hasArg("temp") && server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
+            double targetTemp = server.arg("temp").toDouble();
+            double kp = server.arg("kp").toDouble();
+            double ki = server.arg("ki").toDouble();
+            double kd = server.arg("kd").toDouble();
+            unsigned long windowMs = server.hasArg("windowMs") ? server.arg("windowMs").toInt() : 10000;
+            
+            // Apply range constraints
+            if (kp < 0.001 || kp > 1000.0 || ki < 0.0 || ki > 10.0 || kd < 0.0 || kd > 1000.0) {
+                server.send(400, "application/json", "{\"error\":\"PID parameters out of valid range\"}");
+                return;
+            }
+            
+            // Find the profile that matches this temperature
+            bool profileFound = false;
+            for (auto& profile : pid.profiles) {
+                if (targetTemp >= profile.minTemp && targetTemp < profile.maxTemp) {
+                    // Update the profile
+                    profile.kp = kp;
+                    profile.ki = ki;
+                    profile.kd = kd;
+                    profile.windowMs = windowMs;
+                    profileFound = true;
+                    
+                    if (debugSerial) {
+                        Serial.printf("[DEBUG] Updated profile '%s' (%.1f-%.1f°C): Kp=%.6f, Ki=%.6f, Kd=%.3f\n",
+                                      profile.name.c_str(), profile.minTemp, profile.maxTemp, kp, ki, kd);
+                    }
+                    
+                    // If this is the currently active profile, update the current PID too
+                    if (pid.Setpoint >= profile.minTemp && pid.Setpoint < profile.maxTemp) {
+                        pid.Kp = kp;
+                        pid.Ki = ki;
+                        pid.Kd = kd;
+                        if (pid.controller) {
+                            pid.controller->SetTunings(kp, ki, kd);
+                        }
+                        if (debugSerial) Serial.println(F("[DEBUG] Also updated current PID parameters (active profile)"));
+                    }
+                    break;
+                }
+            }
+            
+            if (profileFound) {
+                savePIDProfiles(); // Save changes to file
+                server.send(200, "application/json", 
+                           "{\"status\":\"ok\",\"kp\":" + String(kp, 6) + 
+                           ",\"ki\":" + String(ki, 6) + 
+                           ",\"kd\":" + String(kd, 3) + 
+                           ",\"temp\":" + String(targetTemp) + "}");
+            } else {
+                server.send(404, "application/json", "{\"error\":\"No profile found for temperature " + String(targetTemp) + "°C\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing required parameters (temp, kp, ki, kd)\"}");
+        }
+    });
 }
 
 // Main registration function
@@ -2689,6 +2917,79 @@ void registerWebEndpoints(WebServer& server) {
         server.sendContent(String(millis() / 1000));
         server.sendContent(",\"free_heap\":");
         server.sendContent(String(ESP.getFreeHeap()));
+        server.sendContent("}");
+        server.sendContent("");  // End chunked response
+    });
+
+    // PID Debug endpoint - Enhanced debugging information for PID tuning interfaces
+    server.on("/api/pid_debug", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_debug requested"));
+        
+        server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        server.sendHeader("Pragma", "no-cache");
+        server.sendHeader("Expires", "-1");
+        
+        // Use streaming response to avoid memory allocations
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        
+        // Stream JSON directly without String concatenation
+        server.sendContent("{");
+        server.sendContent("\"current_temp\":");
+        server.sendContent(String(getAveragedTemperature(), 2));
+        server.sendContent(",\"raw_temp\":");
+        server.sendContent(String(readTemperature(), 2));
+        server.sendContent(",\"setpoint\":");
+        server.sendContent(String(pid.Setpoint, 1));
+        server.sendContent(",\"output\":");
+        server.sendContent(String(pid.Output, 6));
+        server.sendContent(",\"heater_state\":");
+        server.sendContent(outputStates.heater ? "true" : "false");
+        server.sendContent(",\"motor_state\":");
+        server.sendContent(outputStates.motor ? "true" : "false");
+        server.sendContent(",\"manual_mode\":");
+        server.sendContent(programState.isRunning ? "false" : "true");  // Manual mode when not running program
+        server.sendContent(",\"kp\":");
+        server.sendContent(String(pid.Kp, 6));
+        server.sendContent(",\"ki\":");
+        server.sendContent(String(pid.Ki, 6));
+        server.sendContent(",\"kd\":");
+        server.sendContent(String(pid.Kd, 6));
+        
+        // PID component terms for debugging
+        server.sendContent(",\"pid_p\":");
+        server.sendContent(String(pid.pidP, 3));
+        server.sendContent(",\"pid_i\":");
+        server.sendContent(String(pid.pidI, 3));
+        server.sendContent(",\"pid_d\":");
+        server.sendContent(String(pid.pidD, 3));
+        
+        // Window timing information for heater control debugging
+        if (pid.controller) {
+            unsigned long windowSize = 30000;  // Default window size (30 seconds)
+            unsigned long now = millis();
+            unsigned long windowStart = now - (now % windowSize);
+            unsigned long windowElapsed = now - windowStart;
+            unsigned long onTime = (unsigned long)(pid.Output * windowSize);
+            
+            server.sendContent(",\"window_size_ms\":");
+            server.sendContent(String(windowSize));
+            server.sendContent(",\"window_elapsed_ms\":");
+            server.sendContent(String(windowElapsed));
+            server.sendContent(",\"on_time_ms\":");
+            server.sendContent(String(onTime));
+        }
+        
+        // Sample time information
+        server.sendContent(",\"sample_time_ms\":");
+        server.sendContent("1000");  // 1 second default sample time
+        
+        // System information
+        server.sendContent(",\"uptime_sec\":");
+        server.sendContent(String(millis() / 1000));
+        server.sendContent(",\"free_heap\":");
+        server.sendContent(String(ESP.getFreeHeap()));
+        
         server.sendContent("}");
         server.sendContent("");  // End chunked response
     });

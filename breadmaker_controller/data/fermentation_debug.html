@@ -109,15 +109,8 @@
     <script>
         let autoRefreshInterval = null;
         let isAutoRefreshing = false;
-        let isRefreshing = false;
 
         function refreshDebugInfo() {
-            if (isRefreshing) {
-                console.log('[FERMENT-DEBUG] Skipping refresh - request in progress');
-                return;
-            }
-            
-            isRefreshing = true;
             document.getElementById('debug-content').innerHTML = '<p>Loading debug information...</p>';
             
             fetch('/api/debug/fermentation')
@@ -126,9 +119,6 @@
                 .catch(error => {
                     document.getElementById('debug-content').innerHTML = 
                         `<div class="error">Error loading debug info: ${error.message}</div>`;
-                })
-                .finally(() => {
-                    isRefreshing = false;
                 });
         }
 

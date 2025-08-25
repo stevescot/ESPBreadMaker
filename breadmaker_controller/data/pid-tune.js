@@ -19,6 +19,42 @@ function fetchWithTimeout(url, timeout = 10000) {
   });
 }
 
+// Simple message display function (standalone version)
+function showMessage(message, type = 'info', duration = 3000) {
+  // Remove any existing messages
+  const existing = document.querySelector('.pid-message');
+  if (existing) existing.remove();
+  
+  // Create new message element
+  const msg = document.createElement('div');
+  msg.className = `pid-message pid-message-${type}`;
+  msg.textContent = message;
+  msg.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    padding: 12px 20px;
+    border-radius: 4px;
+    max-width: 300px;
+    font-size: 14px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    ${type === 'error' ? 'background: #f44336; color: white;' : ''}
+    ${type === 'warning' ? 'background: #ff9800; color: white;' : ''}
+    ${type === 'success' ? 'background: #4caf50; color: white;' : ''}
+    ${type === 'info' ? 'background: #2196f3; color: white;' : ''}
+  `;
+  
+  document.body.appendChild(msg);
+  
+  // Auto-remove after duration
+  if (duration > 0) {
+    setTimeout(() => {
+      if (msg.parentNode) msg.remove();
+    }, duration);
+  }
+}
+
 // --- Real-time chart update logic ---
 let updateInProgress = false;
 async function updateStatus() {
@@ -31,7 +67,7 @@ async function updateStatus() {
   updateInProgress = true;
   try {
     // Use lightweight PID status endpoint instead of full status
-    const response = await fetchWithTimeout('/api/pid_status', 5000);
+    const response = await fetchWithTimeout('/api/pid_status', 10000);
     if (!response.ok) throw new Error('Failed to fetch PID status');
     const data = await response.json();
     
@@ -161,6 +197,68 @@ async function updateStatus() {
     if (document.getElementById('dynamicRestartStatus')) {
       document.getElementById('dynamicRestartStatus').textContent = '--';
     }
+
+    // --- Update Live PID Status Section ---
+    // Update live PID values from the same data to avoid extra requests
+    if (document.getElementById('liveKp')) {
+      document.getElementById('liveKp').textContent = data.kp !== undefined ? data.kp.toFixed(3) : '--';
+    }
+    if (document.getElementById('liveKi')) {
+      document.getElementById('liveKi').textContent = data.ki !== undefined ? data.ki.toFixed(6) : '--';
+    }
+    if (document.getElementById('liveKd')) {
+      document.getElementById('liveKd').textContent = data.kd !== undefined ? data.kd.toFixed(3) : '--';
+    }
+    if (document.getElementById('liveSetpoint')) {
+      document.getElementById('liveSetpoint').textContent = data.setpoint !== undefined ? data.setpoint.toFixed(1) : '--';
+    }
+    if (document.getElementById('liveOutput')) {
+      document.getElementById('liveOutput').textContent = data.pid_output !== undefined ? data.pid_output.toFixed(3) : '--';
+    }
+    if (document.getElementById('liveCurrentTemp')) {
+      document.getElementById('liveCurrentTemp').textContent = data.temperature !== undefined ? data.temperature.toFixed(1) : '--';
+    }
+    if (document.getElementById('liveRawTemp')) {
+      document.getElementById('liveRawTemp').textContent = rawTemperature !== undefined ? rawTemperature.toFixed(1) : '--';
+    }
+    if (document.getElementById('liveSampleTime')) {
+      document.getElementById('liveSampleTime').textContent = data.pid_sample_time || data.temp_sample_interval_ms || '--';
+    }
+    if (document.getElementById('liveWindowSize')) {
+      document.getElementById('liveWindowSize').textContent = data.window_size_ms || '--';
+    }
+    if (document.getElementById('liveOnTime')) {
+      document.getElementById('liveOnTime').textContent = data.on_time || '--';
+    }
+    if (document.getElementById('liveTempAlpha')) {
+      document.getElementById('liveTempAlpha').textContent = data.temp_alpha || '--';
+    }
+    if (document.getElementById('liveTempInterval')) {
+      document.getElementById('liveTempInterval').textContent = data.temp_sample_interval || '--';
+    }
+    if (document.getElementById('liveManualMode')) {
+      document.getElementById('liveManualMode').textContent = data.manualMode !== undefined ? (data.manualMode ? 'Yes' : 'No') : '--';
+    }
+    if (document.getElementById('livePhase')) {
+      let phase = '--';
+      if (data.manualMode === true) phase = 'Manual';
+      else if (data.running === true) phase = 'Program';
+      else if (data.manualMode === false && data.running === false) phase = 'Idle';
+      document.getElementById('livePhase').textContent = phase;
+    }
+    if (document.getElementById('liveHeater')) {
+      document.getElementById('liveHeater').textContent = data.heater !== undefined ? (data.heater ? 'ON' : 'OFF') : '--';
+    }
+    if (document.getElementById('livePidP')) {
+      document.getElementById('livePidP').textContent = data.pid_p !== undefined ? data.pid_p.toFixed(3) : '--';
+    }
+    if (document.getElementById('livePidI')) {
+      document.getElementById('livePidI').textContent = data.pid_i !== undefined ? data.pid_i.toFixed(3) : '--';
+    }
+    if (document.getElementById('livePidD')) {
+      document.getElementById('livePidD').textContent = data.pid_d !== undefined ? data.pid_d.toFixed(3) : '--';
+    }
+
     // Manual Mode
     if (document.getElementById('manualMode')) {
       document.getElementById('manualMode').textContent =
@@ -334,8 +432,8 @@ function clearPIDGraph() {
 
 function startStatusUpdates() {
   if (updateInterval) clearInterval(updateInterval);
-  // Reduced to 10 seconds to minimize server load
-  updateInterval = setInterval(updateStatus, 10000);
+  // Reduced from 2000ms to 4000ms for better performance
+  updateInterval = setInterval(updateStatus, 4000);
 }
 
 function stopStatusUpdates() {
@@ -578,33 +676,30 @@ async function updatePIDParams() {
     return;
   }
 
-  console.log('Updating PID params (memory-efficient):', { kp, ki, kd, tempAlpha, tempUpdateInterval });
+  console.log('Updating PID params (profile-aware):', { kp, ki, kd, tempAlpha, tempUpdateInterval });
 
   try {
-    // Use simple GET requests to avoid JSON parsing overhead and memory issues
-    // This is much safer for ESP32 with limited RAM
+    showMessage('Updating PID profile... (1/3)', 'info');
     
-    showMessage('Updating parameters... (1/2)', 'info');
+    // First, update the PID profile for the current temperature range
+    // This ensures the changes persist across auto-switching cycles
+    await updatePIDProfileOnController('current', { kp, ki, kd, windowMs: 10000 });
     
-    // First, update PID parameters using GET (much more memory-efficient)
-    // Use the new profile-aware endpoint that updates the correct temperature profile
-    const pidUrl = `/api/pid_profile/update_current?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}`;
-    console.log('PID profile update URL:', pidUrl);
+    showMessage('Updating controller parameters... (2/3)', 'info');
+    
+    // Then update the current controller parameters for immediate effect
+    const pidUrl = `/api/pid_params?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}`;
+    console.log('PID update URL:', pidUrl);
     
     const pidResponse = await fetchWithTimeout(pidUrl, 8000);
     
     if (!pidResponse.ok) {
-      throw new Error(`PID profile update failed: ${pidResponse.status}`);
+      throw new Error(`Current PID update failed: ${pidResponse.status}`);
     }
     
-    const pidResult = await pidResponse.json();
-    if (pidResult.profile_updated) {
-      console.log('Profile updated successfully for current setpoint');
-    }
+    showMessage('Updating temperature settings... (3/3)', 'info');
     
-    showMessage('Updating parameters... (2/2)', 'info');
-    
-    // Then update temperature averaging parameters
+    // Finally update temperature averaging parameters
     const tempUrl = `/api/pid_params?temp_alpha=${tempAlpha.toFixed(3)}&temp_interval=${tempUpdateInterval}`;
     console.log('Temp update URL:', tempUrl);
     
@@ -615,14 +710,14 @@ async function updatePIDParams() {
     }
     
     // Success!
-    showMessage('All parameters updated successfully! Profile updated for current temperature range.', 'success');
+    showMessage('All parameters updated successfully! Profile changes will persist across temperature ranges.', 'success');
     
     // Update display values
     document.getElementById('currentKp').textContent = kp.toFixed(6);
     document.getElementById('currentKi').textContent = ki.toFixed(6);
     document.getElementById('currentKd').textContent = kd.toFixed(6);
     
-    // Small delay before refreshing status to avoid overwhelming ESP32
+    // Small delay before refreshing status to show the updated profile
     setTimeout(() => {
       if (typeof updateStatus === 'function') {
         updateStatus();
@@ -631,7 +726,7 @@ async function updatePIDParams() {
     
   } catch (error) {
     console.error('Parameter update error:', error);
-    showMessage('Error updating parameters: ' + error.message + ' (ESP32 may have run out of memory)', 'error');
+    showMessage('Error updating parameters: ' + error.message, 'error');
   }
 }
 
@@ -810,6 +905,10 @@ document.addEventListener('DOMContentLoaded', async function() {
   if (!profilesLoaded) {
     console.error('Failed to load PID profiles from device - using empty array');
     showMessage('Failed to load PID profiles from device', 'error', 5000);
+  } else {
+    // Initialize range management after profiles are loaded
+    console.log('PID profiles loaded successfully, initializing range management...');
+    initializeRangeManagement();
   }
   
   // Check if Chart.js is loaded
@@ -839,14 +938,14 @@ document.addEventListener('DOMContentLoaded', async function() {
   // Initialize method description
   updateAutoTuneMethodDescription();
   
-  // Start periodic status updates (much slower when not testing)
+  // Start periodic status updates (slower when not testing)
   setInterval(() => {
     // Don't start new updates if there's already a faster update interval running
     // or if an update is already in progress to prevent request backup
     if (!updateInterval && !updateInProgress) {
       updateStatus();
     }
-  }, 15000); // Increased to 15 seconds for minimal server load
+  }, 8000); // Increased from 5000ms to 8000ms for reduced load
   
   console.log('PID Controller Tuning page initialized');
 });
@@ -855,11 +954,6 @@ document.addEventListener('DOMContentLoaded', async function() {
 document.addEventListener('DOMContentLoaded', function() {
   // Wait a bit for other initializations to complete
   setTimeout(() => {
-    // Initialize range management
-    if (typeof initializeRangeManagement === 'function') {
-      initializeRangeManagement();
-    }
-    
     // Add setpoint change handler for auto-detection
     const targetSetpoint = document.getElementById('targetSetpoint');
     if (targetSetpoint) {
@@ -867,7 +961,7 @@ document.addEventListener('DOMContentLoaded', function() {
       targetSetpoint.addEventListener('input', detectRangeFromSetpoint);
     }
     
-    console.log('Range management initialization completed');
+    console.log('Range management event handlers initialized');
   }, 500);
 });
 
@@ -900,7 +994,7 @@ let pidProfilesLoaded = false;
 // Load PID profiles from the device
 async function loadPIDProfiles() {
   try {
-    const response = await fetchWithTimeout('/api/pid_profiles', 5000);
+    const response = await fetchWithTimeout('/api/pid_profiles', 10000);
     if (!response.ok) throw new Error('Failed to fetch PID profiles');
     const data = await response.json();
     
@@ -1033,11 +1127,19 @@ function loadTemperatureRangeSettings() {
 // Update the range configuration status display
 function updateRangeStatusDisplay() {
   const statusGrid = document.getElementById('rangeStatusGrid');
+  if (!statusGrid) {
+    console.error('rangeStatusGrid element not found');
+    return;
+  }
+  
+  console.log('Updating range status display with', temperaturePIDSuggestions.length, 'profiles');
   statusGrid.innerHTML = '';
 
   temperaturePIDSuggestions.forEach((range, index) => {
     const status = rangeConfigurationStatus[range.key];
     const isActive = index === currentRangeIndex;
+    
+    console.log(`Creating status item for ${range.name} (${range.key})`, status);
     
     const statusItem = document.createElement('div');
     statusItem.className = `range-status-item ${status.configured ? 'configured' : 'unconfigured'} ${isActive ? 'active' : ''}`;
@@ -1057,6 +1159,8 @@ function updateRangeStatusDisplay() {
     
     statusGrid.appendChild(statusItem);
   });
+  
+  console.log('Range status display updated, grid now has', statusGrid.children.length, 'items');
 }
 
 // Navigate between temperature ranges
@@ -1165,18 +1269,29 @@ function startRangeConfigurationWizard() {
 // Update PID profile on the controller (API call)
 async function updatePIDProfileOnController(rangeKey, params) {
   try {
-    const response = await fetch(`/api/pid_profile/set?kp=${params.kp}&ki=${params.ki}&kd=${params.kd}&windowMs=${params.windowMs}`, {
+    // Get current setpoint to determine which profile to update
+    const currentTemp = document.getElementById('targetSetpoint')?.value || pid.Setpoint || 27.0;
+    
+    const response = await fetch(`/api/pid_profile/update_range?temp=${currentTemp}&kp=${params.kp}&ki=${params.ki}&kd=${params.kd}&windowMs=${params.windowMs}`, {
       method: 'GET'
     });
     
     if (!response.ok) {
-      throw new Error('Failed to update PID profile on controller');
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Failed to update PID profile on controller');
     }
     
-    console.log(`Updated ${rangeKey} profile on controller`);
+    const result = await response.json();
+    console.log(`Updated profile for ${currentTemp}°C:`, result);
+    showMessage(`Profile updated successfully for ${currentTemp}°C range`, 'success', 3000);
+    
+    // Reload profiles to refresh the display
+    await loadPIDProfiles();
+    updateRangeStatusDisplay();
+    
   } catch (error) {
     console.error('Error updating PID profile:', error);
-    showMessage('Warning: Failed to save profile to controller', 'warning', 3000);
+    showMessage(`Failed to save profile: ${error.message}`, 'error', 5000);
   }
 }
 
@@ -1209,12 +1324,19 @@ async function loadRangeConfigurationStatus() {
 
 // Initialize range management when page loads
 function initializeRangeManagement() {
+  console.log('initializeRangeManagement called with', temperaturePIDSuggestions.length, 'profiles');
   loadRangeConfigurationStatus();
   updateRangeStatusDisplay();
+  console.log('Range status display updated');
   
   // Set initial setpoint to current baking range
-  document.getElementById('targetSetpoint').value = '125';
-  detectRangeFromSetpoint();
+  const targetSetpoint = document.getElementById('targetSetpoint');
+  if (targetSetpoint) {
+    targetSetpoint.value = '125';
+    detectRangeFromSetpoint();
+  } else {
+    console.warn('targetSetpoint element not found');
+  }
 }
 
 // Apply temperature range settings to PID controls

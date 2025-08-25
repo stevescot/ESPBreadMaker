@@ -97,15 +97,7 @@
     <script>
         let otaData = {};
         
-        let isUpdatingOTAStatus = false;
-
         function updateOTAStatus() {
-            if (isUpdatingOTAStatus) {
-                console.log('[OTA] Skipping status update - request in progress');
-                return;
-            }
-            
-            isUpdatingOTAStatus = true;
             fetch('/api/ota/status')
                 .then(response => response.json())
                 .then(data => {
@@ -140,9 +132,6 @@
                 .catch(error => {
                     console.error('Error fetching OTA status:', error);
                     document.getElementById('otaStatus').textContent = 'Error loading OTA status';
-                })
-                .finally(() => {
-                    isUpdatingOTAStatus = false;
                 });
         }
         
