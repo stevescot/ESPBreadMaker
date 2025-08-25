@@ -74,4 +74,8 @@ bool isProgramValid(int programId); // Check if program exists and is valid
 Program* getActiveProgramMutable(); // Get active program reference for modification
 int findProgramIdByName(const String& name); // Find program ID by name
 
+// --- Cache invalidation functions ---
+void invalidateProgramCache(int programId); // Invalidate cache for specific program
+void invalidateProgramMetadataCache(); // Invalidate metadata cache and reload
+
 #endif // PROGRAMS_MANAGER_H

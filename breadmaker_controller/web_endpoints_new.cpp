@@ -116,6 +116,10 @@ extern void shortBeep();
 extern bool ensureProgramLoaded(int programId);
 extern Program* getActiveProgramMutable();
 
+// Cache invalidation function declarations
+extern void invalidateProgramCache(int programId);
+extern void invalidateProgramMetadataCache();
+
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
 #endif
@@ -253,6 +257,24 @@ void coreEndpoints(WebServer& server) {
                         Serial.printf("[UPLOAD] Failed: %s\n", upload.filename.c_str());
                     } else {
                         Serial.printf("[UPLOAD] Success: %s (%u bytes)\n", upload.filename.c_str(), upload.totalSize);
+                        
+                        // Check if this is a program file and invalidate cache accordingly
+                        String filename = upload.filename;
+                        if (!filename.startsWith("/")) filename = "/" + filename;
+                        
+                        if (filename == "/programs.json" || filename == "/programs_index.json") {
+                            if (debugSerial) Serial.println("[UPLOAD] Program metadata file updated, invalidating cache");
+                            invalidateProgramMetadataCache();
+                        } else if (filename.startsWith("/program_") && filename.endsWith(".json")) {
+                            // Extract program ID from filename (e.g., "/program_1.json" -> 1)
+                            String idStr = filename.substring(9, filename.length() - 5); // Remove "/program_" and ".json"
+                            int programId = idStr.toInt();
+                            if (programId >= 0) {
+                                if (debugSerial) Serial.printf("[UPLOAD] Program file %d updated, invalidating cache\n", programId);
+                                invalidateProgramCache(programId);
+                            }
+                        }
+                        
                         // Server-side splitting removed - client now handles individual file uploads
                     }
                 }
@@ -279,10 +301,12 @@ void coreEndpoints(WebServer& server) {
             response += "<h2>Available Endpoints:</h2>";
             response += "<ul>";
             response += "<li><a href='/status'>GET /status</a> - System status JSON</li>";
+            response += "<li><a href='/debug/fs'>GET /debug/fs</a> - Filesystem debug info</li>";
             response += "<li><a href='/api/firmware_info'>GET /api/firmware_info</a> - Firmware info</li>";
             response += "</ul>";
             response += "<h2>Next Steps:</h2>";
             response += "<ol>";
+            response += "<li>Check filesystem status at <a href='/debug/fs'>/debug/fs</a></li>";
             response += "<li>Upload web files using: <code>.\\upload_files_esp32.ps1 -Port COM3</code></li>";
             response += "</ol>";
             response += "</body></html>";
@@ -324,6 +348,64 @@ void coreEndpoints(WebServer& server) {
         server.sendContent(FIRMWARE_BUILD_DATE);
         server.sendContent("\",\"version\":\"ESP32-WebServer\"}");
         server.sendContent(""); // End chunked response
+    });
+    
+    // Debug endpoint to check filesystem - OPTIMIZED FOR STREAMING
+    server.on("/debug/fs", HTTP_GET, [&](){
+        // Use streaming to avoid large string buffer
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "text/plain", "");
+        
+        server.sendContent("=== DEBUG TEST ===\n");
+        server.sendContent("This is a test line\n\n");
+        
+        server.sendContent("FATFS Debug:\n\n");
+        
+        // Check if FATFS is mounted
+        if (!FFat.begin()) {
+            server.sendContent("ERROR: FATFS not mounted!\n");
+        } else {
+            server.sendContent("✓ FFat mounted successfully\n");
+            server.sendContent("Total: ");
+            server.sendContent(String(FFat.totalBytes()));
+            server.sendContent(" bytes\n");
+            server.sendContent("Used: ");
+            server.sendContent(String(FFat.usedBytes()));
+            server.sendContent(" bytes\n");
+            server.sendContent("Free: ");
+            server.sendContent(String(FFat.totalBytes() - FFat.usedBytes()));
+            server.sendContent(" bytes\n\n");
+            
+            // List files in root
+            server.sendContent("Root directory contents:\n");
+            File root = FFat.open("/");
+            if (root) {
+                File file = root.openNextFile();
+                while (file) {
+                    server.sendContent(file.isDirectory() ? "[DIR] " : "[FILE] ");
+                    server.sendContent(String(file.name()));
+                    if (!file.isDirectory()) {
+                        server.sendContent(" (");
+                        server.sendContent(String(file.size()));
+                        server.sendContent(" bytes)");
+                    }
+                    server.sendContent("\n");
+                    file = root.openNextFile();
+                }
+                root.close();
+            } else {
+                server.sendContent("ERROR: Cannot open root directory\n");
+            }
+            
+            // Test specific files
+            server.sendContent("\nFile existence tests:\n");
+            server.sendContent("/index.html: ");
+            server.sendContent(FFat.exists("/index.html") ? "EXISTS" : "NOT FOUND");
+            server.sendContent("\n");
+            server.sendContent("index.html: ");
+            server.sendContent(FFat.exists("index.html") ? "EXISTS" : "NOT FOUND");
+            server.sendContent("\n");
+        }
     });
     
     // Simple file upload interface
@@ -1104,7 +1186,7 @@ void pidProfileEndpoints(WebServer& server) {
     server.on("/api/pid_profiles", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profiles GET requested"));
         
-        // Create JSON response with actual PID profiles using chunked response to avoid String concatenation
+        // Create JSON response with actual PID profiles using streaming to avoid String concatenation
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
         
@@ -1113,18 +1195,26 @@ void pidProfileEndpoints(WebServer& server) {
             if (i > 0) server.sendContent(",");
             const PIDProfile& profile = pid.profiles[i];
             server.sendContent("{");
-            server.sendContent("\"name\":\"" + profile.name + "\",");
-            server.sendContent("\"minTemp\":" + String(profile.minTemp) + ",");
-            server.sendContent("\"maxTemp\":" + String(profile.maxTemp) + ",");
-            server.sendContent("\"kp\":" + String(profile.kp, 6) + ",");
-            server.sendContent("\"ki\":" + String(profile.ki, 6) + ",");
-            server.sendContent("\"kd\":" + String(profile.kd, 6) + ",");
-            server.sendContent("\"windowMs\":" + String(profile.windowMs) + ",");
-            server.sendContent("\"description\":\"" + profile.description + "\"");
-            server.sendContent("}");
+            server.sendContent("\"name\":\"");
+            server.sendContent(profile.name);
+            server.sendContent("\",\"minTemp\":");
+            server.sendContent(String(profile.minTemp));
+            server.sendContent(",\"maxTemp\":");
+            server.sendContent(String(profile.maxTemp));
+            server.sendContent(",\"kp\":");
+            server.sendContent(String(profile.kp, 6));
+            server.sendContent(",\"ki\":");
+            server.sendContent(String(profile.ki, 6));
+            server.sendContent(",\"kd\":");
+            server.sendContent(String(profile.kd, 6));
+            server.sendContent(",\"windowMs\":");
+            server.sendContent(String(profile.windowMs));
+            server.sendContent(",\"description\":\"");
+            server.sendContent(profile.description);
+            server.sendContent("\"}");
         }
-        server.sendContent("],");
-        server.sendContent("\"autoSwitching\":" + String(pid.autoSwitching ? "true" : "false"));
+        server.sendContent("],\"autoSwitching\":");
+        server.sendContent(pid.autoSwitching ? "true" : "false");
         server.sendContent("}");
         server.sendContent("");  // End chunked response
     });
@@ -2063,6 +2153,25 @@ void otaEndpoints(WebServer& server) {
         }
     });
 
+    // Test endpoint that does try to save settings
+    server.on("/api/settings/force-save", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[DEBUG] Force save requested"));
+        
+        server.send(200, "text/plain", "SAVING");
+        
+        // Try the save operation that might be causing crashes
+        pendingSettingsSaveTime = millis() + 1000; // Schedule save in 1 second
+        
+        if (debugSerial) Serial.println(F("[DEBUG] Save scheduled"));
+    });
+    
+    // Minimal debug endpoint to test file system - temporarily disabled
+    /*
+    server.on("/api/settings/test-fs", HTTP_GET, [&](){
+        // Commented out for debugging
+    });
+    */
+
     // Simple safety toggle endpoint
     server.on("/api/safety/toggle", HTTP_POST, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/safety/toggle POST requested"));
@@ -2211,56 +2320,6 @@ void otaEndpoints(WebServer& server) {
             
             server.send(200, "application/json", "{\"status\":\"ok\",\"kp\":" + String(kp) + ",\"ki\":" + String(ki) + ",\"kd\":" + String(kd) + "}");
             if (debugSerial) Serial.printf("[DEBUG] PID parameters updated via GET: Kp=%.3f, Ki=%.3f, Kd=%.3f\n", kp, ki, kd);
-        } else {
-            server.send(400, "application/json", "{\"error\":\"Missing PID parameters (kp, ki, kd required)\"}");
-        }
-    });
-
-    // Update current profile based on setpoint temperature
-    server.on("/api/pid_profile/update_current", HTTP_GET, [&](){
-        if (debugSerial) Serial.println(F("[DEBUG] /api/pid_profile/update_current GET requested"));
-        
-        if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
-            double kp = server.arg("kp").toDouble();
-            double ki = server.arg("ki").toDouble();
-            double kd = server.arg("kd").toDouble();
-            
-            // Find the profile that matches the current setpoint
-            bool profileUpdated = false;
-            for (size_t i = 0; i < pid.profiles.size(); i++) {
-                if (pid.Setpoint >= pid.profiles[i].minTemp && pid.Setpoint <= pid.profiles[i].maxTemp) {
-                    // Update the profile parameters
-                    pid.profiles[i].kp = kp;
-                    pid.profiles[i].ki = ki;
-                    pid.profiles[i].kd = kd;
-                    profileUpdated = true;
-                    
-                    if (debugSerial) Serial.printf("[DEBUG] Updated profile '%s' (%.0f-%.0f°C): Kp=%.6f, Ki=%.6f, Kd=%.2f\n", 
-                                                   pid.profiles[i].name.c_str(), 
-                                                   pid.profiles[i].minTemp, 
-                                                   pid.profiles[i].maxTemp, 
-                                                   kp, ki, kd);
-                    break;
-                }
-            }
-            
-            if (profileUpdated) {
-                // Update current PID parameters
-                pid.Kp = kp;
-                pid.Ki = ki;
-                pid.Kd = kd;
-                
-                // Update controller if it exists
-                if (pid.controller) {
-                    pid.controller->SetTunings(kp, ki, kd);
-                }
-                
-                savePIDProfiles(); // Save changes to file
-                
-                server.send(200, "application/json", "{\"status\":\"ok\",\"kp\":" + String(kp) + ",\"ki\":" + String(ki) + ",\"kd\":" + String(kd) + ",\"profile_updated\":true}");
-            } else {
-                server.send(400, "application/json", "{\"error\":\"No profile found for current setpoint " + String(pid.Setpoint) + "°C\"}");
-            }
         } else {
             server.send(400, "application/json", "{\"error\":\"Missing PID parameters (kp, ki, kd required)\"}");
         }
@@ -2572,6 +2631,18 @@ void registerWebEndpoints(WebServer& server) {
     });
     
     // Handle static files (catch-all)
+    // Force save PID profiles (for testing/debugging)
+    server.on("/api/force_save_profiles", HTTP_GET, [&](){
+        savePIDProfiles();
+        server.send(200, "application/json", "{\"status\":\"profiles saved\"}");
+    });
+    
+    // Force load PID profiles (for testing/debugging)
+    server.on("/api/force_load_profiles", HTTP_GET, [&](){
+        loadPIDProfiles();
+        server.send(200, "application/json", "{\"status\":\"profiles loaded\"}");
+    });
+    
     // Lightweight status endpoint for PID tuning (excludes large arrays)
     server.on("/api/pid_status", HTTP_GET, [&](){
         if (debugSerial) Serial.println(F("[DEBUG] /api/pid_status requested"));
@@ -2580,36 +2651,44 @@ void registerWebEndpoints(WebServer& server) {
         server.sendHeader("Pragma", "no-cache");
         server.sendHeader("Expires", "-1");
         
-        // Cache expensive heap calculation (only update every 10 seconds)
-        static uint32_t cachedFreeHeap = 0;
-        static unsigned long lastHeapUpdate = 0;
-        unsigned long now = millis();
-        if (now - lastHeapUpdate > 10000 || lastHeapUpdate == 0) {
-            cachedFreeHeap = ESP.getFreeHeap();
-            lastHeapUpdate = now;
-        }
-        
-        // Send minimal JSON for PID tuning page using chunked response to avoid String concatenation
+        // Use streaming response to avoid memory allocations
         server.setContentLength(CONTENT_LENGTH_UNKNOWN);
         server.send(200, "application/json", "");
         
+        // Stream JSON directly without String concatenation
         server.sendContent("{");
-        server.sendContent("\"temperature\":" + String(getAveragedTemperature(), 1) + ",");
-        server.sendContent("\"rawTemperature\":" + String(readTemperature(), 1) + ",");
-        server.sendContent("\"setpoint\":" + String(pid.Setpoint, 1) + ",");
-        server.sendContent("\"heater\":" + String(outputStates.heater ? "true" : "false") + ",");
-        server.sendContent("\"motor\":" + String(outputStates.motor ? "true" : "false") + ",");
-        server.sendContent("\"running\":" + String(programState.isRunning ? "true" : "false") + ",");
-        server.sendContent("\"pid_kp\":" + String(pid.Kp, 6) + ",");
-        server.sendContent("\"pid_ki\":" + String(pid.Ki, 6) + ",");
-        server.sendContent("\"pid_kd\":" + String(pid.Kd, 6) + ",");
-        server.sendContent("\"pid_output\":" + String(pid.Output, 3) + ",");
-        server.sendContent("\"pid_input\":" + String(pid.Input, 1) + ",");
-        server.sendContent("\"pid_p\":" + String(pid.pidP, 3) + ",");
-        server.sendContent("\"pid_i\":" + String(pid.pidI, 3) + ",");
-        server.sendContent("\"pid_d\":" + String(pid.pidD, 3) + ",");
-        server.sendContent("\"uptime_sec\":" + String(millis() / 1000) + ",");
-        server.sendContent("\"free_heap\":" + String(cachedFreeHeap));
+        server.sendContent("\"temperature\":");
+        server.sendContent(String(getAveragedTemperature(), 1));
+        server.sendContent(",\"rawTemperature\":");
+        server.sendContent(String(readTemperature(), 1));
+        server.sendContent(",\"setpoint\":");
+        server.sendContent(String(pid.Setpoint, 1));
+        server.sendContent(",\"heater\":");
+        server.sendContent(outputStates.heater ? "true" : "false");
+        server.sendContent(",\"motor\":");
+        server.sendContent(outputStates.motor ? "true" : "false");
+        server.sendContent(",\"running\":");
+        server.sendContent(programState.isRunning ? "true" : "false");
+        server.sendContent(",\"pid_kp\":");
+        server.sendContent(String(pid.Kp, 6));
+        server.sendContent(",\"pid_ki\":");
+        server.sendContent(String(pid.Ki, 6));
+        server.sendContent(",\"pid_kd\":");
+        server.sendContent(String(pid.Kd, 6));
+        server.sendContent(",\"pid_output\":");
+        server.sendContent(String(pid.Output, 3));
+        server.sendContent(",\"pid_input\":");
+        server.sendContent(String(pid.Input, 1));
+        server.sendContent(",\"pid_p\":");
+        server.sendContent(String(pid.pidP, 3));
+        server.sendContent(",\"pid_i\":");
+        server.sendContent(String(pid.pidI, 3));
+        server.sendContent(",\"pid_d\":");
+        server.sendContent(String(pid.pidD, 3));
+        server.sendContent(",\"uptime_sec\":");
+        server.sendContent(String(millis() / 1000));
+        server.sendContent(",\"free_heap\":");
+        server.sendContent(String(ESP.getFreeHeap()));
         server.sendContent("}");
         server.sendContent("");  // End chunked response
     });

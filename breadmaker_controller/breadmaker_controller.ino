@@ -533,6 +533,18 @@ void serializeResumeStateJson(Print& f) {
     if (i > 0) f.print(',');
     f.print((unsigned long)programState.actualStageEndTimes[i]);
   }
+  f.print(F("],\"fermentationFactor\":"));
+  f.print(fermentState.fermentationFactor, 3);
+  f.print(F(",\"scheduledElapsedSeconds\":"));
+  f.print(fermentState.scheduledElapsedSeconds, 1);
+  f.print(F(",\"realElapsedSeconds\":"));
+  f.print(fermentState.realElapsedSeconds, 1);
+  f.print(F(",\"accumulatedFermentMinutes\":"));
+  f.print(fermentState.accumulatedFermentMinutes, 2);
+  f.print(F(",\"predictedCompleteTime\":"));
+  f.print((unsigned long)fermentState.predictedCompleteTime);
+  f.print(F(",\"lastFermentAdjust\":"));
+  f.print((unsigned long)fermentState.lastFermentAdjust);
   f.print(F("]}\n"));
 }
 
@@ -589,6 +601,20 @@ void loadResumeState() {
   unsigned long elapsedMixSec = doc["elapsedMixSec"] | 0;
   programState.programStartTime = doc["programStartTime"] | 0;
   bool wasRunning = doc["isRunning"] | false;
+
+  // Load fermentation state with fallback defaults
+  fermentState.fermentationFactor = doc["fermentationFactor"] | 1.0f;
+  fermentState.scheduledElapsedSeconds = doc["scheduledElapsedSeconds"] | 0.0;
+  fermentState.realElapsedSeconds = doc["realElapsedSeconds"] | 0.0;
+  fermentState.accumulatedFermentMinutes = doc["accumulatedFermentMinutes"] | 0.0;
+  fermentState.predictedCompleteTime = doc["predictedCompleteTime"] | 0UL;
+  fermentState.lastFermentAdjust = doc["lastFermentAdjust"] | 0UL;
+  
+  if (debugSerial && fermentState.fermentationFactor != 1.0f) {
+    Serial.printf("[RESUME] Restored fermentation state: factor=%.3f, scheduled=%.1fs, real=%.1fs, accum=%.2fmin\n",
+                  fermentState.fermentationFactor, fermentState.scheduledElapsedSeconds, 
+                  fermentState.realElapsedSeconds, fermentState.accumulatedFermentMinutes);
+  }
 
   // Check startup delay before resuming
   if (wasRunning && !isStartupDelayComplete()) {
@@ -1299,48 +1325,17 @@ void handleCustomStages(bool &stageJustAdvanced) {
       unsigned long nowMs = millis();
       unsigned long elapsedInCurrentStage = (programState.customStageStart > 0) ? (nowMs - programState.customStageStart) : 0UL;
       double cumulativePredictedSec = 0.0;
-      time_t now = time(nullptr);
-      bool ntpValid = (now > 1640995200); // Jan 1, 2022 - if before this, NTP failed
-      
-      // Calculate actual elapsed time for completed stages to handle manual advancement
-      double actualElapsedSec = 0.0;
-      for (size_t i = 0; i < programState.customStageIdx && i < p->customStages.size(); ++i) {
-        if (ntpValid && programState.actualStageStartTimes[i] > 0) {
-          double stageActualSec = 0.0;
-          if (programState.actualStageEndTimes[i] > 0) {
-            stageActualSec = (double)(programState.actualStageEndTimes[i] - programState.actualStageStartTimes[i]);
-          } else if (i + 1 < p->customStages.size() && programState.actualStageStartTimes[i + 1] > 0) {
-            stageActualSec = (double)(programState.actualStageStartTimes[i + 1] - programState.actualStageStartTimes[i]);
-          }
-          if (stageActualSec > 0) {
-            actualElapsedSec += stageActualSec;
-          }
-        }
-      }
-      
       for (size_t i = 0; i < p->customStages.size(); ++i) {
         CustomStage &stage = p->customStages[i];
         double plannedStageSec = (double)stage.min * 60.0;
-        
+        double adjustedStageSec = plannedStageSec;
         if (stage.isFermentation) {
           if (i < programState.customStageIdx) {
-            // Past fermentation stages: use actual time if available, otherwise estimate
-            if (ntpValid && programState.actualStageStartTimes[i] > 0) {
-              double stageActualSec = 0.0;
-              if (programState.actualStageEndTimes[i] > 0) {
-                stageActualSec = (double)(programState.actualStageEndTimes[i] - programState.actualStageStartTimes[i]);
-              } else if (i + 1 < p->customStages.size() && programState.actualStageStartTimes[i + 1] > 0) {
-                stageActualSec = (double)(programState.actualStageStartTimes[i + 1] - programState.actualStageStartTimes[i]);
-              }
-              cumulativePredictedSec += (stageActualSec > 0) ? stageActualSec : plannedStageSec;
-            } else {
-              // No timing data, estimate with Q10
-              float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
-              float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
-              float temp = fermentState.fermentLastTemp;
-              float factor = pow(q10, (baseline - temp) / 10.0);
-              cumulativePredictedSec += plannedStageSec * factor;
-            }
+            float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
+            float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
+            float temp = fermentState.fermentLastTemp;
+            float factor = pow(q10, (baseline - temp) / 10.0); // Q10: factor > 1 means slower at cooler temp
+            cumulativePredictedSec += plannedStageSec * factor; // Multiply: cooler temp = longer real time needed
           } else if (i == programState.customStageIdx) {
             // Current fermentation stage: use scheduled elapsed time
             double elapsedScheduledSec = fermentState.scheduledElapsedSeconds;
@@ -1363,17 +1358,10 @@ void handleCustomStages(bool &stageJustAdvanced) {
         }
       }
       // Check if NTP time is valid before setting predicted complete time
+      time_t now = time(nullptr);
+      bool ntpValid = (now > 1640995200); // Jan 1, 2022 - if before this, NTP failed
       if (ntpValid && programState.programStartTime > 1640995200) {
-        // If stages were manually advanced, calculate from current time instead of program start
-        if (actualElapsedSec > 0 && programState.customStageIdx > 0) {
-          // Use current time minus actual elapsed time as the effective start time
-          double remainingPredictedSec = cumulativePredictedSec - actualElapsedSec;
-          if (remainingPredictedSec < 0) remainingPredictedSec = 0;
-          fermentState.predictedCompleteTime = (unsigned long)(now + (unsigned long)(remainingPredictedSec));
-        } else {
-          // Normal case: no manual advancement
-          fermentState.predictedCompleteTime = (unsigned long)(programState.programStartTime + (unsigned long)(cumulativePredictedSec));
-        }
+        fermentState.predictedCompleteTime = (unsigned long)(programState.programStartTime + (unsigned long)(cumulativePredictedSec)); // All predicted times use Q10 multiply logic
       } else {
         fermentState.predictedCompleteTime = 0; // NTP not synced, disable timestamp predictions
       }

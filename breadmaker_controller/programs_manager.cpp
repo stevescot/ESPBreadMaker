@@ -3,6 +3,9 @@
 #include "programs_manager.h"
 #include "globals.h"
 
+// External variable declarations
+extern bool debugSerial;
+
 // --- Programs storage ---
 std::vector<ProgramMetadata> programMetadata;
 Program activeProgram;
@@ -115,7 +118,7 @@ bool loadSpecificProgram(int programId) {
     CustomStage cs;
     cs.label = st["label"].as<String>();
     cs.min = st["min"] | 0;
-    cs.temp = st["temp"].isNull() ? 0.0 : st["temp"].as<float>();
+    cs.temp = st["temp"] | 0.0;
     cs.noMix = st["noMix"] | false;
     cs.isFermentation = st["isFermentation"] | false;
     cs.instructions = st["instructions"] | String("");
@@ -408,6 +411,36 @@ bool splitProgramsJson() {
   loadProgramMetadata();
   
   return successCount > 0;
+}
+
+// --- Cache invalidation functions ---
+void invalidateProgramCache(int programId) {
+  if (debugSerial) Serial.printf("[CACHE] Invalidating cache for program %d\n", programId);
+  
+  // If this is the currently active program, unload it
+  if (activeProgram.id == programId) {
+    unloadActiveProgram();
+    if (debugSerial) Serial.printf("[CACHE] Unloaded active program %d from cache\n", programId);
+  }
+  
+  // Note: Individual program files don't affect the metadata cache
+  // Only reload metadata if this was a structural change
+}
+
+void invalidateProgramMetadataCache() {
+  if (debugSerial) Serial.println("[CACHE] Invalidating program metadata cache");
+  
+  // Clear and reload all program metadata
+  loadProgramMetadata();
+  
+  // Also unload active program since metadata might have changed
+  if (activeProgram.id != -1) {
+    int oldId = activeProgram.id;
+    unloadActiveProgram();
+    if (debugSerial) Serial.printf("[CACHE] Unloaded active program %d due to metadata cache invalidation\n", oldId);
+  }
+  
+  if (debugSerial) Serial.printf("[CACHE] Program metadata cache reloaded, %zu programs available\n", programMetadata.size());
 }
 
 

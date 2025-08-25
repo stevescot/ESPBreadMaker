@@ -7,6 +7,11 @@ breadmaker_controller/build/breadmaker_controller.ino.bin
 # Device state backups (can be reviewed before committing)
 breadmaker_controller/data/device_backup_*/
 
+# Prevent accidental upload of local program files
+breadmaker_controller/data/programs.json
+breadmaker_controller/data/programs_index.json
+breadmaker_controller/data/program_*.json
+
 # Ignore empty markdown files that might be auto-generated
 *.md
 !README.md
