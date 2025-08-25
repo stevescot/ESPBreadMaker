@@ -151,8 +151,13 @@ function addChartAnnotation(entry) {
     chartAnnotations = chartAnnotations.slice(-20);
   }
   
-  // Add visual annotation to the chart
-  const currentTime = pidData.length > 0 ? pidData.length - 1 : 0;
+  // Add visual annotation to the chart only if chartData exists
+  if (!chartData || !chartData.labels) {
+    console.log(`Chart annotation queued: ${entry.action} - ${entry.details}`);
+    return;
+  }
+  
+  const currentTime = chartData.labels.length - 1;
   const annotationId = `annotation_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
   
   const chartAnnotation = {
@@ -1012,7 +1017,7 @@ async function resetIntegralComponent() {
     showMessage('Resetting integral component...', 'info');
     
     // Reset the integral component via API
-    const response = await fetchWithTimeout('/api/pid_params?reset_integral=1', 5000);
+    const response = await fetchWithTimeout('/api/pid_params?reset_integral=1', 8000);
     
     if (!response.ok) {
       throw new Error(`Failed to reset integral component: ${response.status}`);
@@ -1021,18 +1026,26 @@ async function resetIntegralComponent() {
     showMessage('✅ Integral component reset successfully!', 'success');
     
     // Log the integral reset
-    logChange('Reset I Component', { 'Action': 'Integral windup cleared' });
+    logChange('Integral Reset', { 'Action': 'Integral windup cleared' });
     
     // Update the current display to show the reset
-    setTimeout(() => {
-      if (typeof updateStatus === 'function') {
-        updateStatus();
-      }
-    }, 1000);
+    try {
+      setTimeout(() => {
+        if (typeof updateStatus === 'function') {
+          updateStatus();
+        }
+      }, 1000);
+    } catch (timeoutError) {
+      console.warn('Non-critical timeout error:', timeoutError);
+      // Continue execution - this is not a critical error
+    }
     
   } catch (error) {
     console.error('Error resetting integral component:', error);
-    showMessage('Error resetting integral component: ' + error.message, 'error');
+    const errorMsg = error.message.includes('timeout') ? 
+      'Request timed out - please try again' : 
+      'Error resetting integral component: ' + error.message;
+    showMessage(errorMsg, 'error');
   }
 }
 
