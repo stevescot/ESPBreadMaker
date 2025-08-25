@@ -19,6 +19,13 @@ function fetchWithTimeout(url, timeout = 10000) {
   });
 }
 
+// Register Chart.js plugins after page load
+document.addEventListener('DOMContentLoaded', function() {
+  if (window.Chart && window['chartjs-plugin-annotation']) {
+    Chart.register(window['chartjs-plugin-annotation']);
+  }
+});
+
 // Simple message display function (standalone version)
 function showMessage(message, type = 'info', duration = 3000) {
   // Remove any existing messages
@@ -52,6 +59,150 @@ function showMessage(message, type = 'info', duration = 3000) {
     setTimeout(() => {
       if (msg.parentNode) msg.remove();
     }, duration);
+  }
+}
+
+// --- Change Log and Chart Annotations ---
+function logChange(action, details = {}) {
+  const timestamp = new Date();
+  const entry = {
+    time: timestamp,
+    action: action,
+    details: details,
+    chartTime: Date.now() // For chart annotation positioning
+  };
+  
+  changeLog.unshift(entry); // Add to beginning of array
+  
+  // Keep only last 50 entries
+  if (changeLog.length > 50) {
+    changeLog = changeLog.slice(0, 50);
+  }
+  
+  // Update the UI
+  updateChangeLogDisplay();
+  
+  // Add chart annotation
+  addChartAnnotation(entry);
+  
+  console.log('Logged change:', action, details);
+}
+
+function updateChangeLogDisplay() {
+  const container = document.getElementById('changeLogEntries');
+  if (!container) return;
+  
+  if (changeLog.length === 0) {
+    container.innerHTML = '<div class="log-entry" style="color: #6c757d; font-style: italic; text-align: center; padding: 20px;">No changes logged yet. Start tuning to see your adjustments here!</div>';
+    return;
+  }
+  
+  const entriesHtml = changeLog.map(entry => {
+    const timeStr = entry.time.toLocaleTimeString('en-US', { 
+      hour12: false, 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      second: '2-digit' 
+    });
+    
+    let icon = '📝';
+    let color = '#495057';
+    
+    // Assign icons and colors based on action type
+    if (entry.action.includes('Parameter')) { icon = '🔧'; color = '#007bff'; }
+    else if (entry.action.includes('Range')) { icon = '🌡️'; color = '#28a745'; }
+    else if (entry.action.includes('Test')) { icon = '🧪'; color = '#ffc107'; }
+    else if (entry.action.includes('Reset')) { icon = '🔄'; color = '#dc3545'; }
+    else if (entry.action.includes('Profile')) { icon = '📊'; color = '#6f42c1'; }
+    
+    const detailsStr = Object.keys(entry.details).length > 0 
+      ? ` - ${Object.entries(entry.details).map(([k,v]) => `${k}: ${v}`).join(', ')}`
+      : '';
+    
+    return `
+      <div class="log-entry" style="padding: 8px 12px; border-left: 3px solid ${color}; margin-bottom: 6px; background: white; border-radius: 4px; font-size: 14px;">
+        <div style="display: flex; justify-content: between; align-items: center;">
+          <span style="color: ${color}; font-weight: bold;">${icon} ${entry.action}</span>
+          <span style="color: #6c757d; font-size: 12px; margin-left: auto;">${timeStr}</span>
+        </div>
+        ${detailsStr ? `<div style="color: #6c757d; font-size: 12px; margin-top: 2px;">${detailsStr}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+  
+  container.innerHTML = entriesHtml;
+}
+
+function addChartAnnotation(entry) {
+  if (!temperatureChart) return;
+  
+  // Store annotation for tracking
+  const annotation = {
+    time: entry.chartTime,
+    label: entry.action,
+    details: entry.details,
+    color: getAnnotationColor(entry.action)
+  };
+  
+  chartAnnotations.push(annotation);
+  
+  // Keep only last 20 annotations to avoid clutter
+  if (chartAnnotations.length > 20) {
+    chartAnnotations = chartAnnotations.slice(-20);
+  }
+  
+  // Add visual annotation to the chart
+  const currentTime = pidData.length > 0 ? pidData.length - 1 : 0;
+  const annotationId = `annotation_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+  
+  const chartAnnotation = {
+    type: 'line',
+    xMin: currentTime,
+    xMax: currentTime,
+    borderColor: annotation.color,
+    borderWidth: 2,
+    borderDash: [5, 5],
+    label: {
+      display: true,
+      content: `${entry.action}`,
+      position: 'start',
+      backgroundColor: annotation.color,
+      color: 'white',
+      font: { size: 9 },
+      padding: 3,
+      rotation: 90
+    }
+  };
+  
+  // Add to chart if annotation plugin is available
+  if (temperatureChart.options.plugins && temperatureChart.options.plugins.annotation) {
+    temperatureChart.options.plugins.annotation.annotations[annotationId] = chartAnnotation;
+    temperatureChart.update('none'); // Update without animation for performance
+  }
+}
+
+function getAnnotationColor(action) {
+  if (action.includes('Parameter')) return '#007bff';
+  if (action.includes('Range')) return '#28a745';
+  if (action.includes('Test')) return '#ffc107';
+  if (action.includes('Reset')) return '#dc3545';
+  if (action.includes('Profile')) return '#6f42c1';
+  return '#6c757d';
+}
+
+function clearChangeLog() {
+  if (confirm('Clear all change log entries?')) {
+    changeLog = [];
+    chartAnnotations = [];
+    
+    // Clear chart annotations if chart exists
+    if (temperatureChart && temperatureChart.options.plugins && temperatureChart.options.plugins.annotation) {
+      temperatureChart.options.plugins.annotation.annotations = {};
+      temperatureChart.update('none');
+    }
+    
+    updateChangeLogDisplay();
+    showMessage('Change log cleared', 'info', 3000);
   }
 }
 
@@ -461,6 +612,10 @@ let autoTuneSkipStabilization = false; // Whether to skip stabilization phase
 // Ultimate gain method variables (declared in autotune file)
 let ultimateGainTest;
 
+// Change log and chart annotations
+let changeLog = [];
+let chartAnnotations = [];
+
 // Chart data
 let chartData = {
   labels: [],
@@ -542,6 +697,9 @@ function initChart() {
         legend: {
           display: true,
           position: 'top'
+        },
+        annotation: {
+          annotations: {}
         }
       },
       scales: {
@@ -687,8 +845,8 @@ async function updatePIDParams() {
     
     showMessage('Updating controller parameters... (2/3)', 'info');
     
-    // Then update the current controller parameters for immediate effect
-    const pidUrl = `/api/pid_params?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}`;
+    // Then update the current controller parameters for immediate effect and reset integral
+    const pidUrl = `/api/pid_params?kp=${kp.toFixed(6)}&ki=${ki.toFixed(6)}&kd=${kd.toFixed(6)}&reset_integral=1`;
     console.log('PID update URL:', pidUrl);
     
     const pidResponse = await fetchWithTimeout(pidUrl, 8000);
@@ -710,7 +868,16 @@ async function updatePIDParams() {
     }
     
     // Success!
-    showMessage('All parameters updated successfully! Profile changes will persist across temperature ranges.', 'success');
+    showMessage('All parameters updated successfully! Profile changes will persist and integral component was reset.', 'success');
+    
+    // Log the parameter change
+    logChange('Parameters Updated', {
+      'Kp': kp.toFixed(6),
+      'Ki': ki.toFixed(6), 
+      'Kd': kd.toFixed(6),
+      'Alpha': tempAlpha.toFixed(3),
+      'Interval': tempUpdateInterval + 'ms'
+    });
     
     // Update display values
     document.getElementById('currentKp').textContent = kp.toFixed(6);
@@ -789,6 +956,86 @@ async function loadCurrentParams() {
     showMessage('Error loading parameters: ' + error.message, 'error');
   }
 }
+
+// Reset PID parameters to safe defaults and reload profiles
+async function resetPIDToDefaults() {
+  if (!confirm('Reset PID parameters to defaults? This will:\n• Clear all profile customizations\n• Reset to factory temperature ranges\n• Restart PID controller with safe values\n\nContinue?')) {
+    return;
+  }
+  
+  try {
+    showMessage('Resetting PID to defaults...', 'info');
+    
+    // Reset via API endpoint (this should trigger profile reset)
+    const response = await fetchWithTimeout('/api/pid_profiles/reset', 8000);
+    
+    if (!response.ok) {
+      // If reset endpoint doesn't exist, use manual reset
+      throw new Error('Reset endpoint not available, using manual reset');
+    }
+    
+    showMessage('PID reset successful! Reloading page...', 'success');
+    
+    // Reload the page to refresh all data
+    setTimeout(() => {
+      location.reload();
+    }, 2000);
+    
+  } catch (error) {
+    console.warn('API reset failed, attempting manual reset:', error);
+    
+    // Manual reset - set safe default values
+    try {
+      // Set Low Temperature Range defaults
+      await updatePIDProfileOnController('low', { 
+        kp: 0.5, 
+        ki: 0.001, 
+        kd: 2.0, 
+        windowMs: 10000 
+      });
+      
+      // Reload profiles and current params
+      await loadPIDProfiles();
+      await loadCurrentParams();
+      
+      showMessage('Manual reset completed successfully!', 'success');
+      
+    } catch (manualError) {
+      showMessage('Reset failed: ' + manualError.message, 'error');
+    }
+  }
+}
+
+// Reset PID integral component to clear accumulated windup
+async function resetIntegralComponent() {
+  try {
+    showMessage('Resetting integral component...', 'info');
+    
+    // Reset the integral component via API
+    const response = await fetchWithTimeout('/api/pid_params?reset_integral=1', 5000);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to reset integral component: ${response.status}`);
+    }
+    
+    showMessage('✅ Integral component reset successfully!', 'success');
+    
+    // Log the integral reset
+    logChange('Reset I Component', { 'Action': 'Integral windup cleared' });
+    
+    // Update the current display to show the reset
+    setTimeout(() => {
+      if (typeof updateStatus === 'function') {
+        updateStatus();
+      }
+    }, 1000);
+    
+  } catch (error) {
+    console.error('Error resetting integral component:', error);
+    showMessage('Error resetting integral component: ' + error.message, 'error');
+  }
+}
+
 // Validate EWMA parameters (simplified since EWMA has fewer constraints)
 function validateEWMAParams() {
   const alpha = parseFloat(document.getElementById('tempAlpha').value);
@@ -908,7 +1155,7 @@ document.addEventListener('DOMContentLoaded', async function() {
   } else {
     // Initialize range management after profiles are loaded
     console.log('PID profiles loaded successfully, initializing range management...');
-    initializeRangeManagement();
+    await initializeRangeManagement();
   }
   
   // Check if Chart.js is loaded
@@ -954,14 +1201,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 document.addEventListener('DOMContentLoaded', function() {
   // Wait a bit for other initializations to complete
   setTimeout(() => {
-    // Add setpoint change handler for auto-detection
-    const targetSetpoint = document.getElementById('targetSetpoint');
-    if (targetSetpoint) {
-      targetSetpoint.addEventListener('change', detectRangeFromSetpoint);
-      targetSetpoint.addEventListener('input', detectRangeFromSetpoint);
-    }
-    
-    console.log('Range management event handlers initialized');
+    console.log('Range management event handlers initialized (auto-detection via controller setpoint)');
   }, 500);
 });
 
@@ -1043,56 +1283,60 @@ let currentRangeIndex = 0; // Start with first range (will be updated when profi
 let isRangeConfigurationMode = false;
 
 // Detect temperature range from setpoint and highlight it
-function detectRangeFromSetpoint() {
+async function detectRangeFromSetpoint() {
   // Ensure profiles are loaded
   if (!pidProfilesLoaded || temperaturePIDSuggestions.length === 0) {
     showMessage('PID profiles not loaded yet. Please wait...', 'warning', 3000);
     return;
   }
   
-  const setpoint = parseFloat(document.getElementById('targetSetpoint').value);
-  if (isNaN(setpoint)) {
-    showMessage('Please enter a valid temperature setpoint', 'error', 3000);
-    return;
+  try {
+    // Get setpoint from controller instead of removed UI element
+    const statusResponse = await fetchWithTimeout('/api/status', 5000);
+    const statusData = await statusResponse.json();
+    const setpoint = statusData.setpoint || statusData.stageTemperature || 27.0;
+    
+    console.log(`Detecting range for controller setpoint: ${setpoint}°C`);
+
+    // Find the appropriate temperature range
+    const detectedRange = temperaturePIDSuggestions.find(range => 
+      setpoint >= range.min && setpoint < range.max
+    );
+
+    if (!detectedRange) {
+      const minTemp = Math.min(...temperaturePIDSuggestions.map(r => r.min));
+      const maxTemp = Math.max(...temperaturePIDSuggestions.map(r => r.max));
+      showMessage(`Temperature out of supported range (${minTemp}-${maxTemp}°C)`, 'error', 3000);
+      return;
+    }
+
+    // Update the range selector to match detected range
+    document.getElementById('tempRangeSelect').value = detectedRange.key;
+  
+    // Set current range index for navigation
+    currentRangeIndex = temperaturePIDSuggestions.findIndex(range => range.key === detectedRange.key);
+    
+    // Load the range settings
+    loadTemperatureRangeSettings();
+    
+    // Update the range status display
+    updateRangeStatusDisplay();
+    
+    showMessage(`🎯 Auto-detected range: ${detectedRange.name}`, 'success', 3000);
+    
+    // Log the range detection
+    logChange('Range Auto-Detected', {
+      'Range': detectedRange.name,
+      'Setpoint': setpoint.toFixed(1) + '°C',
+      'Suggested Kp': detectedRange.kp,
+      'Suggested Ki': detectedRange.ki,
+      'Suggested Kd': detectedRange.kd
+    });
+  
+  } catch (error) {
+    console.error('Error detecting range from setpoint:', error);
+    showMessage('Error getting controller setpoint for range detection', 'error', 3000);
   }
-
-  // Find the appropriate temperature range
-  const detectedRange = temperaturePIDSuggestions.find(range => 
-    setpoint >= range.min && setpoint < range.max
-  );
-
-  if (!detectedRange) {
-    const minTemp = Math.min(...temperaturePIDSuggestions.map(r => r.min));
-    const maxTemp = Math.max(...temperaturePIDSuggestions.map(r => r.max));
-    showMessage(`Temperature out of supported range (${minTemp}-${maxTemp}°C)`, 'error', 3000);
-    return;
-  }
-
-  // Update the range selector to match detected range
-  document.getElementById('tempRangeSelect').value = detectedRange.key;
-  
-  // Update the detected range info
-  const detectedInfo = document.getElementById('detectedRangeInfo');
-  detectedInfo.innerHTML = `
-    <div style="background: rgba(255, 214, 0, 0.2); padding: 10px; border-radius: 6px; border: 1px solid #ffd600;">
-      <strong>🎯 Detected Range:</strong> ${detectedRange.name}<br>
-      <small>${detectedRange.description}</small><br>
-      <div style="margin-top: 8px; font-family: monospace; font-size: 0.9em;">
-        Suggested: Kp=${detectedRange.kp} | Ki=${detectedRange.ki} | Kd=${detectedRange.kd} | Window=${detectedRange.windowMs/1000}s
-      </div>
-    </div>
-  `;
-
-  // Set current range index for navigation
-  currentRangeIndex = temperaturePIDSuggestions.findIndex(range => range.key === detectedRange.key);
-  
-  // Load the range settings
-  loadTemperatureRangeSettings();
-  
-  // Update the range status display
-  updateRangeStatusDisplay();
-  
-  showMessage(`🎯 Auto-detected range: ${detectedRange.name}`, 'success', 3000);
 }
 
 // Load temperature range settings into the UI form fields
@@ -1183,10 +1427,6 @@ function selectRange(index) {
   // Update the dropdown
   document.getElementById('tempRangeSelect').value = range.key;
   
-  // Update setpoint to mid-range value for testing
-  const midTemp = (range.min + range.max) / 2;
-  document.getElementById('targetSetpoint').value = midTemp.toFixed(1);
-  
   // Load range settings
   loadTemperatureRangeSettings();
   
@@ -1269,8 +1509,10 @@ function startRangeConfigurationWizard() {
 // Update PID profile on the controller (API call)
 async function updatePIDProfileOnController(rangeKey, params) {
   try {
-    // Get current setpoint to determine which profile to update
-    const currentTemp = document.getElementById('targetSetpoint')?.value || pid.Setpoint || 27.0;
+    // Get current setpoint from the controller to determine which profile to update
+    const statusResponse = await fetchWithTimeout('/api/status', 5000);
+    const statusData = await statusResponse.json();
+    const currentTemp = statusData.setpoint || statusData.stageTemperature || 27.0;
     
     const response = await fetch(`/api/pid_profile/update_range?temp=${currentTemp}&kp=${params.kp}&ki=${params.ki}&kd=${params.kd}&windowMs=${params.windowMs}`, {
       method: 'GET'
@@ -1323,19 +1565,28 @@ async function loadRangeConfigurationStatus() {
 }
 
 // Initialize range management when page loads
-function initializeRangeManagement() {
+async function initializeRangeManagement() {
   console.log('initializeRangeManagement called with', temperaturePIDSuggestions.length, 'profiles');
   loadRangeConfigurationStatus();
   updateRangeStatusDisplay();
   console.log('Range status display updated');
   
-  // Set initial setpoint to current baking range
-  const targetSetpoint = document.getElementById('targetSetpoint');
-  if (targetSetpoint) {
-    targetSetpoint.value = '125';
-    detectRangeFromSetpoint();
-  } else {
-    console.warn('targetSetpoint element not found');
+  // Auto-detect range based on controller setpoint
+  try {
+    const statusResponse = await fetchWithTimeout('/api/status', 5000);
+    const statusData = await statusResponse.json();
+    
+    // Use the actual setpoint from the controller - this determines which range should be active
+    const actualSetpoint = statusData.setpoint || statusData.stageTemperature || 25.0;
+    console.log(`Initialized with actual controller setpoint: ${actualSetpoint}°C`);
+    await detectRangeFromSetpoint();
+  } catch (error) {
+    console.error('Error getting controller status for initialization:', error);
+    // Fallback - just use the first available range
+    if (temperaturePIDSuggestions.length > 0) {
+      selectRange(0);
+      console.log('Fallback: Using first available range');
+    }
   }
 }
 
@@ -1419,6 +1670,12 @@ async function startManualTest() {
     
     showMessage(`Manual test started - target: ${targetTemp}°C`, 'success', 3000);
     
+    // Log the test start
+    logChange('Test Started', {
+      'Type': 'Manual PID Test',
+      'Target': targetTemp.toFixed(1) + '°C'
+    });
+    
     // Update button states
     const startBtn = document.querySelector('button[onclick="startManualTest()"]');
     const stopBtn = document.querySelector('button[onclick="stopTest()"]');
@@ -1428,80 +1685,6 @@ async function startManualTest() {
   } catch (error) {
     console.error('Failed to start manual test:', error);
     showMessage('Failed to start manual test: ' + error.message, 'error', 5000);
-  }
-}
-
-// Quick test function that uses the prominent quick test input
-async function startQuickTest() {
-  const targetTemp = parseFloat(document.getElementById('quickTargetTemp').value);
-  
-  if (isNaN(targetTemp) || targetTemp < 20 || targetTemp > 250) {
-    showMessage('Please enter a valid target temperature (20-250°C)', 'error', 3000);
-    return;
-  }
-  
-  try {
-    // Enable manual mode
-    const manualModeResponse = await fetch('/api/manual_mode?on=1', {
-      method: 'GET'
-    });
-    
-    if (!manualModeResponse.ok) {
-      throw new Error('Failed to enable manual mode');
-    }
-    
-    // Set the temperature setpoint
-    const tempResponse = await fetch(`/api/temperature?setpoint=${targetTemp}`, {
-      method: 'GET'
-    });
-    
-    if (!tempResponse.ok) {
-      throw new Error('Failed to set temperature setpoint');
-    }
-    
-    // Reset test start time for chart
-    testStartTime = Date.now();
-    
-    // Enable status updates if not already running
-    if (!updateInterval) {
-      startStatusUpdates();
-    }
-    
-    showMessage(`Quick test started - target: ${targetTemp}°C. Scroll down to see graphs!`, 'success', 5000);
-    
-    // Update button states
-    const startBtn = document.querySelector('button[onclick="startQuickTest()"]');
-    const stopBtn = document.querySelector('button[onclick="stopTest()"]');
-    if (startBtn) {
-      startBtn.innerHTML = '🔄 Testing... Check graphs below!';
-      startBtn.disabled = true;
-      startBtn.style.background = '#ff9800';
-    }
-    if (stopBtn) stopBtn.disabled = false;
-    
-    // Show success message in the quick test section
-    const quickSection = document.querySelector('.quick-test-section');
-    if (quickSection) {
-      const existingMsg = quickSection.querySelector('.success-message');
-      if (existingMsg) existingMsg.remove();
-      
-      const successMsg = document.createElement('div');
-      successMsg.className = 'success-message';
-      successMsg.style.cssText = 'background: rgba(255,255,255,0.2); padding: 10px; border-radius: 6px; margin-top: 10px; border: 1px solid rgba(255,255,255,0.3);';
-      successMsg.innerHTML = '<strong>✅ Test Started!</strong> Scroll down to see the real-time graphs updating every 5 seconds.';
-      quickSection.appendChild(successMsg);
-      
-      // Remove message after 10 seconds
-      setTimeout(() => {
-        if (successMsg && successMsg.parentNode) {
-          successMsg.remove();
-        }
-      }, 10000);
-    }
-    
-  } catch (error) {
-    console.error('Failed to start quick test:', error);
-    showMessage('Failed to start quick test: ' + error.message, 'error', 5000);
   }
 }
 
@@ -1523,6 +1706,9 @@ async function stopTest() {
     }
     
     showMessage('Test stopped', 'info', 3000);
+    
+    // Log the test stop
+    logChange('Test Stopped', { 'Action': 'Manual mode disabled, setpoint set to 0°C' });
     
     // Update button states for both manual and quick test
     const startBtn = document.querySelector('button[onclick="startManualTest()"]');

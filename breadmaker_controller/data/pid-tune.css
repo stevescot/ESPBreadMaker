@@ -418,6 +418,48 @@
   transform: translateY(-1px);
 }
 
+/* Additional Button Styles */
+.btn-secondary {
+  background: #6c757d;
+  color: white;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #5a6268;
+  transform: translateY(-1px);
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.btn-info {
+  background: #17a2b8;
+  color: white;
+}
+
+.btn-info:hover:not(:disabled) {
+  background: #138496;
+  transform: translateY(-1px);
+}
+
+/* Test Subsection Styles */
+.test-subsection {
+  background: rgba(248, 249, 250, 0.8);
+  padding: 12px;
+  border-radius: 6px;
+  margin-bottom: 12px;
+  border-left: 3px solid #007bff;
+}
+
+.test-subsection h4 {
+  margin: 0 0 10px 0;
+  color: #495057;
+  font-size: 14px;
+  font-weight: bold;
+}
+
 .status-display {
   background: #f8f9fa;
   padding: 15px;

@@ -1030,6 +1030,24 @@ void pidControlEndpoints(WebServer& server) {
                         pid.Ki = newKi;
                         pidUpdated = true;
                         if (debugSerial) Serial.printf("[PID] Ki updated to %.6f\n", newKi);
+                        
+                        // Auto-reset integral component when Ki is set to 0
+                        if (newKi == 0.0) {
+                            pid.pidI = 0.0;
+                            pid.lastITerm = 0.0;
+                            if (debugSerial) Serial.println(F("[PID] Integral component auto-reset (Ki=0)"));
+                        }
+                    }
+                }
+                
+                // Handle integral component reset
+                if (server.hasArg("reset_integral")) {
+                    String resetValue = server.arg("reset_integral");
+                    if (resetValue == "1" || resetValue.equalsIgnoreCase("true")) {
+                        pid.pidI = 0.0;
+                        pid.lastITerm = 0.0;
+                        pidUpdated = true;
+                        if (debugSerial) Serial.println(F("[PID] Integral component manually reset"));
                     }
                 }
                 if (server.hasArg("kd")) {

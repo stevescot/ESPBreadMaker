@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="pid-tune.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
 </head>
 <body>
   <nav>
@@ -25,20 +27,6 @@
     <div class="temp-dependent-section">
       <h3>🌡️ Temperature-Dependent PID Control</h3>
       
-      <!-- Setpoint-based Range Detection -->
-      <div class="setpoint-range-detector">
-        <h4>🎯 Set Target Temperature to Auto-Select Range</h4>
-        <div class="setpoint-input-row">
-          <label for="targetSetpoint">Target Temperature:</label>
-          <input type="number" id="targetSetpoint" step="0.5" min="0" max="250" value="60.0" onchange="detectRangeFromSetpoint()">
-          <span class="param-unit">°C</span>
-          <button id="detectRangeBtn" onclick="detectRangeFromSetpoint()">🎯 Detect Range</button>
-        </div>
-        <div id="detectedRangeInfo" class="detected-range-info">
-          <!-- Auto-detected range information will appear here -->
-        </div>
-      </div>
-
       <!-- Range Configuration Status -->
       <div class="range-config-status">
         <h4>📋 PID Range Configuration Status</h4>
@@ -82,24 +70,6 @@
       
       <div id="thermalMassWarning" class="warning-container">
         <!-- Thermal mass warnings will appear here -->
-      </div>
-    </div>
-    
-    <!-- Quick Test Section - Prominent placement -->
-    <div class="quick-test-section">
-      <h3>🚀 Quick PID Test (Start Here!)</h3>
-      <div class="quick-test-controls">
-        <div class="param-row" style="align-items: center; gap: 15px; flex-wrap: wrap;">
-          <label class="param-label" style="font-weight: bold;">Target Temperature:</label>
-          <input type="number" id="quickTargetTemp" class="param-input" step="0.5" min="20" max="250" value="27.0" style="min-width: 80px;">
-          <span class="param-unit">°C</span>
-          <button class="btn btn-success btn-large" onclick="startQuickTest()" style="margin-left: 10px; padding: 12px 24px; font-size: 16px; font-weight: bold;">🚀 Start Test & Show Graphs</button>
-          <button class="btn btn-danger" onclick="stopTest()" style="padding: 12px 24px; font-size: 16px;">⏹️ Stop Test</button>
-        </div>
-        <div class="param-desc" style="margin-top: 15px; padding: 10px; background: #e3f2fd; border-left: 4px solid #2196f3; border-radius: 4px;">
-          <strong>💡 Start here to see the real-time graphs!</strong> Set a safe temperature (like 27°C for gentle testing) and click "Start Test". 
-          The graphs will appear at the bottom and show live PID performance data. Perfect for tuning during bread proofing!
-        </div>
       </div>
     </div>
     
@@ -243,8 +213,9 @@
         <div class="button-group">
           <button class="btn btn-primary" onclick="updatePIDParams()">🔧 Apply All Parameters (Memory-Safe)</button>
           <button class="btn btn-primary" onclick="updateTempEWMA()">Apply EWMA Settings</button>
-          <button class="btn btn-warning" onclick="resetToDefaults()">Reset Defaults</button>
-          <button class="btn btn-primary" onclick="loadCurrentParams()">Load Current</button>
+          <button class="btn btn-secondary" onclick="loadCurrentParams()">🔄 Load Current</button>
+          <button class="btn btn-warning" onclick="resetIntegralComponent()">🔄 Reset I Component</button>
+          <button class="btn btn-danger" onclick="resetPIDToDefaults()">🔙 Reset to Defaults</button>
         </div>
         
         <div class="param-desc" style="margin-top: 15px; padding: 10px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">
@@ -253,32 +224,36 @@
         </div>
         
         <div class="param-group">
-          <h3>🔊 Buzzer Tone Tests</h3>
-          <div class="button-group" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
-            <button class="btn btn-info" onclick="testShortBeep()">🔊 Short Beep</button>
-            <button class="btn btn-info" onclick="testTone(500, 0.2, 300)">🔊 Low Tone</button>
-            <button class="btn btn-info" onclick="testTone(1000, 0.3, 200)">🔊 Mid Tone</button>
-            <button class="btn btn-info" onclick="testTone(2000, 0.1, 150)">🔊 High Tone</button>
-            <button class="btn btn-info" onclick="testTone(800, 0.4, 500)">🔊 Alert</button>
-            <button class="btn btn-info" onclick="testMultiTone()">🔊 Multi-Tone</button>
+          <h3>🧪 System Testing & Diagnostics</h3>
+          
+          <!-- PID Response Testing -->
+          <div class="test-subsection">
+            <h4>🌡️ PID Response Testing</h4>
+            <div class="param-row">
+              <label class="param-label">Target Temp:</label>
+              <input type="number" id="targetTempInput" class="param-input" step="0.5" min="0" max="250" value="60.0">
+              <span class="param-unit">°C</span>
+            </div>
+            <div class="button-group">
+              <button class="btn btn-success" onclick="startManualTest()">▶️ Start PID Test</button>
+              <button class="btn btn-danger" onclick="stopTest()">⏹️ Stop Test</button>
+            </div>
           </div>
+          
+          <!-- Audio System Testing -->
+          <div class="test-subsection">
+            <h4>🔊 Audio System Testing</h4>
+            <div class="button-group" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">
+              <button class="btn btn-info btn-sm" onclick="testShortBeep()">🔊 Beep</button>
+              <button class="btn btn-info btn-sm" onclick="testTone(800, 0.4, 500)">🔊 Alert</button>
+              <button class="btn btn-info btn-sm" onclick="testTone(1000, 0.3, 200)">🔊 Mid Tone</button>
+              <button class="btn btn-info btn-sm" onclick="testMultiTone()">🔊 Multi-Tone</button>
+            </div>
+          </div>
+          
           <div class="param-desc">
-            <strong>Buzzer Test Functions:</strong> Test different tone frequencies, amplitudes, and durations. 
-            The buzzer now generates proper sine wave tones instead of simple on/off signals.
-          </div>
-        </div>
-
-        <div class="test-controls">
-          <h3>🧪 Manual Testing</h3>
-          <div class="param-row">
-            <label class="param-label">Target Temp:</label>
-            <input type="number" id="targetTempInput" class="param-input" step="0.5" min="0" max="250" value="60.0">
-            <span class="param-unit">°C</span>
-          </div>
-          <div class="button-group">
-            <button class="btn btn-success" onclick="startManualTest()">Start Test</button>
-            <button class="btn btn-danger" onclick="stopTest()">Stop Test</button>
-            <button class="btn btn-warning" onclick="testBeep()">🔊 Test Beep</button>
+            <strong>Testing Functions:</strong> Use PID testing to validate temperature control response. 
+            Audio tests verify buzzer functionality for program completion alerts.
           </div>
         </div>
 
@@ -524,6 +499,26 @@
         <button class="btn btn-warning" onclick="clearPIDGraph()" style="margin-left: 20px;">🗑️ Clear PID Graph</button>
       </div>
       <canvas id="pidComponentChart"></canvas>
+    </div>
+    
+    <!-- Change Log Section -->
+    <div class="param-group" style="margin-top: 30px;">
+      <h3>📋 PID Tuning Change Log</h3>
+      <div class="change-log-container" style="background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 15px; max-height: 300px; overflow-y: auto;">
+        <div class="change-log-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <span style="font-weight: bold; color: #495057;">Recent Changes</span>
+          <button class="btn btn-sm btn-secondary" onclick="clearChangeLog()" style="font-size: 12px; padding: 4px 8px;">Clear Log</button>
+        </div>
+        <div id="changeLogEntries" class="change-log-entries">
+          <div class="log-entry" style="color: #6c757d; font-style: italic; text-align: center; padding: 20px;">
+            No changes logged yet. Start tuning to see your adjustments here!
+          </div>
+        </div>
+      </div>
+      <div class="param-desc" style="margin-top: 10px;">
+        <strong>📝 About the Change Log:</strong> This log tracks all parameter changes, range switches, and test actions. 
+        Chart annotations show these events on the graphs for easy correlation with performance changes.
+      </div>
     </div>
     
     <!-- Extra scrolling space -->
