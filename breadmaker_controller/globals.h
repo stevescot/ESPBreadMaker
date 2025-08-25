@@ -41,13 +41,13 @@ extern DynamicRestartState dynamicRestart;
 #ifndef TEMP_EMA_STATE_STRUCT_DEFINED
 #define TEMP_EMA_STATE_STRUCT_DEFINED
 struct TemperatureEMAState {
-    float smoothedTemperature = 0.0;    // Current smoothed temperature value
-    float alpha = 0.1;                  // Smoothing factor (0.01 = very smooth, 0.5 = very responsive)
-    float spikeThreshold = 5.0;         // °C - ignore readings that change by more than this
+    double smoothedTemperature = 0.0;   // Current smoothed temperature value
+    double alpha = 0.1;                 // Smoothing factor (0.01 = very smooth, 0.5 = very responsive)
+    double spikeThreshold = 5.0;        // °C - ignore readings that change by more than this
     bool initialized = false;           // Has the EMA been seeded with a value?
     unsigned long lastUpdate = 0;       // Last update timestamp
     unsigned long updateInterval = 500; // Update interval in milliseconds
-    float lastCalibratedTemp = 0.0;     // Last accepted calibrated temperature (for spike detection)
+    double lastCalibratedTemp = 0.0;    // Last accepted calibrated temperature (for spike detection)
     uint32_t sampleCount = 0;          // Total samples processed (for statistics)
     uint16_t consecutiveSpikes = 0;    // Counter for stuck-state detection
 };
@@ -145,6 +145,7 @@ struct PIDControl {
     unsigned long sampleTime = 1000;
     double pidP = 0, pidI = 0, pidD = 0;
     double lastInput = 0, lastITerm = 0;
+    bool initialized = false;  // Track if PID has been properly initialized
     PID* controller = nullptr;
     
     // Temperature-dependent profiles

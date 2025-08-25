@@ -108,7 +108,7 @@ PIDProfile* findProfileForTemperature(float temperature);
 void switchToProfile(const String& profileName);
 void checkAndSwitchPIDProfile();
 void updateTemperatureSampling();
-float getAveragedTemperature();
+double getAveragedTemperature();
 void streamStatusJson(Print& out);
 void updateActiveProgramVars();
 void updateTimeProportionalHeater();
@@ -262,7 +262,7 @@ void initialState(){
   }
   
   // Initialize fermentation tracking with actual temperature
-  float initialTemp = getAveragedTemperature();
+  double initialTemp = getAveragedTemperature();
   resetFermentationTracking(initialTemp);
   Serial.printf("[setup] Fermentation tracking initialized: temp=%.1f°C, factor=%.3fx\n", 
                 initialTemp, fermentState.fermentationFactor);
@@ -800,7 +800,7 @@ void performSafetyChecks() {
     return;
   }
   
-  float currentTemp = getAveragedTemperature();
+  double currentTemp = getAveragedTemperature();
   
   // --- Critical Temperature Checks ---
   
@@ -981,7 +981,7 @@ void loop() {
   
   // WiFiManager handles DNS internally, no need for manual processing
   
-  float temp = getAveragedTemperature();
+  double temp = getAveragedTemperature();
   static bool stageJustAdvanced = false;
   static bool scheduledStartTriggered = false;
   
@@ -1068,7 +1068,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
       if (st.isFermentation) {
         float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
         float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
-        float actualTemp = getAveragedTemperature();
+        double actualTemp = getAveragedTemperature();
         
         // Debug output to see actual values being used
         Serial.printf("[FERMENT-TIMING] Program: %s, baseline=%.1f (raw=%.1f), Q10=%.1f (raw=%.1f), actualTemp=%.1f\n", 
@@ -1220,6 +1220,15 @@ void handleManualMode() {
       lastPIDCalculation = nowMs;
       
       pid.Input = getAveragedTemperature();
+      
+      // Initialize PID on first run to prevent D term spikes
+      if (!pid.initialized) {
+        pid.lastInput = pid.Input;
+        pid.lastITerm = 0;
+        pid.initialized = true;
+        Serial.printf("[PID] Initialized: Input=%.2f°C, preventing D term startup spike\n", pid.Input);
+      }
+      
       double error = pid.Setpoint - pid.Input;
       double dInput = pid.Input - pid.lastInput;
       double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
@@ -1377,6 +1386,15 @@ void handleCustomStages(bool &stageJustAdvanced) {
           lastCustomStagePIDCalculation = nowMs;
           
           pid.Input = getAveragedTemperature();
+          
+          // Initialize PID on first run to prevent D term spikes
+          if (!pid.initialized) {
+            pid.lastInput = pid.Input;
+            pid.lastITerm = 0;
+            pid.initialized = true;
+            Serial.printf("[PID] Initialized (manual): Input=%.2f°C\n", pid.Input);
+          }
+          
           double error = pid.Setpoint - pid.Input;
           double dInput = pid.Input - pid.lastInput;
           double kpUsed = pid.Kp, kiUsed = pid.Ki, kdUsed = pid.Kd;
@@ -1398,6 +1416,16 @@ void handleCustomStages(bool &stageJustAdvanced) {
       } else if (!programState.manualMode && st.temp > 0) {
         if (shouldCalculatePID) {
           lastCustomStagePIDCalculation = nowMs;
+          
+          pid.Input = getAveragedTemperature();
+          
+          // Initialize PID on first run to prevent D term spikes
+          if (!pid.initialized) {
+            pid.lastInput = pid.Input;
+            pid.lastITerm = 0;
+            pid.initialized = true;
+            Serial.printf("[PID] Initialized (auto): Input=%.2f°C\n", pid.Input);
+          }
           
           double error = pid.Setpoint - pid.Input;
           double dInput = pid.Input - pid.lastInput;

@@ -5,7 +5,7 @@
 // Function declarations for missing implementations
 
 // Temperature and performance functions
-float getAveragedTemperature();
+double getAveragedTemperature();
 void updateTemperatureSampling();
 void updatePerformanceMetrics();
 void checkAndSwitchPIDProfile();

@@ -263,6 +263,11 @@ async function updateStatus() {
     // PID output (map from pid_output field)
     chartData.datasets[3].data.push((data.pid_output || 0) * 100);
     if (chartData.datasets[3].data.length > 300) chartData.datasets[3].data.shift();
+    // Heater state (use temperature range for better visibility)
+    const maxTemp = Math.max(...chartData.datasets[0].data, ...chartData.datasets[1].data, data.setpoint || 0) || 50;
+    const heaterValue = data.heater ? (maxTemp * 1.1) : 0; // 10% above max temperature
+    chartData.datasets[4].data.push(heaterValue);
+    if (chartData.datasets[4].data.length > 300) chartData.datasets[4].data.shift();
 
     // --- PID Component Chart ---
     // Use actual P, I, D terms from status API
@@ -586,6 +591,32 @@ function clearPIDGraph() {
   showMessage('PID component graph cleared', 'info');
 }
 
+// Clear the main temperature control performance graph
+function clearGraph() {
+  if (confirm('Clear the temperature control performance graph? This will remove all current data points.')) {
+    // Clear main chart data
+    chartData.labels = [];
+    chartData.datasets.forEach(dataset => {
+      dataset.data = [];
+    });
+    
+    // Clear chart annotations if they exist
+    if (temperatureChart && temperatureChart.options.plugins && temperatureChart.options.plugins.annotation) {
+      temperatureChart.options.plugins.annotation.annotations = {};
+    }
+    
+    // Update the chart
+    if (temperatureChart) {
+      temperatureChart.update();
+    }
+    
+    // Reset test start time for relative timing
+    testStartTime = null;
+    
+    showMessage('Temperature control graph cleared', 'info', 3000);
+  }
+}
+
 function startStatusUpdates() {
   if (updateInterval) clearInterval(updateInterval);
   // Reduced from 2000ms to 4000ms for better performance
@@ -662,6 +693,19 @@ let chartData = {
     pointRadius: 0,
     borderWidth: 1,
     yAxisID: 'y1'
+  }, {
+    label: 'Heater State',
+    data: [],
+    type: 'line',
+    backgroundColor: 'rgba(255, 165, 0, 0.15)', // Subtle orange background
+    borderColor: 'rgba(255, 165, 0, 0)',
+    borderWidth: 0,
+    fill: 'origin',
+    tension: 0,
+    pointRadius: 0,
+    yAxisID: 'y',  // Use main temperature scale for full height
+    order: 999,    // Put in background
+    stepped: true  // Create clear on/off steps
   }]
 };
 

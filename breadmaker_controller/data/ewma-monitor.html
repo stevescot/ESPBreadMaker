@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>EWMA Temperature Monitoring</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
+    .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    h1 { color: #333; text-align: center; }
+    .nav-btn { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 10px; margin-bottom: 10px; }
+    .nav-btn:hover { background: #0056b3; }
+    .chart-container { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); height: 50vh; max-height: 400px; }
+    .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
+    .status-card { background: #f8f9fa; padding: 15px; border-radius: 6px; border-left: 4px solid #007bff; }
+    .status-card.warning { border-left-color: #ffc107; background: #fff3cd; }
+    .status-card.error { border-left-color: #dc3545; background: #f8d7da; }
+    .status-card.success { border-left-color: #28a745; background: #d4edda; }
+    .metric-label { font-weight: bold; color: #666; font-size: 12px; text-transform: uppercase; }
+    .metric-value { font-size: 24px; font-weight: bold; color: #333; }
+    .metric-unit { font-size: 14px; color: #666; }
+    .convergence-info { background: #e3f2fd; padding: 15px; border-radius: 6px; margin: 20px 0; }
+    .refresh-controls { text-align: center; margin: 20px 0; }
+    button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin: 0 5px; }
+    button:hover { background: #0056b3; }
+    .auto-refresh { background: #28a745; }
+    .auto-refresh.active { background: #dc3545; }
+    .log { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 10px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+    .timestamp { color: #6c757d; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div style="margin-bottom: 20px;">
+      <button class="nav-btn" onclick="location.href='/'">🏠 Home</button>
+      <button class="nav-btn" onclick="location.href='/config.html'">⚙️ Config</button>
+      <button class="nav-btn" onclick="location.href='/pid-tune.html'">🎛️ PID Tuning</button>
+    </div>
+    
+    <h1>🌡️ EWMA Temperature Monitoring</h1>
+    
+    <div class="refresh-controls">
+      <button onclick="refreshData()">🔄 Refresh</button>
+      <button id="autoRefreshBtn" class="auto-refresh" onclick="toggleAutoRefresh()">▶️ Auto Refresh (OFF)</button>
+      <button onclick="clearGraph()">🗑️ Clear Graph</button>
+      <button onclick="clearLog()">� Clear Log</button>
+    </div>
+    
+    <div class="chart-container">
+      <h3>📊 Real-Time Temperature Graph</h3>
+      <canvas id="temperatureChart" style="height: calc(100% - 60px); width: 100%;"></canvas>
+    </div>
+    
+    <div class="status-grid">
+      <div class="status-card">
+        <div class="metric-label">Raw Temperature</div>
+        <div class="metric-value" id="rawTemp">--</div>
+        <div class="metric-unit">°C</div>
+      </div>
+      
+      <div class="status-card">
+        <div class="metric-label">Averaged Temperature</div>
+        <div class="metric-value" id="avgTemp">--</div>
+        <div class="metric-unit">°C</div>
+      </div>
+      
+      <div class="status-card" id="diffCard">
+        <div class="metric-label">Difference</div>
+        <div class="metric-value" id="difference">--</div>
+        <div class="metric-unit">°C</div>
+      </div>
+      
+      <div class="status-card">
+        <div class="metric-label">Sample Count</div>
+        <div class="metric-value" id="sampleCount">--</div>
+        <div class="metric-unit">samples</div>
+      </div>
+      
+      <div class="status-card">
+        <div class="metric-label">Alpha (α)</div>
+        <div class="metric-value" id="alpha">--</div>
+        <div class="metric-unit"></div>
+      </div>
+      
+      <div class="status-card">
+        <div class="metric-label">Update Interval</div>
+        <div class="metric-value" id="updateInterval">--</div>
+        <div class="metric-unit">ms</div>
+      </div>
+    </div>
+    
+    <div class="convergence-info">
+      <h3>📊 Convergence Analysis</h3>
+      <p><strong>EWMA Status:</strong> <span id="ewmaStatus">Checking...</span></p>
+      <p><strong>PID Status:</strong> <span id="pidStatus">Checking...</span></p>
+      <p><strong>Expected Convergence:</strong> With α=0.1, difference should be <0.5°C after ~30 samples</p>
+      <p><strong>Current Assessment:</strong> <span id="assessment">Analyzing...</span></p>
+    </div>
+    
+    <div>
+      <h3>📝 Real-Time Log</h3>
+      <div id="logContainer" class="log"></div>
+    </div>
+  </div>
+
+  <script>
+    let autoRefreshInterval = null;
+    let isAutoRefreshing = false;
+    let logEntries = [];
+    let temperatureChart = null;
+    let chartData = {
+      labels: [],
+      rawTemps: [],
+      avgTemps: []
+    };
+    const MAX_CHART_POINTS = 100; // Keep last 100 points
+
+    // Initialize Chart
+    function initChart() {
+      const ctx = document.getElementById('temperatureChart').getContext('2d');
+      temperatureChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: chartData.labels,
+          datasets: [{
+            label: 'Raw Temperature',
+            data: chartData.rawTemps,
+            borderColor: '#dc3545',
+            backgroundColor: 'rgba(220, 53, 69, 0.1)',
+            borderWidth: 2,
+            fill: false,
+            tension: 0.1
+          }, {
+            label: 'Average Temperature (EWMA)',
+            data: chartData.avgTemps,
+            borderColor: '#007bff',
+            backgroundColor: 'rgba(0, 123, 255, 0.1)',
+            borderWidth: 2,
+            fill: false,
+            tension: 0.1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            intersect: false,
+            mode: 'index'
+          },
+          scales: {
+            x: {
+              display: true,
+              title: {
+                display: true,
+                text: 'Time'
+              }
+            },
+            y: {
+              display: true,
+              title: {
+                display: true,
+                text: 'Temperature (°C)'
+              }
+            }
+          },
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top'
+            },
+            title: {
+              display: true,
+              text: 'EWMA Temperature Convergence Analysis'
+            }
+          },
+          animation: {
+            duration: 0 // Disable animation for real-time updates
+          }
+        }
+      });
+    }
+
+    function addChartPoint(rawTemp, avgTemp) {
+      const now = new Date().toLocaleTimeString();
+      
+      chartData.labels.push(now);
+      chartData.rawTemps.push(rawTemp);
+      chartData.avgTemps.push(avgTemp);
+      
+      // Keep only the last MAX_CHART_POINTS
+      if (chartData.labels.length > MAX_CHART_POINTS) {
+        chartData.labels.shift();
+        chartData.rawTemps.shift();
+        chartData.avgTemps.shift();
+      }
+      
+      temperatureChart.update('none'); // Update without animation
+    }
+
+    function clearGraph() {
+      chartData.labels = [];
+      chartData.rawTemps = [];
+      chartData.avgTemps = [];
+      temperatureChart.update();
+      addLogEntry('🗑️ Graph cleared');
+    }
+
+    function addLogEntry(message, type = 'info') {
+      const timestamp = new Date().toLocaleTimeString();
+      const entry = `<span class="timestamp">[${timestamp}]</span> ${message}`;
+      logEntries.push(entry);
+      
+      // Keep only last 50 entries
+      if (logEntries.length > 50) {
+        logEntries = logEntries.slice(-50);
+      }
+      
+      const logContainer = document.getElementById('logContainer');
+      logContainer.innerHTML = logEntries.join('<br>');
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    function updateStatus(status, type) {
+      document.getElementById('ewmaStatus').textContent = status;
+      document.getElementById('ewmaStatus').className = type;
+    }
+
+    function assessConvergence(data) {
+      const diff = Math.abs(data.difference);
+      const samples = data.sample_count;
+      
+      let assessment = '';
+      let statusType = 'info';
+      
+      if (!data.initialized) {
+        assessment = '❌ EWMA not initialized';
+        statusType = 'error';
+      } else if (samples < 10) {
+        assessment = '⏳ Insufficient samples for assessment';
+        statusType = 'warning';
+      } else if (diff > 2.0) {
+        assessment = `❌ Poor convergence: ${diff.toFixed(2)}°C difference after ${samples} samples`;
+        statusType = 'error';
+      } else if (diff > 0.5) {
+        assessment = `⚠️ Slow convergence: ${diff.toFixed(2)}°C difference after ${samples} samples`;
+        statusType = 'warning';
+      } else {
+        assessment = `✅ Good convergence: ${diff.toFixed(2)}°C difference after ${samples} samples`;
+        statusType = 'success';
+      }
+      
+      document.getElementById('assessment').textContent = assessment;
+      document.getElementById('assessment').className = statusType;
+      
+      // Update difference card color
+      const diffCard = document.getElementById('diffCard');
+      diffCard.className = 'status-card ' + (statusType === 'error' ? 'error' : statusType === 'warning' ? 'warning' : statusType === 'success' ? 'success' : '');
+    }
+
+    async function refreshData() {
+      try {
+        const response = await fetch('/api/ewma_status');
+        const data = await response.json();
+        
+        // Update display
+        document.getElementById('rawTemp').textContent = data.raw_temperature.toFixed(2);
+        document.getElementById('avgTemp').textContent = data.averaged_temperature.toFixed(2);
+        document.getElementById('difference').textContent = data.difference.toFixed(2);
+        document.getElementById('sampleCount').textContent = data.sample_count;
+        document.getElementById('alpha').textContent = data.alpha.toFixed(4);
+        document.getElementById('updateInterval').textContent = data.update_interval;
+        
+        // Update status
+        const ewmaStatus = data.initialized ? '✅ Initialized' : '❌ Not Initialized';
+        const pidStatus = data.pid_initialized ? '✅ Initialized' : '❌ Not Initialized';
+        document.getElementById('ewmaStatus').textContent = ewmaStatus;
+        document.getElementById('pidStatus').textContent = pidStatus;
+        
+        // Assess convergence
+        assessConvergence(data);
+        
+        // Add to chart
+        addChartPoint(data.raw_temperature, data.averaged_temperature);
+        
+        // Log the update
+        addLogEntry(`Raw: ${data.raw_temperature.toFixed(2)}°C, Avg: ${data.averaged_temperature.toFixed(2)}°C, Diff: ${data.difference.toFixed(2)}°C, Samples: ${data.sample_count}`);
+        
+      } catch (error) {
+        addLogEntry(`❌ Error fetching data: ${error.message}`, 'error');
+        console.error('Error fetching EWMA data:', error);
+      }
+    }
+
+    function toggleAutoRefresh() {
+      const btn = document.getElementById('autoRefreshBtn');
+      
+      if (isAutoRefreshing) {
+        clearInterval(autoRefreshInterval);
+        isAutoRefreshing = false;
+        btn.textContent = '▶️ Auto Refresh (OFF)';
+        btn.className = 'auto-refresh';
+        addLogEntry('🔴 Auto-refresh stopped');
+      } else {
+        autoRefreshInterval = setInterval(refreshData, 2000); // Refresh every 2 seconds
+        isAutoRefreshing = true;
+        btn.textContent = '⏸️ Auto Refresh (ON)';
+        btn.className = 'auto-refresh active';
+        addLogEntry('🟢 Auto-refresh started (2s interval)');
+      }
+    }
+
+    function clearLog() {
+      logEntries = [];
+      document.getElementById('logContainer').innerHTML = '';
+      addLogEntry('🗑️ Log cleared');
+    }
+
+    // Initialize on page load
+    window.addEventListener('load', function() {
+      initChart();
+      refreshData();
+    });
+  </script>
+</body>
+</html>

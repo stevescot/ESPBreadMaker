@@ -86,7 +86,7 @@ extern int scheduledStartStage;
 extern bool heaterState, motorState, lightState, buzzerState;
 extern void streamStatusJson(Print& out);
 extern void resetFermentationTracking(float temp);
-extern float getAveragedTemperature();
+extern double getAveragedTemperature();
 extern void saveSettings();
 extern void saveResumeState();
 extern void updateActiveProgramVars();
@@ -2828,6 +2828,40 @@ void registerWebEndpoints(WebServer& server) {
             float currentTemp = getAveragedTemperature();
             server.send(200, "application/json", "{\"temperature\":" + String(currentTemp) + ",\"setpoint\":" + String(pid.Setpoint) + "}");
         }
+    });
+    
+    // EWMA Temperature Monitoring endpoint for debugging convergence issues
+    server.on("/api/ewma_status", HTTP_GET, [&](){
+        float currentRaw = readTemperature();
+        float currentAvg = getAveragedTemperature();
+        float difference = currentRaw - currentAvg;
+        
+        char response[512];
+        sprintf(response, 
+            "{"
+            "\"raw_temperature\":%.2f,"
+            "\"averaged_temperature\":%.2f,"
+            "\"difference\":%.2f,"
+            "\"alpha\":%.4f,"
+            "\"sample_count\":%u,"
+            "\"update_interval\":%lu,"
+            "\"initialized\":%s,"
+            "\"last_update\":%lu,"
+            "\"spike_threshold\":%.2f,"
+            "\"pid_initialized\":%s"
+            "}",
+            currentRaw,
+            currentAvg, 
+            difference,
+            tempAvg.alpha,
+            tempAvg.sampleCount,
+            tempAvg.updateInterval,
+            tempAvg.initialized ? "true" : "false",
+            tempAvg.lastUpdate,
+            tempAvg.spikeThreshold,
+            pid.initialized ? "true" : "false"
+        );
+        server.send(200, "application/json", response);
     });
     
     // Missing API endpoints for output control (expected by script.js)

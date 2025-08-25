@@ -76,7 +76,7 @@ struct FermentationCache {
 static FermentationCache fermentCache;
 
 // Temperature and performance functions
-float getAveragedTemperature() {
+double getAveragedTemperature() {
     return tempAvg.smoothedTemperature;
 }
 
@@ -153,8 +153,10 @@ void updateTemperatureSampling() {
             }
         } else {
             // Apply Exponential Moving Average: new = α × current + (1-α) × previous
-            tempAvg.smoothedTemperature = tempAvg.alpha * calibratedTemp + 
-                                        (1.0 - tempAvg.alpha) * tempAvg.smoothedTemperature;
+            // Using explicit double precision to prevent accumulation of rounding errors
+            double currentTemp = (double)calibratedTemp;
+            double alpha = tempAvg.alpha;
+            tempAvg.smoothedTemperature = alpha * currentTemp + (1.0 - alpha) * tempAvg.smoothedTemperature;
         }
         
         tempAvg.lastCalibratedTemp = calibratedTemp;
@@ -162,8 +164,9 @@ void updateTemperatureSampling() {
         
         // Optional: Log every 10th sample for debugging
         if (debugSerial && (tempAvg.sampleCount % 10 == 0)) {
-            Serial.printf("[TEMP-EMA] Sample #%u: Raw=%.2f°C, Smoothed=%.2f°C, α=%.3f\n", 
-                         tempAvg.sampleCount, calibratedTemp, tempAvg.smoothedTemperature, tempAvg.alpha);
+            Serial.printf("[TEMP-EMA] Sample #%u: Raw=%.2f°C, Smoothed=%.2f°C, α=%.3f, Diff=%.2f°C\n", 
+                         tempAvg.sampleCount, calibratedTemp, tempAvg.smoothedTemperature, tempAvg.alpha,
+                         calibratedTemp - tempAvg.smoothedTemperature);
         }
     }
 }
@@ -448,8 +451,21 @@ void updateTimeProportionalHeater() {
   // Constants for ESP32 implementation
   const unsigned long MIN_WINDOW_TIME = 2000;   // Minimum window time before dynamic restart
   const float PID_CHANGE_THRESHOLD = 0.05;      // Threshold for significant PID output change
-  const unsigned long minOnTime = 2000;         // Minimum heater ON time (2 seconds)
   const unsigned long minOffTime = 5000;        // Minimum heater OFF time (5 seconds)
+  
+  // Temperature-scaled minimum ON time for better low-temperature control
+  unsigned long minOnTime;
+  if (pid.Setpoint <= 40.0) {
+    // Low temperature range: much shorter minimum pulses for gentle heating
+    if (pid.Output < 0.05) {        // For very low outputs (< 5%)
+      minOnTime = 500;              // 500ms minimum (allows 10% duty cycle with 5s window)
+    } else {
+      minOnTime = 800;              // 800ms minimum (allows 16% duty cycle with 5s window)
+    }
+  } else {
+    // High temperature range: standard minimum for relay protection
+    minOnTime = 2000;               // 2 seconds minimum (standard)
+  }
   
   static unsigned long windowStartTime = 0;
   static float lastPIDOutput = 0.0;
@@ -538,8 +554,8 @@ void updateTimeProportionalHeater() {
     }
     
     if (debugSerial && millis() % 15000 < 50) {  // Debug every 15 seconds
-      Serial.printf("[PID-RELAY] Setpoint: %.1f°C, Input: %.1f°C, Output: %.2f, OnTime: %lums/%lums (%.1f%%) %s\n", 
-                   pid.Setpoint, pid.Input, pid.Output, onTime, windowSize, (onTime * 100.0 / windowSize),
+      Serial.printf("[PID-RELAY] Setpoint: %.1f°C, Input: %.1f°C, Output: %.2f, OnTime: %lums/%lums (%.1f%%), MinOn: %lums %s\n", 
+                   pid.Setpoint, pid.Input, pid.Output, onTime, windowSize, (onTime * 100.0 / windowSize), minOnTime,
                    shouldRestartWindow ? "[DYNAMIC]" : "[NORMAL]");
     }
   }
@@ -765,7 +781,7 @@ void streamStatusJson(Print& out) {
   }
   
   // === Temperature and Outputs ===
-  float temp = getAveragedTemperature();
+  double temp = getAveragedTemperature();
   out.printf("\"temperature\":%.1f,", temp);
   out.printf("\"temp\":%.1f,", temp);
   
