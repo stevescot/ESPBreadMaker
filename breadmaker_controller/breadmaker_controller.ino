@@ -466,15 +466,9 @@ void saveResumeState() {
     return; // Skip this save to reduce load
   }
   
-  // Skip saves during critical temperature control phases to avoid performance impact
-  if (programState.isRunning && pid.Setpoint > 0) {
-    static unsigned long lastCriticalSkip = 0;
-    if ((now - lastCriticalSkip) > 30000) { // Log skip once every 30 seconds
-      if (debugSerial) Serial.println(F("[saveResumeState] Skipping save during active temperature control"));
-      lastCriticalSkip = now;
-    }
-    return;
-  }
+  // FIXED: Don't skip saves during temperature control - this is critical for resume functionality!
+  // The original code was preventing saves during active programs, breaking resume after OTA updates.
+  // Instead, we'll save regularly but with throttling to reduce filesystem pressure.
   
   lastResumeSave = now;
   
@@ -517,6 +511,8 @@ void serializeResumeStateJson(Print& f) {
   f.print(mixSec);
   f.print(F(",\"programStartTime\":"));
   f.print((unsigned long)programState.programStartTime);
+  f.print(F(",\"customStageStart\":"));
+  f.print((unsigned long)programState.customStageStart);
   f.print(F(",\"isRunning\":"));
   f.print(programState.isRunning ? F("true") : F("false"));
   f.print(F(",\"actualStageStartTimes\":["));
@@ -545,7 +541,7 @@ void serializeResumeStateJson(Print& f) {
   f.print((unsigned long)fermentState.predictedCompleteTime);
   f.print(F(",\"lastFermentAdjust\":"));
   f.print((unsigned long)fermentState.lastFermentAdjust);
-  f.print(F("]}\n"));
+  f.print(F("}\n"));
 }
 
 // Removes the saved resume state file from FFat.
@@ -600,6 +596,7 @@ void loadResumeState() {
   unsigned long elapsedStageSec = doc["elapsedStageSec"] | 0;
   unsigned long elapsedMixSec = doc["elapsedMixSec"] | 0;
   programState.programStartTime = doc["programStartTime"] | 0;
+  programState.customStageStart = doc["customStageStart"] | 0;
   bool wasRunning = doc["isRunning"] | false;
 
   // Load fermentation state with fallback defaults
@@ -691,8 +688,22 @@ void loadResumeState() {
           return;
         }
         programState.customStageIdx = stageIdx;
-        programState.customStageStart = millis() - remainStageSec * 1000UL;
-        if (programState.customStageStart == 0) programState.customStageStart = millis(); // Ensure nonzero for UI
+        
+        // Restore stage start time if we have it, otherwise calculate it
+        if (programState.customStageStart > 0) {
+          // Use saved stage start time
+          if (debugSerial) {
+            Serial.printf("[RESUME] Restored stage start time: %lu\n", programState.customStageStart);
+          }
+        } else {
+          // Calculate stage start time from elapsed time (fallback)
+          programState.customStageStart = millis() - remainStageSec * 1000UL;
+          if (programState.customStageStart == 0) programState.customStageStart = millis(); // Ensure nonzero for UI
+          if (debugSerial) {
+            Serial.printf("[RESUME] Calculated stage start time: %lu (remain: %lus)\n", 
+                         programState.customStageStart, remainStageSec);
+          }
+        }
         // Fast-forward mix steps if mixPattern exists
         CustomStage &st = p->customStages[programState.customStageIdx];
         if (!st.mixPattern.empty()) {
@@ -1008,6 +1019,14 @@ void loop() {
   checkAndSwitchPIDProfile();
 
   updateFermentationTiming(stageJustAdvanced);
+  
+  // --- Periodic resume state saving during program execution ---
+  static unsigned long lastResumeStateSave = 0;
+  if (programState.isRunning && (nowMs - lastResumeStateSave) >= 30000) { // Save every 30 seconds during execution
+    lastResumeStateSave = nowMs;
+    saveResumeState();
+    if (debugSerial) Serial.println("[RESUME] Periodic state save during program execution");
+  }
 
   // --- Check for stage advancement and log ---
   if (stageJustAdvanced && getProgramCount() > 0 && programState.activeProgramId < getProgramCount()) {

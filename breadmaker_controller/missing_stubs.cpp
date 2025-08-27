@@ -439,6 +439,46 @@ void stopBreadmaker() {
     clearResumeState();
 }
 
+// Initialize stage timing arrays when program is loaded or started
+void initializeStageArrays() {
+    // Clear all arrays first
+    for (int i = 0; i < MAX_PROGRAM_STAGES; i++) {
+        programState.actualStageStartTimes[i] = 0;
+        programState.actualStageEndTimes[i] = 0;
+        programState.adjustedStageDurations[i] = 0;
+    }
+    
+    // Populate arrays with current program data
+    if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+        Program* p = getActiveProgramMutable();
+        if (p && p->customStages.size() > 0) {
+            // Calculate adjusted durations for all stages based on current conditions
+            for (size_t i = 0; i < p->customStages.size() && i < MAX_PROGRAM_STAGES; i++) {
+                const CustomStage& stage = p->customStages[i];
+                unsigned long baseDuration = stage.min * 60; // Convert minutes to seconds
+                
+                // Apply fermentation adjustment if this is a fermentation stage
+                if (stage.isFermentation) {
+                    programState.adjustedStageDurations[i] = getAdjustedStageTimeMs(baseDuration * 1000, true) / 1000;
+                } else {
+                    programState.adjustedStageDurations[i] = baseDuration;
+                }
+                
+                if (debugSerial) {
+                    Serial.printf("[STAGE-INIT] Stage %zu '%s': base=%lus, adjusted=%lus, fermentation=%s\n", 
+                                  i, stage.label.c_str(), baseDuration, programState.adjustedStageDurations[i],
+                                  stage.isFermentation ? "yes" : "no");
+                }
+            }
+            
+            if (debugSerial) {
+                Serial.printf("[STAGE-INIT] Initialized arrays for program %d with %zu stages\n", 
+                              programState.activeProgramId, p->customStages.size());
+            }
+        }
+    }
+}
+
 bool isStartupDelayComplete() {
     unsigned long elapsed = millis() - startupTime;
     return elapsed >= STARTUP_DELAY_MS;
@@ -454,15 +494,17 @@ void updateTimeProportionalHeater() {
   const unsigned long minOffTime = 5000;        // Minimum heater OFF time (5 seconds)
   
   // Temperature-scaled minimum ON time for better low-temperature control
-  unsigned long minOnTime;
-  if (pid.Setpoint <= 40.0) {
+  unsigned long minOnTime = 2000;  // Default safe value
+  
+  // Apply temperature-dependent minimum ON time (with safety checks)
+  if (pid.Setpoint > 0 && pid.Setpoint <= 40.0) {
     // Low temperature range: much shorter minimum pulses for gentle heating
-    if (pid.Output < 0.05) {        // For very low outputs (< 5%)
+    if (pid.Output >= 0 && pid.Output < 0.05) {        // For very low outputs (< 5%)
       minOnTime = 500;              // 500ms minimum (allows 10% duty cycle with 5s window)
-    } else {
+    } else if (pid.Output >= 0.05) {
       minOnTime = 800;              // 800ms minimum (allows 16% duty cycle with 5s window)
     }
-  } else {
+  } else if (pid.Setpoint > 40.0) {
     // High temperature range: standard minimum for relay protection
     minOnTime = 2000;               // 2 seconds minimum (standard)
   }
@@ -627,7 +669,14 @@ void displayMessage(const String& message) {
 // Stream status JSON function - comprehensive implementation
 // This function streams JSON directly without creating large strings in memory
 void streamStatusJson(Print& out) {
-  // Re-enable fermentation cache after optimizing the main performance bottlenecks
+  // OPTIMIZATION: Static caching to reduce processing load
+  static unsigned long lastArrayUpdate = 0;
+  static bool arraysValid = false;
+  static String cachedStageNamesJson = "";
+  static String cachedStageTempsJson = "";
+  static String cachedOriginalDurationsJson = "";
+  
+  // OPTIMIZATION: Re-enable fermentation cache after optimizing the main performance bottlenecks
   updateFermentationCache();
   
   // Variable to store total program remaining time (will be calculated below)
@@ -848,7 +897,18 @@ void streamStatusJson(Print& out) {
   out.printf("\"fermentRealElapsed\":%.1f,", fermentState.realElapsedSeconds);
   out.printf("\"fermentAccumulatedMinutes\":%.2f,", fermentState.accumulatedFermentMinutes);
   
-  // === Predicted Stage End Times (Fermentation-Adjusted) ===
+  // === Enhanced Stage Timing Arrays for UI ===
+  
+  // OPTIMIZATION: Cache static arrays that don't change often
+  bool needArrayUpdate = false;
+  if (!arraysValid || (millis() - lastArrayUpdate > 10000) || // Update every 10 seconds
+      (programState.activeProgramId >= 0 && !arraysValid)) { // Or when program changes
+    needArrayUpdate = true;
+    lastArrayUpdate = millis();
+    arraysValid = true;
+  }
+  
+  // Predicted Stage End Times (Fermentation-Adjusted) - Future predictions that change with fermentation
   out.print("\"predictedStageEndTimes\":[");
   if (fermentCache.isValid && programState.activeProgramId >= 0) {
     Program* p = getActiveProgramMutable();
@@ -861,15 +921,7 @@ void streamStatusJson(Print& out) {
   }
   out.print("],");
   
-  // === Predicted Program End Time ===
-  out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)fermentCache.cachedProgramEndTime);
-  
-  // === Additional timing data for UI ===
-  out.printf("\"totalProgramDuration\":%lu,", fermentCache.cachedTotalDuration);
-  out.printf("\"elapsedTime\":%lu,", fermentCache.cachedElapsedTime);
-  out.printf("\"remainingTime\":%lu,", fermentCache.cachedRemainingTime); // Use cached value for consistency
-  
-  // === Stage Start Times Array ===
+  // Actual Stage Start Times - When stages actually started (fixed history)
   out.print("\"actualStageStartTimes\":[");
   for (int i = 0; i < 20; i++) {
     if (i > 0) out.print(",");
@@ -877,13 +929,131 @@ void streamStatusJson(Print& out) {
   }
   out.print("],");
   
-  // === Stage End Times Array ===
+  // Actual Stage End Times - When stages actually ended (fixed history + current predictions)
   out.print("\"actualStageEndTimes\":[");
   for (int i = 0; i < 20; i++) {
     if (i > 0) out.print(",");
     out.printf("%lu", (unsigned long)programState.actualStageEndTimes[i]);
   }
   out.print("],");
+  
+  // Adjusted Stage Durations - Fermentation-adjusted durations in seconds
+  out.print("\"adjustedStageDurations\":[");
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) out.print(",");
+    out.printf("%lu", programState.adjustedStageDurations[i]);
+  }
+  out.print("],");
+  
+  // Stage Status Array - Status of each stage: 0=not started, 1=running, 2=completed, 3=predicted
+  out.print("\"stageStatus\":[");
+  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+    Program* p = getActiveProgramMutable();
+    if (p && p->customStages.size() > 0) {
+      for (size_t i = 0; i < 20; i++) {
+        if (i > 0) out.print(",");
+        if (i < p->customStages.size()) {
+          if (programState.isRunning) {
+            if (i < programState.customStageIdx) {
+              out.print("2"); // Completed
+            } else if (i == programState.customStageIdx) {
+              out.print("1"); // Currently running
+            } else {
+              out.print("3"); // Predicted (future stage)
+            }
+          } else {
+            out.print("0"); // Not started
+          }
+        } else {
+          out.print("0"); // No stage at this index
+        }
+      }
+    } else {
+      // No program loaded
+      for (int i = 0; i < 20; i++) {
+        if (i > 0) out.print(",");
+        out.print("0");
+      }
+    }
+  } else {
+    // No valid program
+    for (int i = 0; i < 20; i++) {
+      if (i > 0) out.print(",");
+      out.print("0");
+    }
+  }
+  out.print("],");
+  
+  // OPTIMIZATION: Cache static arrays that change rarely
+  if (needArrayUpdate) {
+    // Build cached stage temperatures JSON
+    cachedStageTempsJson = "";
+    if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+      Program* p = getActiveProgramMutable();
+      if (p && p->customStages.size() > 0) {
+        for (size_t i = 0; i < 20; i++) {
+          if (i > 0) cachedStageTempsJson += ",";
+          if (i < p->customStages.size()) {
+            cachedStageTempsJson += String(p->customStages[i].temp, 1);
+          } else {
+            cachedStageTempsJson += "0";
+          }
+        }
+      } else {
+        for (int i = 0; i < 20; i++) {
+          if (i > 0) cachedStageTempsJson += ",";
+          cachedStageTempsJson += "0";
+        }
+      }
+    } else {
+      for (int i = 0; i < 20; i++) {
+        if (i > 0) cachedStageTempsJson += ",";
+        cachedStageTempsJson += "0";
+      }
+    }
+    
+    // Build cached original durations JSON
+    cachedOriginalDurationsJson = "";
+    if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+      Program* p = getActiveProgramMutable();
+      if (p && p->customStages.size() > 0) {
+        for (size_t i = 0; i < 20; i++) {
+          if (i > 0) cachedOriginalDurationsJson += ",";
+          if (i < p->customStages.size()) {
+            cachedOriginalDurationsJson += String((unsigned long)(p->customStages[i].min * 60));
+          } else {
+            cachedOriginalDurationsJson += "0";
+          }
+        }
+      } else {
+        for (int i = 0; i < 20; i++) {
+          if (i > 0) cachedOriginalDurationsJson += ",";
+          cachedOriginalDurationsJson += "0";
+        }
+      }
+    } else {
+      for (int i = 0; i < 20; i++) {
+        if (i > 0) cachedOriginalDurationsJson += ",";
+        cachedOriginalDurationsJson += "0";
+      }
+    }
+  }
+  
+  // Stage Temperatures Array - Target temperatures for each stage (CACHED)
+  out.print("\"stageTemperatures\":[");
+  out.print(cachedStageTempsJson);
+  out.print("],");
+  
+  // Stage Original Durations - Base durations before fermentation adjustment (CACHED)
+  out.print("\"stageOriginalDurations\":[");
+  out.print(cachedOriginalDurationsJson);
+  out.print("],");
+  
+  // === Program-Level Timing Summary ===
+  out.printf("\"predictedProgramEnd\":%lu,", (unsigned long)fermentCache.cachedProgramEndTime);
+  out.printf("\"totalProgramDuration\":%lu,", fermentCache.cachedTotalDuration);
+  out.printf("\"elapsedTime\":%lu,", fermentCache.cachedElapsedTime);
+  out.printf("\"remainingTime\":%lu,", fermentCache.cachedRemainingTime); // Use cached value for consistency
   
   // === Health and System Data ===
   out.printf("\"uptime_sec\":%lu,", millis() / 1000);
@@ -1249,4 +1419,148 @@ const String& WiFiCache::getSSID() {
 int WiFiCache::getRSSI() {
     updateIfNeeded();
     return cachedRSSI;
+}
+
+// Helper function to append stage status array for fast endpoint
+void appendStageStatus(WebServer& server) {
+  server.sendContent("[");
+  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+    Program* p = getActiveProgramMutable();
+    if (p && p->customStages.size() > 0) {
+      for (size_t i = 0; i < 20; i++) {
+        if (i > 0) server.sendContent(",");
+        if (i < p->customStages.size()) {
+          if (programState.isRunning) {
+            if (i < programState.customStageIdx) {
+              server.sendContent("2"); // Completed
+            } else if (i == programState.customStageIdx) {
+              server.sendContent("1"); // Currently running
+            } else {
+              server.sendContent("3"); // Predicted (future stage)
+            }
+          } else {
+            server.sendContent("0"); // Not started
+          }
+        } else {
+          server.sendContent("0"); // No stage at this index
+        }
+      }
+    } else {
+      // No program loaded
+      for (int i = 0; i < 20; i++) {
+        if (i > 0) server.sendContent(",");
+        server.sendContent("0");
+      }
+    }
+  } else {
+    // No valid program
+    for (int i = 0; i < 20; i++) {
+      if (i > 0) server.sendContent(",");
+      server.sendContent("0");
+    }
+  }
+  server.sendContent("]");
+}
+
+// Helper function to append predicted stage end times for fast endpoint
+void appendPredictedStageEndTimes(WebServer& server) {
+  server.sendContent("[");
+  if (fermentCache.isValid && programState.activeProgramId >= 0) {
+    Program* p = getActiveProgramMutable();
+    if (p && p->customStages.size() > 0) {
+      for (size_t i = 0; i < p->customStages.size() && i < 20; i++) {
+        if (i > 0) server.sendContent(",");
+        server.sendContent(String(fermentCache.cachedStageEndTimes[i]));
+      }
+    }
+  }
+  server.sendContent("]");
+}
+
+// Helper function to append cached stage temperatures for fast endpoint
+void appendCachedStageTemperatures(WebServer& server) {
+  server.sendContent("[");
+  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+    Program* p = getActiveProgramMutable();
+    if (p && p->customStages.size() > 0) {
+      for (size_t i = 0; i < 20; i++) {
+        if (i > 0) server.sendContent(",");
+        if (i < p->customStages.size()) {
+          server.sendContent(String(p->customStages[i].temp, 1));
+        } else {
+          server.sendContent("0");
+        }
+      }
+    } else {
+      for (int i = 0; i < 20; i++) {
+        if (i > 0) server.sendContent(",");
+        server.sendContent("0");
+      }
+    }
+  } else {
+    for (int i = 0; i < 20; i++) {
+      if (i > 0) server.sendContent(",");
+      server.sendContent("0");
+    }
+  }
+  server.sendContent("]");
+}
+
+// Helper function to append cached stage original durations for fast endpoint
+void appendCachedStageOriginalDurations(WebServer& server) {
+  server.sendContent("[");
+  if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
+    Program* p = getActiveProgramMutable();
+    if (p && p->customStages.size() > 0) {
+      for (size_t i = 0; i < 20; i++) {
+        if (i > 0) server.sendContent(",");
+        if (i < p->customStages.size()) {
+          server.sendContent(String(p->customStages[i].min * 60)); // Convert minutes to seconds
+        } else {
+          server.sendContent("0");
+        }
+      }
+    } else {
+      for (int i = 0; i < 20; i++) {
+        if (i > 0) server.sendContent(",");
+        server.sendContent("0");
+      }
+    }
+  } else {
+    for (int i = 0; i < 20; i++) {
+      if (i > 0) server.sendContent(",");
+      server.sendContent("0");
+    }
+  }
+  server.sendContent("]");
+}
+
+// Helper function to append actual stage start times for fast endpoint
+void appendActualStageStartTimes(WebServer& server) {
+  server.sendContent("[");
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) server.sendContent(",");
+    server.sendContent(String((unsigned long)programState.actualStageStartTimes[i]));
+  }
+  server.sendContent("]");
+}
+
+// Helper function to append actual stage end times for fast endpoint
+void appendActualStageEndTimes(WebServer& server) {
+  server.sendContent("[");
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) server.sendContent(",");
+    server.sendContent(String((unsigned long)programState.actualStageEndTimes[i]));
+  }
+  server.sendContent("]");
+}
+
+// Helper function to append adjusted stage durations for fast endpoint
+void appendAdjustedStageDurations(WebServer& server) {
+  server.sendContent("[");
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) server.sendContent(",");
+    server.sendContent(String(programState.adjustedStageDurations[i]));
+  }
+  server.sendContent("]");
 }

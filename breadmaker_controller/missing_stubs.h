@@ -21,6 +21,7 @@ float getHeapFragmentation();
 // Program and state management functions
 void updateActiveProgramVars();
 void stopBreadmaker();
+void initializeStageArrays();
 bool isStartupDelayComplete();
 
 // PID and control functions
@@ -50,3 +51,12 @@ unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentat
 
 // JSON streaming functions  
 void streamStatusJson(Print& out);
+
+// Helper functions for fast endpoint timing arrays
+void appendStageStatus(WebServer& server);
+void appendPredictedStageEndTimes(WebServer& server);
+void appendCachedStageTemperatures(WebServer& server);
+void appendCachedStageOriginalDurations(WebServer& server);
+void appendActualStageStartTimes(WebServer& server);
+void appendActualStageEndTimes(WebServer& server);
+void appendAdjustedStageDurations(WebServer& server);

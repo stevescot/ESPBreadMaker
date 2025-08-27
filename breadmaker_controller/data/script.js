@@ -29,6 +29,11 @@ function formatTime(date, withSeconds = false) {
   return withSeconds ? `${h}:${m}:${s}` : `${h}:${m}`;
 }
 
+// ---- Status Request Tracking ----
+let statusRequestPending = false;
+let detailedStatusNeeded = false; // Flag for when timing arrays are needed
+let lastDetailedUpdate = 0; // Timestamp of last detailed update
+
 // ---- Utility Functions ----
 function showStartAtStatus(msg) {
   let el = document.getElementById('startAtStatus');
@@ -329,13 +334,48 @@ function updateStageProgress(currentStage, statusData) {
     const div = document.createElement('div');
     div.className = 'stage-step';
     div.textContent = stage.label;
-    // Tooltip: show timing info if available
+    // Tooltip: show comprehensive timing info if available
     let tip = '';
-    if (actualStarts[i] && actualStarts[i] > 0) {
-      tip += 'Started: ' + formatDateTime(actualStarts[i] * 1000);
-    } else if (estStarts[i] && estStarts[i] > 0) {
-      tip += 'Est. start: ' + formatDateTime(estStarts[i] * 1000);
+    
+    // Stage status and timing
+    if (Array.isArray(statusData.stageStatus) && statusData.stageStatus[i] !== undefined) {
+      const status = statusData.stageStatus[i];
+      if (status === 2) tip += 'Status: Completed\n';
+      else if (status === 1) tip += 'Status: Running\n';
+      else if (status === 3) tip += 'Status: Predicted\n';
+      else tip += 'Status: Not started\n';
     }
+    
+    // Start time information
+    if (actualStarts[i] && actualStarts[i] > 0) {
+      tip += 'Started: ' + formatDateTime(actualStarts[i] * 1000) + '\n';
+    } else if (estStarts[i] && estStarts[i] > 0) {
+      tip += 'Est. start: ' + formatDateTime(estStarts[i] * 1000) + '\n';
+    }
+    
+    // End time information
+    if (actualEnds[i] && actualEnds[i] > 0) {
+      tip += 'Ended: ' + formatDateTime(actualEnds[i] * 1000) + '\n';
+    } else if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] > 0) {
+      tip += 'Predicted end: ' + formatDateTime(statusData.predictedStageEndTimes[i] * 1000) + '\n';
+    }
+    
+    // Duration information
+    if (Array.isArray(statusData.stageOriginalDurations) && statusData.stageOriginalDurations[i] > 0) {
+      tip += 'Original duration: ' + formatDuration(statusData.stageOriginalDurations[i]) + '\n';
+    }
+    if (Array.isArray(statusData.adjustedStageDurations) && statusData.adjustedStageDurations[i] > 0) {
+      tip += 'Adjusted duration: ' + formatDuration(statusData.adjustedStageDurations[i]) + '\n';
+    }
+    
+    // Temperature information
+    if (Array.isArray(statusData.stageTemperatures) && statusData.stageTemperatures[i] > 0) {
+      tip += 'Target temp: ' + statusData.stageTemperatures[i] + '°C\n';
+    }
+    
+    // Clean up trailing newline
+    if (tip.endsWith('\n')) tip = tip.slice(0, -1);
+    
     if (tip) div.title = tip;
     // Make stages clickable for direct stage skipping
     if (!isIdle && statusData.running) {
@@ -422,22 +462,36 @@ function updateStageProgress(currentStage, statusData) {
         }
       }
     } else if (!isIdle && i > activeIdx) {
-      // Show planned duration for future stages using firmware predictions
+      // Show planned duration for future stages using firmware's adjustedStageDurations array
       const stage = customStages[i];
       let plannedDuration = stage.min * 60; // Default to raw duration
       
-      // Use firmware's predictedStageEndTimes if available (already fermentation-adjusted)
-      if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.predictedStageEndTimes[i-1]) {
-        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.predictedStageEndTimes[i-1];
-      } else if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] && statusData.programStart && i === 0) {
-        // For first stage, use programStart as reference
-        plannedDuration = statusData.predictedStageEndTimes[i] - statusData.programStart;
+      // FIXED: Use adjustedStageDurations array instead of incorrectly subtracting timestamps
+      if (Array.isArray(statusData.adjustedStageDurations) && statusData.adjustedStageDurations[i] > 0) {
+        // Use firmware-calculated fermentation-adjusted duration directly
+        plannedDuration = statusData.adjustedStageDurations[i];
+      } else {
+        // Fallback: apply fermentation adjustment manually
+        if (stage.isFermentation && typeof statusData.fermentationFactor === 'number' && statusData.fermentationFactor > 0) {
+          plannedDuration = (stage.min * 60) * statusData.fermentationFactor;
+        }
       }
       
       if (plannedDuration > 0) {
         const span = document.createElement('span');
         span.className = 'stage-planned';
-        span.textContent = ' (' + formatDuration(plannedDuration) + ')';
+        
+        // Show both planned duration and predicted completion time if available
+        let text = ' (' + formatDuration(plannedDuration);
+        
+        // Add predicted completion time if available
+        if (Array.isArray(statusData.predictedStageEndTimes) && statusData.predictedStageEndTimes[i] > 0) {
+          const completionTime = new Date(statusData.predictedStageEndTimes[i] * 1000);
+          text += ', ends ' + completionTime.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        }
+        
+        text += ')';
+        span.textContent = text;
         div.appendChild(span);
       }
     }
@@ -529,10 +583,33 @@ function updateStatusInternal(s) {
   }
   // If no status object provided, fetch it from server
   if (!s || typeof s !== 'object') {
-    fetch('/status')
+    // Prevent concurrent requests
+    if (statusRequestPending) {
+      console.log('Status request already pending, skipping...');
+      return;
+    }
+    
+    statusRequestPending = true;
+    
+    // Determine which endpoint to use based on needs
+    const now = Date.now();
+    const needDetailedUpdate = detailedStatusNeeded || (now - lastDetailedUpdate > 10000); // Every 10 seconds
+    const endpoint = needDetailedUpdate ? '/status' : '/api/status_fast';
+    
+    fetch(endpoint)
       .then(r => r.json())
-      .then(data => updateStatusInternal(data))
-      .catch(err => console.error('Failed to fetch status:', err));
+      .then(data => {
+        statusRequestPending = false;
+        if (needDetailedUpdate) {
+          lastDetailedUpdate = now;
+          detailedStatusNeeded = false;
+        }
+        updateStatusInternal(data);
+      })
+      .catch(err => {
+        statusRequestPending = false;
+        console.error('Failed to fetch status:', err);
+      });
     return;
   }
   
@@ -992,6 +1069,14 @@ function showPlanSummary(s) {
     return;
   }
   
+  // Check if we have timing arrays - if not, request detailed status
+  if (!s.actualStageStartTimes || !s.stageStatus || !s.adjustedStageDurations) {
+    console.log('Timing arrays missing, requesting detailed status for plan summary');
+    detailedStatusNeeded = true;
+    // Don't show incomplete data, wait for next update
+    return;
+  }
+  
   // Try to get program from status or cached programs
   let prog = null;
   if (s.programs && s.programs[s.program]) {
@@ -1066,19 +1151,24 @@ function showPlanSummary(s) {
       let predictedDurationMin = null;
       if (predictedStageEndTimes && predictedStageEndTimes[i]) {
         predictedEnd = new Date(predictedStageEndTimes[i] * 1000);
-        // For duration, use difference between this and previous stage end (or start)
-        if (i === 0) {
-          // First stage: duration is end - start (use stStart if available)
-          if (stStart) {
-            predictedDurationMin = (predictedStageEndTimes[0] - (stStart.getTime() / 1000)) / 60;
-          }
-        } else {
-          predictedDurationMin = (predictedStageEndTimes[i] - predictedStageEndTimes[i-1]) / 60;
+      }
+      
+      // FIXED: Use adjustedStageDurations instead of incorrectly subtracting timestamps
+      if (Array.isArray(s.adjustedStageDurations) && s.adjustedStageDurations[i] > 0) {
+        predictedDurationMin = s.adjustedStageDurations[i] / 60; // Convert seconds to minutes
+      } else if (Array.isArray(s.stageOriginalDurations) && s.stageOriginalDurations[i] > 0) {
+        // Fallback to original durations
+        let duration = s.stageOriginalDurations[i];
+        // Apply fermentation factor if this is a fermentation stage
+        if (prog.customStages[i] && prog.customStages[i].isFermentation && typeof s.fermentationFactor === 'number' && s.fermentationFactor > 0) {
+          duration *= s.fermentationFactor;
         }
-        // Only keep predictedDurationMin if it's a valid positive number
-        if (typeof predictedDurationMin !== 'number' || isNaN(predictedDurationMin) || predictedDurationMin < 0) {
-          predictedDurationMin = null; // Clear invalid predictions
-        }
+        predictedDurationMin = duration / 60; // Convert seconds to minutes
+      }
+      
+      // Only keep predictedDurationMin if it's a valid positive number
+      if (typeof predictedDurationMin !== 'number' || isNaN(predictedDurationMin) || predictedDurationMin < 0) {
+        predictedDurationMin = null; // Clear invalid predictions
       }
       // Only show calendar if we can calculate timing and this stage requires user interaction
       let stEnd = null;
@@ -1473,12 +1563,32 @@ window.addEventListener('DOMContentLoaded', () => {
     window.updateStatus();
     // Set up periodic status updates to keep everything in sync
     setInterval(() => {
-      fetch('/status')
+      // Prevent concurrent requests
+      if (statusRequestPending) {
+        console.log('Status poll skipped - request already pending');
+        return;
+      }
+      
+      statusRequestPending = true;
+      
+      // Use fast endpoint for regular polling, detailed endpoint occasionally
+      const now = Date.now();
+      const needDetailedUpdate = (now - lastDetailedUpdate > 15000); // Every 15 seconds for detailed
+      const endpoint = needDetailedUpdate ? '/status' : '/api/status_fast';
+      
+      fetch(endpoint)
         .then(r => r.json())
         .then(s => {
+          statusRequestPending = false;
+          if (needDetailedUpdate) {
+            lastDetailedUpdate = now;
+          }
           window.updateStatus(s);
         })
-        .catch(err => console.error('Status poll failed:', err));
+        .catch(err => {
+          statusRequestPending = false;
+          console.error('Status poll failed:', err);
+        });
     }, 3000);
   });
 

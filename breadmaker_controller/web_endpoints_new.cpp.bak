@@ -265,13 +265,6 @@ void coreEndpoints(WebServer& server) {
                         if (filename == "/programs.json" || filename == "/programs_index.json") {
                             if (debugSerial) Serial.println("[UPLOAD] Program metadata file updated, invalidating cache");
                             invalidateProgramMetadataCache();
-                            
-                            // If no program is running, provide additional feedback
-                            if (!programState.isRunning) {
-                                if (debugSerial) Serial.println("[UPLOAD] No program running - program metadata cache refreshed");
-                            } else {
-                                if (debugSerial) Serial.println("[UPLOAD] Program running - cache will refresh when program stops");
-                            }
                         } else if (filename.startsWith("/program_") && filename.endsWith(".json")) {
                             // Extract program ID from filename (e.g., "/program_1.json" -> 1)
                             String idStr = filename.substring(9, filename.length() - 5); // Remove "/program_" and ".json"
@@ -279,13 +272,6 @@ void coreEndpoints(WebServer& server) {
                             if (programId >= 0) {
                                 if (debugSerial) Serial.printf("[UPLOAD] Program file %d updated, invalidating cache\n", programId);
                                 invalidateProgramCache(programId);
-                                
-                                // If no program is running, the cache is immediately available for reload
-                                if (!programState.isRunning) {
-                                    if (debugSerial) Serial.printf("[UPLOAD] No program running - program %d cache cleared and ready for reload\n", programId);
-                                } else {
-                                    if (debugSerial) Serial.printf("[UPLOAD] Program running - program %d cache will reload when accessed\n", programId);
-                                }
                             }
                         }
                         
@@ -1517,6 +1503,251 @@ void calibrationEndpoints(WebServer& server) {
         } else {
             server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
         }
+    });
+}
+
+void calibrationEndpoints(WebServer& server) {
+    server.on("/api/calibration", HTTP_GET, [&](){
+        // Get current raw ADC reading and temperature
+        int currentRaw = analogRead(PIN_RTD);
+        float currentTemp = readTemperature();
+        
+        // Use efficient streaming instead of string concatenation
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        
+        server.sendContent("{\"raw\":");
+        server.sendContent(String(currentRaw));
+        server.sendContent(",\"temp\":");
+        server.sendContent(String(currentTemp, 1));
+        server.sendContent(",\"table\":[");
+        
+        for(size_t i = 0; i < rtdCalibTable.size(); i++) {
+            if(i > 0) server.sendContent(",");
+            server.sendContent("{\"raw\":");
+            server.sendContent(String(rtdCalibTable[i].raw));
+            server.sendContent(",\"temp\":");
+            server.sendContent(String(rtdCalibTable[i].temp));
+            server.sendContent("}");
+        }
+        server.sendContent("]}");
+        server.sendContent(""); // End chunked response
+    });
+    
+    // Add calibration point endpoint
+    server.on("/api/calibration/add", HTTP_POST, [&](){
+        if (server.hasArg("raw") && server.hasArg("temp")) {
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            // Validate inputs - allow raw=0 for high temperature calibration points (updated limit: 250°C)
+            if (raw < 0 || temp < -50 || temp > 250) {
+                server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
+                return;
+            }
+            
+            // Check for duplicate raw values
+            for (const auto& point : rtdCalibTable) {
+                if (point.raw == raw) {
+                    server.send(400, "application/json", "{\"error\":\"Raw value already exists\"}");
+                    return;
+                }
+            }
+            
+            // Add point to calibration table
+            CalibPoint newPoint = {raw, temp};
+            rtdCalibTable.push_back(newPoint);
+            
+            // Sort by raw value
+            std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                     [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+            
+            // Save to file
+            saveCalibration();
+            
+            server.send(200, "application/json", "{\"status\":\"ok\"}");
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        }
+    });
+    
+    // Update calibration point endpoint
+    server.on("/api/calibration/update", HTTP_POST, [&](){
+        if (server.hasArg("index") && server.hasArg("raw") && server.hasArg("temp")) {
+            int index = server.arg("index").toInt();
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                rtdCalibTable[index].raw = raw;
+                rtdCalibTable[index].temp = temp;
+                
+                // Sort by raw value after update
+                std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                         [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+                
+                // Save to file
+                saveCalibration();
+                
+                server.send(200, "application/json", "{\"status\":\"ok\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        }
+    });
+    
+    // Delete calibration point endpoint
+    server.on("/api/calibration/delete", HTTP_POST, [&](){
+        if (server.hasArg("index")) {
+            int index = server.arg("index").toInt();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                rtdCalibTable.erase(rtdCalibTable.begin() + index);
+                
+                // Save to file
+                saveCalibration();
+                
+                server.send(200, "application/json", "{\"status\":\"ok\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing index parameter\"}");
+        }
+    });
+    
+    // Clear all calibration points endpoint
+    server.on("/api/calibration", HTTP_DELETE, [&](){
+        rtdCalibTable.clear();
+        saveCalibration();
+        server.send(200, "application/json", "{\"status\":\"ok\"}");
+    });
+
+    // GET-based alternatives for calibration (to avoid POST crash issues)
+    
+    // Add calibration point via GET
+    server.on("/api/calibration/add-get", HTTP_GET, [&](){
+        if (server.hasArg("raw") && server.hasArg("temp")) {
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            // Validate inputs - allow raw=0 for high temperature calibration points (updated limit: 250°C)
+            if (raw < 0 || temp < -50 || temp > 250) {
+                server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
+                return;
+            }
+            
+            // Check for duplicate raw values
+            for (const auto& point : rtdCalibTable) {
+                if (point.raw == raw) {
+                    server.send(400, "application/json", "{\"error\":\"Raw value already exists\"}");
+                    return;
+                }
+            }
+            
+            // Add point to calibration table
+            CalibPoint newPoint = {raw, temp};
+            rtdCalibTable.push_back(newPoint);
+            
+            // Sort by raw value
+            std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                     [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+            
+            // Save to file
+            saveCalibration();
+            
+            if (debugSerial) {
+                Serial.printf("[CALIB] Added point: raw=%d, temp=%.2f\n", raw, temp);
+            }
+            
+            server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"added\"}");
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing raw or temp parameter\"}");
+        }
+    });
+    
+    // Update calibration point via GET
+    server.on("/api/calibration/update-get", HTTP_GET, [&](){
+        if (server.hasArg("index") && server.hasArg("raw") && server.hasArg("temp")) {
+            int index = server.arg("index").toInt();
+            int raw = server.arg("raw").toInt();
+            float temp = server.arg("temp").toFloat();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                // Validate inputs (updated limit: 250°C)
+                if (raw < 0 || temp < -50 || temp > 250) {
+                    server.send(400, "application/json", "{\"error\":\"Invalid raw or temperature value\"}");
+                    return;
+                }
+                
+                // Check for duplicate raw values (excluding current index)
+                for (size_t i = 0; i < rtdCalibTable.size(); i++) {
+                    if (i != index && rtdCalibTable[i].raw == raw) {
+                        server.send(400, "application/json", "{\"error\":\"Raw value already exists\"}");
+                        return;
+                    }
+                }
+                
+                // Update the point
+                rtdCalibTable[index].raw = raw;
+                rtdCalibTable[index].temp = temp;
+                
+                // Sort by raw value
+                std::sort(rtdCalibTable.begin(), rtdCalibTable.end(), 
+                         [](const CalibPoint& a, const CalibPoint& b) { return a.raw < b.raw; });
+                
+                // Save to file
+                saveCalibration();
+                
+                if (debugSerial) {
+                    Serial.printf("[CALIB] Updated point %d: raw=%d, temp=%.2f\n", index, raw, temp);
+                }
+                
+                server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"updated\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+        }
+    });
+    
+    // Delete calibration point via GET
+    server.on("/api/calibration/delete-get", HTTP_GET, [&](){
+        if (server.hasArg("index")) {
+            int index = server.arg("index").toInt();
+            
+            if (index >= 0 && index < rtdCalibTable.size()) {
+                if (debugSerial) {
+                    Serial.printf("[CALIB] Deleting point %d: raw=%d, temp=%.2f\n", 
+                                  index, rtdCalibTable[index].raw, rtdCalibTable[index].temp);
+                }
+                
+                rtdCalibTable.erase(rtdCalibTable.begin() + index);
+                
+                // Save to file
+                saveCalibration();
+                
+                server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"deleted\"}");
+            } else {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+            }
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing index parameter\"}");
+        }
+    });
+    
+    // Clear all calibration points via GET
+    server.on("/api/calibration/clear-all", HTTP_GET, [&](){
+        if (debugSerial) {
+            Serial.printf("[CALIB] Clearing all %zu calibration points\n", rtdCalibTable.size());
+        }
+        
+        rtdCalibTable.clear();
+        saveCalibration();
+        server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"cleared\"}");
     });
 }
 
