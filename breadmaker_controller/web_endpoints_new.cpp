@@ -1339,8 +1339,9 @@ void homeAssistantEndpoint(WebServer& server) {
                     if (programState.isRunning && programState.customStageIdx < cachedProgram->customStages.size()) {
                         // Calculate current stage remaining time only
                         unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-                        unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
-                                                                           cachedProgram->customStages[programState.customStageIdx].isFermentation);
+                        unsigned long stageTimeMs = getAdjustedStageTimeMsWithTemp(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                           cachedProgram->customStages[programState.customStageIdx].isFermentation,
+                                                                           cachedProgram->customStages[programState.customStageIdx].temp);
                         unsigned long stageTimeLeft = (stageTimeMs / 1000) - elapsed;
                         if (stageTimeLeft < 0) stageTimeLeft = 0;
                         
@@ -1423,8 +1424,9 @@ void homeAssistantEndpoint(WebServer& server) {
         if (programState.isRunning && programState.activeProgramId >= 0 && cachedProgram) {
             if (cachedProgram && programState.customStageIdx < cachedProgram->customStages.size()) {
                 unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-                unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
-                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation);
+                unsigned long stageTimeMs = getAdjustedStageTimeMsWithTemp(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation,
+                                                                   cachedProgram->customStages[programState.customStageIdx].temp);
                 int timeLeftSec = (stageTimeMs / 1000) - elapsed;
                 if (timeLeftSec < 0) timeLeftSec = 0;
                 
@@ -1432,8 +1434,9 @@ void homeAssistantEndpoint(WebServer& server) {
                     stageReadyAt = now + timeLeftSec;
                     programReadyAt = now + timeLeftSec;
                     for (size_t i = programState.customStageIdx + 1; i < cachedProgram->customStages.size(); ++i) {
-                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(cachedProgram->customStages[i].min * 60 * 1000, 
-                                                                                  cachedProgram->customStages[i].isFermentation);
+                        unsigned long adjustedDurationMs = getAdjustedStageTimeMsWithTemp(cachedProgram->customStages[i].min * 60 * 1000, 
+                                                                                  cachedProgram->customStages[i].isFermentation,
+                                                                                  cachedProgram->customStages[i].temp);
                         programReadyAt += adjustedDurationMs / 1000;
                     }
                 }
@@ -2603,8 +2606,9 @@ void registerWebEndpoints(WebServer& server) {
                 
                 // Calculate time left in current stage only
                 unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-                unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
-                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation);
+                unsigned long stageTimeMs = getAdjustedStageTimeMsWithTemp(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation,
+                                                                   cachedProgram->customStages[programState.customStageIdx].temp);
                 unsigned long timeLeft = (stageTimeMs / 1000) - elapsed;
                 if (timeLeft < 0) timeLeft = 0;
                 
