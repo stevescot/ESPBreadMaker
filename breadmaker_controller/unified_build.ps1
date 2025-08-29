@@ -580,9 +580,10 @@ function Upload-DataFiles {
             }
         }
     } else {
-        # Upload all files in data directory (excluding backup directories)
+        # Upload all files in data directory (excluding backup directories and program files)
         $filesToUpload = Get-ChildItem -Path $dataPath -File -Recurse | Where-Object { 
-            $_.FullName -notmatch "device_backup_" 
+            $_.FullName -notmatch "device_backup_" -and
+            $_.Name -notmatch "^(programs|program_\d+)\.json$"
         } | ForEach-Object { $_.FullName }
     }
     

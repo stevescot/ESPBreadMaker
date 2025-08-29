@@ -20,6 +20,7 @@ struct CustomStage {
     float temp = 0.0f;
     bool noMix = false;
     bool isFermentation = false; // Flag to enable fermentation time adjustment
+    bool disableAutoAdjust = false; // Flag to disable finish-by temperature adjustments
     std::vector<MixStep> mixPattern;
     String instructions; // Stage instructions
     String light; // legacy, can be ignored

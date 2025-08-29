@@ -13,6 +13,7 @@
 #include <algorithm>  // For std::sort
 #include "missing_stubs.h"  // For getAdjustedStageTimeMs and other functions
 #include "display_manager.h"  // For screensaver control
+#include "program_logger.h"  // For program run logging and history
 
 // External OTA status for web integration
 extern OTAStatus otaStatus;
@@ -620,6 +621,67 @@ void stateMachineEndpoints(WebServer& server) {
         
         updateActiveProgramVars();
         
+        // Handle finish-by temperature adjustments
+        if (server.hasArg("finishByTime") || server.hasArg("tempDelta")) {
+            String finishTimeStr = server.arg("finishByTime");
+            float tempDelta = server.arg("tempDelta").toFloat();
+            float minTemp = server.arg("minTemp").toFloat();
+            float maxTemp = server.arg("maxTemp").toFloat();
+            
+            // Set defaults if not provided
+            if (minTemp == 0.0f) minTemp = finishByConfig.defaultMinTemp;
+            if (maxTemp == 0.0f) maxTemp = finishByConfig.defaultMaxTemp;
+            
+            // Parse target end time if provided
+            time_t targetEndTime = 0;
+            if (finishTimeStr.length() > 0) {
+                // Parse ISO 8601 datetime format: 2025-08-29T17:30:00
+                struct tm tm = {};
+                if (strptime(finishTimeStr.c_str(), "%Y-%m-%dT%H:%M:%S", &tm) != nullptr) {
+                    targetEndTime = mktime(&tm);
+                }
+            }
+            
+            // Apply temperature adjustments to program
+            Program* activeProgram = getActiveProgramMutable();
+            if (activeProgram && tempDelta != 0.0f) {
+                int adjustedStages = 0;
+                for (size_t i = 0; i < activeProgram->customStages.size(); i++) {
+                    CustomStage& stage = activeProgram->customStages[i];
+                    
+                    // Only adjust fermentation stages that allow auto-adjustment
+                    if (stage.isFermentation && !stage.disableAutoAdjust) {
+                        float newTemp = stage.temp + tempDelta;
+                        float clampedTemp = constrain(newTemp, minTemp, maxTemp);
+                        
+                        if (debugSerial) {
+                            Serial.printf("[FINISH-BY] Stage %zu (%s): %.1f°C → %.1f°C", 
+                                         i, stage.label.c_str(), stage.temp, clampedTemp);
+                            if (clampedTemp != newTemp) {
+                                Serial.printf(" (clamped from %.1f°C)", newTemp);
+                            }
+                            Serial.println();
+                        }
+                        
+                        stage.temp = clampedTemp;
+                        adjustedStages++;
+                    }
+                }
+                
+                // Update finish-by state
+                finishByState.active = true;
+                finishByState.targetEndTime = targetEndTime;
+                finishByState.tempDelta = tempDelta;
+                finishByState.appliedMinTemp = minTemp;
+                finishByState.appliedMaxTemp = maxTemp;
+                
+                if (debugSerial) {
+                    Serial.printf("[FINISH-BY] Applied %.1f°C delta to %d stages (limits: %.1f°C to %.1f°C)\n", 
+                                 tempDelta, adjustedStages, minTemp, maxTemp);
+                }
+            }
+        }
+        
         if (server.hasArg("stage")) {
             int stageIdx = server.arg("stage").toInt();
             if (stageIdx < 0 || stageIdx >= programState.maxCustomStages) {
@@ -652,6 +714,16 @@ void stateMachineEndpoints(WebServer& server) {
             Serial.printf("[TIMING] Program started at stage %d, time %lu\n", programState.customStageIdx, (unsigned long)programState.programStartTime);
         }
         
+        // Start program logging
+        String programName = "Program " + String(programState.activeProgramId);
+        startProgramLog(programName, programState.activeProgramId);
+        
+        // Get stage info for logging
+        if (programState.customProgram && programState.customStageIdx < programState.customProgram->customStages.size()) {
+            CustomStage& stage = programState.customProgram->customStages[programState.customStageIdx];
+            logStageStart(programState.customStageIdx, stage.label, stage.isFermentation);
+        }
+        
         resetFermentationTracking(getAveragedTemperature());
         invalidateStatusCache();
         saveResumeState();
@@ -664,6 +736,90 @@ void stateMachineEndpoints(WebServer& server) {
         if (debugSerial) Serial.println(F("[ACTION] /stop called"));
         stopBreadmaker();
         server.send(200, "application/json", "{\"status\":\"stopped\"}");
+    });
+
+    // Clear completed program and prepare for new one
+    server.on("/api/clear_completed", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /api/clear_completed called"));
+        
+        // Clear completion state
+        programState.isCompleted = false;
+        programState.programCompletedTime = 0;
+        programState.customStageIdx = 0;
+        programState.customMixIdx = 0;
+        programState.customStageStart = 0;
+        programState.customMixStepStart = 0;
+        programState.isRunning = false;
+        programState.programStartTime = 0;
+        
+        // Clear timing arrays
+        for (int i = 0; i < MAX_PROGRAM_STAGES; i++) {
+            programState.actualStageStartTimes[i] = 0;
+            programState.actualStageEndTimes[i] = 0;
+            programState.adjustedStageDurations[i] = 0;
+        }
+        
+        // Reset fermentation state
+        resetFermentationTracking(getAveragedTemperature());
+        
+        // Clear resume state and invalidate cache
+        clearResumeState();
+        invalidateStatusCache();
+        
+        if (debugSerial) Serial.println(F("[ACTION] Program completion state cleared - ready for new program"));
+        server.send(200, "application/json", "{\"status\":\"cleared\",\"message\":\"Ready for new program\"}");
+    });
+
+    // Finish-by configuration API endpoints
+    server.on("/api/finish-by/config", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[API] GET /api/finish-by/config"));
+        
+        String json = "{";
+        json += "\"weekdayHour\":" + String(finishByConfig.weekdayHour) + ",";
+        json += "\"weekdayMinute\":" + String(finishByConfig.weekdayMinute) + ",";
+        json += "\"weekendHour\":" + String(finishByConfig.weekendHour) + ",";
+        json += "\"weekendMinute\":" + String(finishByConfig.weekendMinute) + ",";
+        json += "\"useSmartDefaults\":" + String(finishByConfig.useSmartDefaults ? "true" : "false") + ",";
+        json += "\"defaultMinTemp\":" + String(finishByConfig.defaultMinTemp, 1) + ",";
+        json += "\"defaultMaxTemp\":" + String(finishByConfig.defaultMaxTemp, 1);
+        json += "}";
+        
+        server.send(200, "application/json", json);
+    });
+
+    server.on("/api/finish-by/config", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[API] POST /api/finish-by/config"));
+        
+        // Parse form parameters
+        if (server.hasArg("weekdayHour") && 
+            server.hasArg("weekdayMinute") &&
+            server.hasArg("weekendHour") &&
+            server.hasArg("weekendMinute") &&
+            server.hasArg("useSmartDefaults") &&
+            server.hasArg("defaultMinTemp") &&
+            server.hasArg("defaultMaxTemp")) {
+          
+            finishByConfig.weekdayHour = server.arg("weekdayHour").toInt();
+            finishByConfig.weekdayMinute = server.arg("weekdayMinute").toInt();
+            finishByConfig.weekendHour = server.arg("weekendHour").toInt();
+            finishByConfig.weekendMinute = server.arg("weekendMinute").toInt();
+            finishByConfig.useSmartDefaults = server.arg("useSmartDefaults") == "true";
+            finishByConfig.defaultMinTemp = server.arg("defaultMinTemp").toFloat();
+            finishByConfig.defaultMaxTemp = server.arg("defaultMaxTemp").toFloat();
+            
+            // TODO: Save configuration to SPIFFS/preferences
+            if (debugSerial) {
+                Serial.println(F("[CONFIG] Finish-by config updated:"));
+                Serial.printf_P(PSTR("  Weekday: %02d:%02d\n"), finishByConfig.weekdayHour, finishByConfig.weekdayMinute);
+                Serial.printf_P(PSTR("  Weekend: %02d:%02d\n"), finishByConfig.weekendHour, finishByConfig.weekendMinute);
+                Serial.printf_P(PSTR("  Smart defaults: %s\n"), finishByConfig.useSmartDefaults ? "true" : "false");
+                Serial.printf_P(PSTR("  Temp range: %.1f-%.1f°C\n"), finishByConfig.defaultMinTemp, finishByConfig.defaultMaxTemp);
+            }
+            
+            server.send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Configuration saved\"}");
+        } else {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing required parameters\"}");
+        }
     });
     
     // Set scheduled start time only (no stage)
@@ -1339,9 +1495,8 @@ void homeAssistantEndpoint(WebServer& server) {
                     if (programState.isRunning && programState.customStageIdx < cachedProgram->customStages.size()) {
                         // Calculate current stage remaining time only
                         unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-                        unsigned long stageTimeMs = getAdjustedStageTimeMsWithTemp(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
-                                                                           cachedProgram->customStages[programState.customStageIdx].isFermentation,
-                                                                           cachedProgram->customStages[programState.customStageIdx].temp);
+                        unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                           cachedProgram->customStages[programState.customStageIdx].isFermentation);
                         unsigned long stageTimeLeft = (stageTimeMs / 1000) - elapsed;
                         if (stageTimeLeft < 0) stageTimeLeft = 0;
                         
@@ -1424,9 +1579,8 @@ void homeAssistantEndpoint(WebServer& server) {
         if (programState.isRunning && programState.activeProgramId >= 0 && cachedProgram) {
             if (cachedProgram && programState.customStageIdx < cachedProgram->customStages.size()) {
                 unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-                unsigned long stageTimeMs = getAdjustedStageTimeMsWithTemp(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
-                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation,
-                                                                   cachedProgram->customStages[programState.customStageIdx].temp);
+                unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation);
                 int timeLeftSec = (stageTimeMs / 1000) - elapsed;
                 if (timeLeftSec < 0) timeLeftSec = 0;
                 
@@ -1434,9 +1588,8 @@ void homeAssistantEndpoint(WebServer& server) {
                     stageReadyAt = now + timeLeftSec;
                     programReadyAt = now + timeLeftSec;
                     for (size_t i = programState.customStageIdx + 1; i < cachedProgram->customStages.size(); ++i) {
-                        unsigned long adjustedDurationMs = getAdjustedStageTimeMsWithTemp(cachedProgram->customStages[i].min * 60 * 1000, 
-                                                                                  cachedProgram->customStages[i].isFermentation,
-                                                                                  cachedProgram->customStages[i].temp);
+                        unsigned long adjustedDurationMs = getAdjustedStageTimeMs(cachedProgram->customStages[i].min * 60 * 1000, 
+                                                                                  cachedProgram->customStages[i].isFermentation);
                         programReadyAt += adjustedDurationMs / 1000;
                     }
                 }
@@ -2606,9 +2759,8 @@ void registerWebEndpoints(WebServer& server) {
                 
                 // Calculate time left in current stage only
                 unsigned long elapsed = (programState.customStageStart == 0) ? 0 : (millis() - programState.customStageStart) / 1000;
-                unsigned long stageTimeMs = getAdjustedStageTimeMsWithTemp(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
-                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation,
-                                                                   cachedProgram->customStages[programState.customStageIdx].temp);
+                unsigned long stageTimeMs = getAdjustedStageTimeMs(cachedProgram->customStages[programState.customStageIdx].min * 60 * 1000, 
+                                                                   cachedProgram->customStages[programState.customStageIdx].isFermentation);
                 unsigned long timeLeft = (stageTimeMs / 1000) - elapsed;
                 if (timeLeft < 0) timeLeft = 0;
                 

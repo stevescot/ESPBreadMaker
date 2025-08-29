@@ -140,11 +140,13 @@ function populateProgramSelect() {
       const programIdx = window.cachedPrograms.findIndex(p => p.id === selectedProgramId);
       if (programIdx >= 0) {
         populateStageDropdown(programIdx);
+        showFinishByControls(true);
       }
     } else {
       // Hide stage selection if no program selected
       const startAtStageRow = document.getElementById('startAtStageRow');
       if (startAtStageRow) startAtStageRow.style.display = 'none';
+      showFinishByControls(false);
     }
   };
 
@@ -687,10 +689,35 @@ function updateStatusInternal(s) {
     btnPauseResume.style.display = 'none';
   }
 
+  // ---- Clear Completed Button ----
+  let btnClearCompleted = document.getElementById('btnClearCompleted');
+  if (btnClearCompleted) {
+    if (s.completed === true) {
+      btnClearCompleted.style.display = '';
+      // Hide normal start/stop buttons when completed
+      const btnStart = document.getElementById('btnStart');
+      const btnStop = document.getElementById('btnStop');
+      if (btnStart) btnStart.style.display = 'none';
+      if (btnStop) btnStop.style.display = 'none';
+      if (btnPauseResume) btnPauseResume.style.display = 'none';
+    } else {
+      btnClearCompleted.style.display = 'none';
+      // Show normal buttons when not completed
+      const btnStart = document.getElementById('btnStart');
+      const btnStop = document.getElementById('btnStop');
+      if (btnStart) btnStart.style.display = '';
+      if (btnStop) btnStop.style.display = '';
+    }
+  }
+
   // ---- Status labels ----
   if (document.getElementById('stage')) {
     let stageText = 'Idle';
-    if (s && s.stage && s.stage !== 'Idle' && s.running) {
+    if (s && s.completed === true) {
+      // Show completion status
+      const completedTime = s.completedTime ? new Date(s.completedTime * 1000).toLocaleString() : '';
+      stageText = `✅ COMPLETED${completedTime ? ` at ${completedTime}` : ''}`;
+    } else if (s && s.stage && s.stage !== 'Idle' && s.running) {
       // Show custom stage label if customStages present and running
       if (s.programs && s.program && s.programs[s.program] && Array.isArray(s.programs[s.program].customStages)) {
         const prog = s.programs[s.program];
@@ -1738,6 +1765,25 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Clear completed program and start new
+  const btnClearCompleted = document.getElementById('btnClearCompleted');
+  if (btnClearCompleted) {
+    btnClearCompleted.addEventListener('click', function() {
+      const currentProgram = window.status?.program || 'Unknown';
+      const completedTime = window.status?.completedTime ? new Date(window.status.completedTime * 1000).toLocaleString() : 'Unknown';
+      
+      if (confirm(`🧹 Clear Completed Program?\n\nCompleted Program: ${currentProgram}\nCompleted At: ${completedTime}\n\nThis will clear the completion data and prepare for a new program.\nYou can review this run in the History page.\n\nAre you sure?`)) {
+        fetch('/api/clear_completed', { method: 'POST' })
+          .then(r => r.json())
+          .then(result => {
+            console.log('Clear completed:', result);
+            window.updateStatus();
+          })
+          .catch(err => console.error('Clear completed failed:', err));
+      }
+    });
+  }
+
   const btnBack = document.getElementById('btnBack');
   if (btnBack) {
     btnBack.addEventListener('click', function() {
@@ -1897,3 +1943,295 @@ function showInstructionModal(title, instructions) {
   document.getElementById('instructionText').textContent = instructions || 'No instructions available.';
   modal.style.display = 'flex';
 }
+
+// ---- Finish By Time Functionality ----
+
+function showFinishByControls(show) {
+  const finishByRow = document.getElementById('finishByRow');
+  const finishByResults = document.getElementById('finishByResults');
+  
+  if (finishByRow) {
+    finishByRow.style.display = show ? 'flex' : 'none';
+    
+    // Set default time to 8 hours from now if no time is set
+    if (show) {
+      const finishByTime = document.getElementById('finishByTime');
+      if (finishByTime && !finishByTime.value) {
+        const defaultTime = new Date();
+        defaultTime.setHours(defaultTime.getHours() + 8);
+        finishByTime.value = defaultTime.toISOString().slice(0, 16); // Format for datetime-local
+      }
+    }
+  }
+  if (finishByResults) {
+    finishByResults.style.display = 'none';
+  }
+}
+
+function calculateFinishByTime() {
+  const finishByTime = document.getElementById('finishByTime');
+  const programSelect = document.getElementById('programSelect');
+  const finishByResults = document.getElementById('finishByResults');
+  const finishByStatus = document.getElementById('finishByStatus');
+  const finishByDetails = document.getElementById('finishByDetails');
+  
+  if (!finishByTime || !programSelect || !finishByResults) return;
+  
+  const targetTime = new Date(finishByTime.value);
+  const selectedProgramId = parseInt(programSelect.value);
+  
+  if (!targetTime || isNaN(targetTime.getTime()) || selectedProgramId < 0) {
+    alert('Please select a program and target finish time');
+    return;
+  }
+  
+  const currentProgram = window.cachedPrograms?.find(p => p.id === selectedProgramId);
+  if (!currentProgram) {
+    alert('Selected program not found');
+    return;
+  }
+  
+  const now = new Date();
+  const timeAvailable = (targetTime.getTime() - now.getTime()) / 1000; // seconds
+  
+  if (timeAvailable <= 0) {
+    finishByStatus.innerHTML = '⚠️ Target time is in the past!';
+    finishByResults.style.display = 'block';
+    return;
+  }
+  
+  // Check if program is currently running
+  const isRunning = window.status?.running || window.status?.state === 'Running';
+  const currentStageIdx = isRunning ? (window.status?.stageIdx || 0) : 0;
+  const timeLeftInCurrentStage = isRunning ? (window.status?.timeLeft || 0) : 0;
+  
+  // Calculate program duration from current position
+  let totalDuration = 0;
+  let fermentationStages = [];
+  let fermentationDuration = 0;
+  
+  currentProgram.customStages.forEach((stage, idx) => {
+    const stageDuration = stage.min * 60; // convert to seconds
+    
+    if (idx < currentStageIdx) {
+      // Stage already completed - skip
+      return;
+    } else if (idx === currentStageIdx && isRunning) {
+      // Current stage - use remaining time
+      totalDuration += timeLeftInCurrentStage;
+      if (stage.isFermentation) {
+        fermentationStages.push({
+          index: idx,
+          label: stage.label,
+          duration: timeLeftInCurrentStage,
+          originalTemp: stage.temp
+        });
+        fermentationDuration += timeLeftInCurrentStage;
+      }
+    } else {
+      // Future stage - use full duration
+      totalDuration += stageDuration;
+      if (stage.isFermentation) {
+        fermentationStages.push({
+          index: idx,
+          label: stage.label,
+          duration: stageDuration,
+          originalTemp: stage.temp
+        });
+        fermentationDuration += stageDuration;
+      }
+    }
+  });
+  
+  // Get current temperature for fermentation calculations
+  const currentTemp = window.status?.temperature || 20.0;
+  const programBaseline = currentProgram.fermentBaselineTemp || 20.0;
+  const q10 = currentProgram.fermentQ10 || 2.0;
+  
+  if (fermentationStages.length === 0) {
+    // No fermentation stages - can't adjust timing
+    const hoursNeeded = totalDuration / 3600;
+    const hoursAvailable = timeAvailable / 3600;
+    
+    finishByStatus.innerHTML = `⚠️ No fermentation stages to adjust timing`;
+    finishByDetails.innerHTML = `
+      Program duration: ${formatDuration(totalDuration)}<br>
+      Time available: ${formatDuration(timeAvailable)}<br>
+      ${timeAvailable < totalDuration ? 
+        '<span style="color:#f44">❌ Not enough time - program will finish late</span>' :
+        '<span style="color:#4f4">✅ Program will finish on time</span>'}
+    `;
+    finishByResults.style.display = 'block';
+    return;
+  }
+  
+  // Calculate required fermentation factor to meet target time
+  const nonFermentDuration = totalDuration - fermentationDuration;
+  const fermentTimeAvailable = timeAvailable - nonFermentDuration;
+  
+  if (fermentTimeAvailable <= 0) {
+    finishByStatus.innerHTML = '❌ Not enough time even with instant fermentation!';
+    finishByResults.style.display = 'block';
+    return;
+  }
+  
+  const requiredFactor = fermentationDuration / fermentTimeAvailable;
+  
+  // Calculate required temperature for bulk fermentation stages
+  let tempCalculations = [];
+  let warnings = [];
+  
+  fermentationStages.forEach(stage => {
+    const baselineTemp = stage.originalTemp > 0 ? stage.originalTemp : programBaseline;
+    
+    // Calculate required temperature to achieve the factor
+    // Factor = Q10^((baseline - actualTemp) / 10)
+    // requiredFactor = Q10^((baseline - requiredTemp) / 10)
+    // log(requiredFactor) = ((baseline - requiredTemp) / 10) * log(Q10)
+    // (baseline - requiredTemp) / 10 = log(requiredFactor) / log(Q10)
+    // baseline - requiredTemp = 10 * log(requiredFactor) / log(Q10)
+    // requiredTemp = baseline - 10 * log(requiredFactor) / log(Q10)
+    
+    const requiredTemp = baselineTemp - (10 * Math.log(requiredFactor) / Math.log(q10));
+    
+    tempCalculations.push({
+      stageName: stage.label,
+      baselineTemp: baselineTemp,
+      requiredTemp: requiredTemp,
+      isAmbient: stage.originalTemp === 0
+    });
+    
+    if (requiredTemp < currentTemp - 2) {
+      warnings.push(`${stage.label}: Needs ${requiredTemp.toFixed(1)}°C (${(requiredTemp - currentTemp).toFixed(1)}°C cooler) - Cannot cool!`);
+    }
+  });
+  
+  // Display results
+  let statusHTML = '';
+  let detailsHTML = '';
+  let canApplyTemp = false;
+  let recommendedTemp = null;
+  
+  if (warnings.length > 0) {
+    statusHTML = '⚠️ Cannot achieve target time - cooling required';
+    detailsHTML += '<div style="color:#f44;margin-bottom:1em;"><strong>Warnings:</strong><br>';
+    warnings.forEach(warning => detailsHTML += `• ${warning}<br>`);
+    detailsHTML += '</div>';
+  } else {
+    statusHTML = '✅ Target time achievable!';
+    canApplyTemp = true;
+    // Find the highest recommended temperature for immediate application
+    recommendedTemp = Math.max(...tempCalculations.map(calc => calc.requiredTemp));
+  }
+  
+  detailsHTML += `
+    <strong>Time Analysis:</strong><br>
+    • ${isRunning ? 'Remaining program time' : 'Total program duration'}: ${formatDuration(totalDuration)}<br>
+    • Time available: ${formatDuration(timeAvailable)}<br>
+    • Required fermentation factor: ${requiredFactor.toFixed(2)}x<br>
+    ${isRunning ? `• Current stage: ${currentStageIdx + 1} (${currentProgram.customStages[currentStageIdx]?.label || 'Unknown'})<br>` : ''}
+    <br>
+    <strong>Temperature Requirements:</strong><br>
+  `;
+  
+  tempCalculations.forEach(calc => {
+    const tempColor = calc.requiredTemp < currentTemp - 2 ? '#f44' : 
+                     calc.requiredTemp > currentTemp + 5 ? '#fa0' : '#4f4';
+    detailsHTML += `• ${calc.stageName}: ${calc.requiredTemp.toFixed(1)}°C `;
+    detailsHTML += `<span style="color:${tempColor}">`;
+    if (calc.isAmbient) {
+      detailsHTML += '(ambient stage)';
+    } else {
+      detailsHTML += `(baseline: ${calc.baselineTemp.toFixed(1)}°C)`;
+    }
+    detailsHTML += '</span><br>';
+  });
+  
+  detailsHTML += `<br><strong>Current Temperature:</strong> ${currentTemp.toFixed(1)}°C`;
+  
+  finishByStatus.innerHTML = statusHTML;
+  finishByDetails.innerHTML = detailsHTML;
+  finishByResults.style.display = 'block';
+  
+  // Show apply button if we can achieve the target time
+  const finishByActions = document.getElementById('finishByActions');
+  if (finishByActions) {
+    if (canApplyTemp && recommendedTemp && recommendedTemp > currentTemp - 2) {
+      finishByActions.style.display = 'block';
+      // Store the recommended temperature for the apply button
+      window.finishByRecommendedTemp = recommendedTemp;
+    } else {
+      finishByActions.style.display = 'none';
+    }
+  }
+}
+
+function clearFinishByTime() {
+  const finishByTime = document.getElementById('finishByTime');
+  const finishByResults = document.getElementById('finishByResults');
+  
+  if (finishByTime) finishByTime.value = '';
+  if (finishByResults) finishByResults.style.display = 'none';
+  window.finishByRecommendedTemp = null;
+}
+
+async function applyFinishByTemperature() {
+  const applyTempStatus = document.getElementById('applyTempStatus');
+  
+  if (!window.finishByRecommendedTemp) {
+    if (applyTempStatus) applyTempStatus.textContent = 'No temperature calculated';
+    return;
+  }
+  
+  const targetTemp = Math.round(window.finishByRecommendedTemp);
+  
+  if (applyTempStatus) applyTempStatus.textContent = `Setting ${targetTemp}°C...`;
+  
+  try {
+    const response = await fetch(`/api/temperature?setpoint=${targetTemp}`, {
+      method: 'GET'
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      if (applyTempStatus) {
+        applyTempStatus.innerHTML = `<span style="color:#4f4">✅ Temperature set to ${targetTemp}°C</span>`;
+      }
+      
+      // Enable manual mode if not already enabled
+      const manualToggle = document.getElementById('manualModeToggle');
+      if (manualToggle && !manualToggle.checked) {
+        manualToggle.click(); // This will trigger the manual mode
+      }
+      
+    } else {
+      if (applyTempStatus) {
+        applyTempStatus.innerHTML = `<span style="color:#f44">❌ Failed to set temperature</span>`;
+      }
+    }
+  } catch (error) {
+    console.error('Error setting temperature:', error);
+    if (applyTempStatus) {
+      applyTempStatus.innerHTML = `<span style="color:#f44">❌ Error: ${error.message}</span>`;
+    }
+  }
+}
+
+// Set up finish by time event handlers
+document.addEventListener('DOMContentLoaded', function() {
+  const btnCalculateFinishBy = document.getElementById('btnCalculateFinishBy');
+  const btnClearFinishBy = document.getElementById('btnClearFinishBy');
+  const btnApplyFinishByTemp = document.getElementById('btnApplyFinishByTemp');
+  
+  if (btnCalculateFinishBy) {
+    btnCalculateFinishBy.addEventListener('click', calculateFinishByTime);
+  }
+  
+  if (btnClearFinishBy) {
+    btnClearFinishBy.addEventListener('click', clearFinishByTime);
+  }
+  
+  if (btnApplyFinishByTemp) {
+    btnApplyFinishByTemp.addEventListener('click', applyFinishByTemperature);
+  }
+});

@@ -10,8 +10,7 @@
     .start-at-row {
       display: flex;
       align-items: center;
-      justify        <p style="margin:0.2em 0;"><strong>Fermentation Factor:</strong> <span id="fermentFactor">--</span>x</p>
-      </div>ntent: center;
+      justify-content: center;
       gap: 0.5em;
       margin-bottom: 0.4em;
       margin-top: 0.2em;
@@ -120,8 +119,30 @@
       opacity: 1.0;
       filter: drop-shadow(0 0 3px #fff8);
     }
+    .history-btn {
+      position: absolute;
+      top: 10px;
+      right: 55px;
+      z-index: 100;
+      width: 36px;
+      height: 36px;
+      opacity: 0.78;
+      transition: opacity 0.2s;
+      background: #2196F3;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
+      font-size: 18px;
+    }
+    .history-btn:hover {
+      opacity: 1.0;
+      filter: drop-shadow(0 0 3px #2196F3);
+    }
     @media (max-width: 700px) {
       .config-cog { top: 8px; right: 8px; width: 32px; height: 32px; }
+      .history-btn { top: 8px; right: 48px; width: 32px; height: 32px; font-size: 16px; }
       .breadmaker-pic { max-width: 120px; }
     }
     .stage-progress {
@@ -299,6 +320,9 @@
         </g>
       </svg>
     </a>
+    <a href="/history.html" class="history-btn" title="Program History">
+      📊
+    </a>
     <a href="/config.html" class="config-cog" title="Configuration">
       <!-- Classic gear/cog SVG -->
       <svg width="36px" height="36px" viewBox="0 0 24 24" id="settings_cog" xmlns="http://www.w3.org/2000/svg">
@@ -334,6 +358,66 @@
         <select id="programSelect" style="padding:0.3em;border-radius:4px;border:1px solid #666;background:#333;color:#fff;min-width:12em;">
           <option value="">Loading programs...</option>
         </select>
+      </div>
+      
+      <!-- Enhanced Finish By Time Selection (shown when program selected) -->
+      <div id="finishByRow" style="display:none;background:#1a3a1a;border-radius:8px;padding:1em;margin-bottom:0.7em;border:2px solid #4caf50;">
+        <div style="text-align:center;margin-bottom:0.8em;">
+          <h4 style="color:#9f9;margin:0;font-size:1.1em;">🎯 Finish-By Time Feature</h4>
+          <p style="color:#ccc;margin:0.3em 0 0 0;font-size:0.9em;">Automatically adjust fermentation temperatures to finish at your target time</p>
+        </div>
+        
+        <!-- Target End Time Selection -->
+        <div style="display:flex;align-items:center;justify-content:center;gap:0.7em;flex-wrap:wrap;margin-bottom:0.8em;">
+          <label for="finishByTime" style="font-size:1em;color:#9f9;font-weight:bold;">Target End Time:</label>
+          <input type="datetime-local" id="finishByTime" style="padding:0.4em;border-radius:4px;border:1px solid #666;background:#333;color:#fff;min-width:200px;">
+          <button id="btnSmartDefault" style="padding:0.3em 0.8em;border-radius:4px;background:#ff9800;color:#fff;border:none;cursor:pointer;font-size:0.9em;">📅 Smart Default</button>
+        </div>
+        
+        <!-- Temperature Adjustment Controls -->
+        <div style="display:flex;align-items:center;justify-content:center;gap:0.7em;flex-wrap:wrap;margin-bottom:0.8em;">
+          <label for="tempDelta" style="font-size:1em;color:#9f9;font-weight:bold;">Temperature Adjustment:</label>
+          <input type="number" id="tempDelta" step="0.5" min="-10" max="10" value="0" style="padding:0.3em;border-radius:4px;border:1px solid #666;background:#333;color:#fff;width:80px;">
+          <span style="color:#ccc;">°C</span>
+          <button id="btnCalculateTemp" style="padding:0.3em 0.8em;border-radius:4px;background:#2196f3;color:#fff;border:none;cursor:pointer;">🧮 Calculate</button>
+        </div>
+        
+        <!-- Temperature Limits -->
+        <div style="display:flex;align-items:center;justify-content:center;gap:0.7em;flex-wrap:wrap;margin-bottom:0.8em;">
+          <label style="font-size:0.9em;color:#ccc;">Limits:</label>
+          <input type="number" id="minTempLimit" step="0.5" min="5" max="50" value="15" style="padding:0.2em;border-radius:4px;border:1px solid #666;background:#333;color:#fff;width:60px;">
+          <span style="color:#ccc;font-size:0.9em;">°C to</span>
+          <input type="number" id="maxTempLimit" step="0.5" min="20" max="50" value="35" style="padding:0.2em;border-radius:4px;border:1px solid #666;background:#333;color:#fff;width:60px;">
+          <span style="color:#ccc;font-size:0.9em;">°C</span>
+        </div>
+        
+        <!-- Action Buttons -->
+        <div style="text-align:center;">
+          <button id="btnPreviewFinishBy" style="padding:0.4em 1em;border-radius:6px;background:#4caf50;color:#fff;border:none;cursor:pointer;font-weight:bold;margin-right:0.5em;">👁️ Preview Changes</button>
+          <button id="btnClearFinishBy" style="padding:0.4em 1em;border-radius:6px;background:#666;color:#fff;border:none;cursor:pointer;">❌ Clear</button>
+        </div>
+      </div>
+      
+      <!-- Enhanced Finish By Results -->
+      <div id="finishByResults" style="display:none;background:#2a1a1a;border-radius:8px;padding:1em;margin-bottom:0.7em;border:2px solid #ff9800;">
+        <div style="text-align:center;margin-bottom:0.8em;">
+          <h4 style="color:#ffa;margin:0;font-size:1.1em;">📋 Finish-By Preview</h4>
+        </div>
+        
+        <div id="finishByStatus" style="color:#ffa;font-size:1em;margin-bottom:0.8em;text-align:center;font-weight:bold;"></div>
+        
+        <div id="finishByDetails" style="color:#ddd;font-size:0.9em;background:#333;padding:0.8em;border-radius:6px;margin-bottom:0.8em;font-family:monospace;"></div>
+        
+        <div id="finishByStageList" style="margin-bottom:0.8em;">
+          <h5 style="color:#9f9;margin:0 0 0.5em 0;font-size:1em;">🔄 Stages to be adjusted:</h5>
+          <div id="stageAdjustmentsList" style="color:#ddd;font-size:0.9em;max-height:150px;overflow-y:auto;"></div>
+        </div>
+        
+        <div id="finishByActions" style="text-align:center;border-top:1px solid #555;padding-top:0.8em;">
+          <button id="btnConfirmFinishBy" style="padding:0.5em 1.2em;border-radius:6px;background:#4caf50;color:#fff;border:none;cursor:pointer;font-weight:bold;font-size:1.05em;margin-right:0.5em;">✅ Confirm & Start</button>
+          <button id="btnModifyFinishBy" style="padding:0.5em 1.2em;border-radius:6px;background:#ff9800;color:#fff;border:none;cursor:pointer;margin-right:0.5em;">✏️ Modify</button>
+          <button id="btnCancelFinishBy" style="padding:0.5em 1.2em;border-radius:6px;background:#f44336;color:#fff;border:none;cursor:pointer;">❌ Cancel</button>
+        </div>
       </div>
       
       <!-- Stage Selection (shown when program selected) -->
@@ -396,6 +480,7 @@
       <button id="btnStart">Start</button>
       <button id="btnPauseResume">Pause</button>
       <button id="btnStop">Stop</button>
+      <button id="btnClearCompleted" style="display:none; background:#4caf50; color:white;">Clear & Start New</button>
       <button id="btnBack">Prev</button>
       <button id="btnAdvance">Next</button>
     </div>

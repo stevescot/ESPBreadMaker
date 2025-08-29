@@ -121,6 +121,7 @@ bool loadSpecificProgram(int programId) {
     cs.temp = st["temp"] | 0.0;
     cs.noMix = st["noMix"] | false;
     cs.isFermentation = st["isFermentation"] | false;
+    cs.disableAutoAdjust = st["disableAutoAdjust"] | false;
     cs.instructions = st["instructions"] | String("");
     cs.light = st["light"] | String("");
     cs.buzzer = st["buzzer"] | String("");

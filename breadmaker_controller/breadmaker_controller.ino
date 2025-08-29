@@ -1104,7 +1104,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         
         if (fermentState.fermentLastUpdateMs == 0) {
           fermentState.fermentLastTemp = actualTemp;
-          fermentState.fermentLastFactor = calculateFermentationFactorWithStage(actualTemp, st.temp, st.isFermentation); // Use stage-aware biological calculation
+          fermentState.fermentLastFactor = calculateFermentationFactor(actualTemp); // Use stage-aware biological calculation
           Serial.printf("[FERMENT-TIMING-CALC] Initial factor calculation: temp=%.1f°C -> factor=%.3f\n", 
                        actualTemp, fermentState.fermentLastFactor);
           fermentState.fermentLastUpdateMs = nowMs;
@@ -1142,7 +1142,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           
           // THEN update fermentation factor based on current temperature for NEXT interval
           fermentState.fermentLastTemp = actualTemp;
-          fermentState.fermentLastFactor = calculateFermentationFactorWithStage(actualTemp, st.temp, st.isFermentation); // Use stage-aware biological calculation
+          fermentState.fermentLastFactor = calculateFermentationFactor(actualTemp); // Use stage-aware biological calculation
           Serial.printf("[FERMENT-TIMING-UPDATE] Used previous factor %.3f for elapsed %.1fs, updated to new factor %.3f for temp %.1f°C\n", 
                        secondsPerScheduledMinute / 60.0, realElapsedSec, fermentState.fermentLastFactor, actualTemp);
           

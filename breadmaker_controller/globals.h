@@ -113,11 +113,13 @@ struct ProgramState {
     size_t customStageIdx = 0, customMixIdx = 0, maxCustomStages = 0;
     unsigned long customStageStart = 0, customMixStepStart = 0;
     time_t programStartTime = 0;
+    time_t programCompletedTime = 0; // When program finished (0 = not completed)
     time_t actualStageStartTimes[MAX_PROGRAM_STAGES] = {0};
     time_t actualStageEndTimes[MAX_PROGRAM_STAGES] = {0}; // Record when each stage actually ended
     unsigned long adjustedStageDurations[MAX_PROGRAM_STAGES] = {0}; // Store fermentation-adjusted durations
     unsigned long lastFermentationUpdate = 0; // Last time fermentation was recalculated (millis)
     bool isRunning = false, manualMode = false;
+    bool isCompleted = false; // True when program finished, preserved until manually cleared
 };
 #endif
 
@@ -248,4 +250,29 @@ struct SafetySystem {
     }
 };
 extern SafetySystem safetySystem;
+
+// Finish-By Time Configuration
+#ifndef FINISH_BY_CONFIG_STRUCT_DEFINED
+#define FINISH_BY_CONFIG_STRUCT_DEFINED
+struct FinishByConfig {
+    int weekdayHour = 17;         // 5:30 PM weekdays
+    int weekdayMinute = 30;
+    int weekendHour = 9;          // 9:00 AM weekends  
+    int weekendMinute = 0;
+    bool useSmartDefaults = true;
+    float defaultMinTemp = 15.0f; // Default yeast minimum
+    float defaultMaxTemp = 35.0f; // Default yeast maximum
+};
+
+struct FinishByState {
+    bool active = false;
+    time_t targetEndTime = 0;
+    float tempDelta = 0.0f;
+    float appliedMinTemp = 15.0f;
+    float appliedMaxTemp = 35.0f;
+};
+
+extern FinishByConfig finishByConfig;
+extern FinishByState finishByState;
+#endif
 #endif

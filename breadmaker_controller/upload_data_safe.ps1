@@ -1,18 +1,22 @@
-# Robust Data Upload Script for ESP32 Breadmaker Controller
-# Fixed to use the correct upload method that the firmware actually implements
+# Safe Data Upload Script - LEGACY - Use esp32-manager.ps1 instead
+# Redirects to the new unified manager for consistency
 
 param(
     [string]$targetIP = "192.168.250.125",
-    [string]$specificFile = "",
-    [switch]$IncludeJSON = $false,
-    [switch]$IncludePrograms = $false
+    [string]$specificFile = ""
 )
 
-Write-Host "=== ESP32 Data Upload (Fixed Method) ===" -ForegroundColor Cyan
-Write-Host "Target IP: $targetIP" -ForegroundColor Yellow
+Write-Host "⚠️ Legacy script detected!" -ForegroundColor Yellow
+Write-Host "Redirecting to esp32-manager.ps1 for better safety and features..." -ForegroundColor Cyan
 Write-Host ""
 
-# Function to upload a single file using the correct multipart method
+if ($specificFile -ne "") {
+    & ".\esp32-manager.ps1" -UploadWeb -Files $specificFile -IP $targetIP
+} else {
+    & ".\esp32-manager.ps1" -UploadWeb -IP $targetIP
+}
+
+# Function to upload a single file
 function Upload-File {
     param(
         [string]$FilePath,
@@ -22,8 +26,6 @@ function Upload-File {
     
     try {
         Write-Host "  Uploading: $TargetName" -ForegroundColor White
-        
-        # Use the correct multipart form upload method that the firmware expects
         $result = curl -X POST -F "file=@$FilePath;filename=$TargetName" "http://$DeviceIP/api/upload"
         
         if ($result -match "uploaded") {
@@ -49,7 +51,14 @@ $successCount = 0
 $failCount = 0
 
 if ($specificFile -ne "") {
-    # Upload specific file
+    # Upload specific file only if it's not a program file
+    if ($specificFile -match "(programs|program_\d+)\.json$") {
+        Write-Host "❌ Error: Cannot upload program files with safe mode!" -ForegroundColor Red
+        Write-Host "Program file detected: $specificFile" -ForegroundColor Yellow
+        Write-Host "Use upload_data_robust.ps1 -IncludeJSON if you really need to overwrite programs" -ForegroundColor Gray
+        exit 1
+    }
+    
     if (Test-Path $specificFile) {
         $fileName = Split-Path $specificFile -Leaf
         if (Upload-File $specificFile $fileName $targetIP) {
@@ -62,13 +71,11 @@ if ($specificFile -ne "") {
         exit 1
     }
 } else {
-    # Upload all files in data directory (excluding JSON files unless specified)
-    if ($IncludeJSON) {
-        Write-Host "Uploading all files from data directory (including JSON files)..." -ForegroundColor Cyan
-        $files = Get-ChildItem -Path "data" -File -Recurse
-    } else {
-        Write-Host "Uploading all files from data directory (excluding JSON files)..." -ForegroundColor Cyan
-        $files = Get-ChildItem -Path "data" -File -Recurse | Where-Object { $_.Extension -ne ".json" }
+    # Upload all files except program files
+    Write-Host "Uploading web interface files (excluding program settings)..." -ForegroundColor Cyan
+    
+    $files = Get-ChildItem -Path "data" -File -Recurse | Where-Object { 
+        $_.Name -notmatch "(programs|program_\d+)\.json$" 
     }
     
     if ($files.Count -eq 0) {
@@ -76,11 +83,17 @@ if ($specificFile -ne "") {
         exit 0
     }
     
-    if ($IncludeJSON) {
-        Write-Host "Found $($files.Count) files to upload (including JSON files)" -ForegroundColor Yellow
-    } else {
-        Write-Host "Found $($files.Count) files to upload (JSON files excluded)" -ForegroundColor Yellow
-        Write-Host "Use -IncludeJSON switch to upload JSON files if needed" -ForegroundColor Gray
+    Write-Host "Found $($files.Count) files to upload" -ForegroundColor Yellow
+    
+    # List excluded files for transparency
+    $excludedFiles = Get-ChildItem -Path "data" -File -Recurse | Where-Object { 
+        $_.Name -match "(programs|program_\d+)\.json$" 
+    }
+    if ($excludedFiles.Count -gt 0) {
+        Write-Host "🔒 Excluded files (preserved on device):" -ForegroundColor Gray
+        foreach ($excluded in $excludedFiles) {
+            Write-Host "    - $($excluded.Name)" -ForegroundColor Gray
+        }
     }
     Write-Host ""
     
@@ -102,11 +115,13 @@ Write-Host ""
 Write-Host "=== Upload Summary ===" -ForegroundColor Cyan
 Write-Host "✅ Successful: $successCount" -ForegroundColor Green
 Write-Host "❌ Failed: $failCount" -ForegroundColor Red
+Write-Host "🔒 Program settings: PRESERVED" -ForegroundColor Green
 
 if ($failCount -eq 0) {
     Write-Host ""
-    Write-Host "🎉 All files uploaded successfully!" -ForegroundColor Green
-    Write-Host "Web interface: http://$targetIP" -ForegroundColor Yellow
+    Write-Host "🎉 Web interface updated successfully!" -ForegroundColor Green
+    Write-Host "📋 Your program settings remain unchanged on device" -ForegroundColor Green
+    Write-Host "🌐 Web interface: http://$targetIP" -ForegroundColor Yellow
 } else {
     Write-Host ""
     Write-Host "⚠️  Some uploads failed. Check the errors above." -ForegroundColor Yellow

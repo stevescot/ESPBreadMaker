@@ -39,3 +39,7 @@ PIDControl pid;
 
 // --- Safety system instance ---
 SafetySystem safetySystem;
+
+// --- Finish-by configuration instances ---
+FinishByConfig finishByConfig;
+FinishByState finishByState;
