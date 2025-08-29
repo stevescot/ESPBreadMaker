@@ -689,35 +689,10 @@ function updateStatusInternal(s) {
     btnPauseResume.style.display = 'none';
   }
 
-  // ---- Clear Completed Button ----
-  let btnClearCompleted = document.getElementById('btnClearCompleted');
-  if (btnClearCompleted) {
-    if (s.completed === true) {
-      btnClearCompleted.style.display = '';
-      // Hide normal start/stop buttons when completed
-      const btnStart = document.getElementById('btnStart');
-      const btnStop = document.getElementById('btnStop');
-      if (btnStart) btnStart.style.display = 'none';
-      if (btnStop) btnStop.style.display = 'none';
-      if (btnPauseResume) btnPauseResume.style.display = 'none';
-    } else {
-      btnClearCompleted.style.display = 'none';
-      // Show normal buttons when not completed
-      const btnStart = document.getElementById('btnStart');
-      const btnStop = document.getElementById('btnStop');
-      if (btnStart) btnStart.style.display = '';
-      if (btnStop) btnStop.style.display = '';
-    }
-  }
-
   // ---- Status labels ----
   if (document.getElementById('stage')) {
     let stageText = 'Idle';
-    if (s && s.completed === true) {
-      // Show completion status
-      const completedTime = s.completedTime ? new Date(s.completedTime * 1000).toLocaleString() : '';
-      stageText = `✅ COMPLETED${completedTime ? ` at ${completedTime}` : ''}`;
-    } else if (s && s.stage && s.stage !== 'Idle' && s.running) {
+    if (s && s.stage && s.stage !== 'Idle' && s.running) {
       // Show custom stage label if customStages present and running
       if (s.programs && s.program && s.programs[s.program] && Array.isArray(s.programs[s.program].customStages)) {
         const prog = s.programs[s.program];
@@ -1761,25 +1736,6 @@ window.addEventListener('DOMContentLoaded', () => {
           .then(r => r.json())
           .then(window.updateStatus)
           .catch(err => console.error('Stop failed:', err));
-      }
-    });
-  }
-
-  // Clear completed program and start new
-  const btnClearCompleted = document.getElementById('btnClearCompleted');
-  if (btnClearCompleted) {
-    btnClearCompleted.addEventListener('click', function() {
-      const currentProgram = window.status?.program || 'Unknown';
-      const completedTime = window.status?.completedTime ? new Date(window.status.completedTime * 1000).toLocaleString() : 'Unknown';
-      
-      if (confirm(`🧹 Clear Completed Program?\n\nCompleted Program: ${currentProgram}\nCompleted At: ${completedTime}\n\nThis will clear the completion data and prepare for a new program.\nYou can review this run in the History page.\n\nAre you sure?`)) {
-        fetch('/api/clear_completed', { method: 'POST' })
-          .then(r => r.json())
-          .then(result => {
-            console.log('Clear completed:', result);
-            window.updateStatus();
-          })
-          .catch(err => console.error('Clear completed failed:', err));
       }
     });
   }

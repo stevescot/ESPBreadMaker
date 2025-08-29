@@ -13,7 +13,6 @@
 #include <algorithm>  // For std::sort
 #include "missing_stubs.h"  // For getAdjustedStageTimeMs and other functions
 #include "display_manager.h"  // For screensaver control
-#include "program_logger.h"  // For program run logging and history
 
 // External OTA status for web integration
 extern OTAStatus otaStatus;
@@ -714,16 +713,6 @@ void stateMachineEndpoints(WebServer& server) {
             Serial.printf("[TIMING] Program started at stage %d, time %lu\n", programState.customStageIdx, (unsigned long)programState.programStartTime);
         }
         
-        // Start program logging
-        String programName = "Program " + String(programState.activeProgramId);
-        startProgramLog(programName, programState.activeProgramId);
-        
-        // Get stage info for logging
-        if (programState.customProgram && programState.customStageIdx < programState.customProgram->customStages.size()) {
-            CustomStage& stage = programState.customProgram->customStages[programState.customStageIdx];
-            logStageStart(programState.customStageIdx, stage.label, stage.isFermentation);
-        }
-        
         resetFermentationTracking(getAveragedTemperature());
         invalidateStatusCache();
         saveResumeState();
@@ -736,38 +725,6 @@ void stateMachineEndpoints(WebServer& server) {
         if (debugSerial) Serial.println(F("[ACTION] /stop called"));
         stopBreadmaker();
         server.send(200, "application/json", "{\"status\":\"stopped\"}");
-    });
-
-    // Clear completed program and prepare for new one
-    server.on("/api/clear_completed", HTTP_POST, [&](){
-        if (debugSerial) Serial.println(F("[ACTION] /api/clear_completed called"));
-        
-        // Clear completion state
-        programState.isCompleted = false;
-        programState.programCompletedTime = 0;
-        programState.customStageIdx = 0;
-        programState.customMixIdx = 0;
-        programState.customStageStart = 0;
-        programState.customMixStepStart = 0;
-        programState.isRunning = false;
-        programState.programStartTime = 0;
-        
-        // Clear timing arrays
-        for (int i = 0; i < MAX_PROGRAM_STAGES; i++) {
-            programState.actualStageStartTimes[i] = 0;
-            programState.actualStageEndTimes[i] = 0;
-            programState.adjustedStageDurations[i] = 0;
-        }
-        
-        // Reset fermentation state
-        resetFermentationTracking(getAveragedTemperature());
-        
-        // Clear resume state and invalidate cache
-        clearResumeState();
-        invalidateStatusCache();
-        
-        if (debugSerial) Serial.println(F("[ACTION] Program completion state cleared - ready for new program"));
-        server.send(200, "application/json", "{\"status\":\"cleared\",\"message\":\"Ready for new program\"}");
     });
 
     // Finish-by configuration API endpoints
@@ -1009,6 +966,9 @@ void stateMachineEndpoints(WebServer& server) {
             programState.actualStageEndTimes[programState.customStageIdx] = now;
             if (debugSerial) Serial.printf("[TIMING] Manual advance - Stage %d ended at %lu\n", programState.customStageIdx, (unsigned long)now);
         }
+        
+        // Save resume state BEFORE advancing (FIX: prevents stage skipping during firmware uploads)
+        saveResumeState();
         
         // Manually advance to next stage
         programState.customStageIdx++;
@@ -2414,9 +2374,14 @@ void registerWebEndpoints(WebServer& server) {
             }
             invalidateStatusCache();
             
-            // Record actual start time of this stage
-            if (stage < (int)numStages && stage < MAX_PROGRAM_STAGES) {
+            // Record actual start time only for the current stage being entered
+            if (stage == programState.customStageIdx && stage < (int)numStages && stage < MAX_PROGRAM_STAGES) {
                 programState.actualStageStartTimes[stage] = time(nullptr);
+                
+                // Clear any future stage timestamps to prevent timing corruption
+                for (int i = stage + 1; i < MAX_PROGRAM_STAGES; i++) {
+                    programState.actualStageStartTimes[i] = 0;
+                }
             }
             
             saveResumeState();
@@ -2505,6 +2470,11 @@ void registerWebEndpoints(WebServer& server) {
         if (programState.customStageIdx < numStages && 
             programState.customStageIdx < MAX_PROGRAM_STAGES) {
             programState.actualStageStartTimes[programState.customStageIdx] = time(nullptr);
+            
+            // Clear any future stage timestamps to prevent timing corruption
+            for (size_t i = programState.customStageIdx + 1; i < MAX_PROGRAM_STAGES; i++) {
+                programState.actualStageStartTimes[i] = 0;
+            }
         }
         
         saveResumeState();

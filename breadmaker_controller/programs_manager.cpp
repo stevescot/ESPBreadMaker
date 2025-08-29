@@ -368,6 +368,14 @@ bool splitProgramsJson() {
     int programId = program["id"];
     String filename = "/programs/program_" + String(programId) + ".json";
     
+    // Fix data types in the program object before saving
+    if (program.containsKey("fermentBaselineTemp") && program["fermentBaselineTemp"].is<String>()) {
+      program["fermentBaselineTemp"] = program["fermentBaselineTemp"].as<String>().toFloat();
+    }
+    if (program.containsKey("fermentQ10") && program["fermentQ10"].is<String>()) {
+      program["fermentQ10"] = program["fermentQ10"].as<String>().toFloat();
+    }
+    
     // Write individual program file
     File progFile = FFat.open(filename, "w");
     if (!progFile) {
@@ -387,8 +395,21 @@ bool splitProgramsJson() {
     meta["name"] = program["name"];
     if (program.containsKey("notes")) meta["notes"] = program["notes"];
     if (program.containsKey("icon")) meta["icon"] = program["icon"];
-    if (program.containsKey("fermentBaselineTemp")) meta["fermentBaselineTemp"] = program["fermentBaselineTemp"];
-    if (program.containsKey("fermentQ10")) meta["fermentQ10"] = program["fermentQ10"];
+    // Ensure fermentation parameters are stored as numbers, not strings
+    if (program.containsKey("fermentBaselineTemp")) {
+      if (program["fermentBaselineTemp"].is<String>()) {
+        meta["fermentBaselineTemp"] = program["fermentBaselineTemp"].as<String>().toFloat();
+      } else {
+        meta["fermentBaselineTemp"] = program["fermentBaselineTemp"];
+      }
+    }
+    if (program.containsKey("fermentQ10")) {
+      if (program["fermentQ10"].is<String>()) {
+        meta["fermentQ10"] = program["fermentQ10"].as<String>().toFloat();
+      } else {
+        meta["fermentQ10"] = program["fermentQ10"];
+      }
+    }
     
     // Force garbage collection between programs
     programDoc.clear();

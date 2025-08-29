@@ -139,8 +139,16 @@ function renderPrograms(progs) {
         const i = parseInt(inp.getAttribute('data-idx'));
         const fld = inp.getAttribute('data-field');
         let val = inp.value;
-        if (inp.type === 'number' && inp.step && inp.step !== 'any')
+        
+        // Convert numeric fields to proper numbers
+        if (inp.type === 'number') {
           val = inp.valueAsNumber;
+          // Ensure fermentation parameters are properly converted
+          if (fld === 'fermentBaselineTemp' || fld === 'fermentQ10') {
+            val = parseFloat(inp.value) || (fld === 'fermentBaselineTemp' ? 20 : 2.0);
+          }
+        }
+        
         if(fld==='name' && val.length>31) {
           alert('Name too long (max 31 chars)');
           inp.value = val.slice(0,31);

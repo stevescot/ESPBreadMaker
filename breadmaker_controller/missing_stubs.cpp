@@ -2,7 +2,6 @@
 #include "globals.h"
 #include "programs_manager.h"
 #include "calibration.h"
-#include "program_logger.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
@@ -420,25 +419,9 @@ void updateActiveProgramVars() {
 
 void stopBreadmaker() {
     if (debugSerial) Serial.println("[ACTION] stopBreadmaker() called");
-    
-    // Log program stop/completion
-    if (programState.isRunning) {
-        if (programState.isCompleted) {
-            saveProgramLog();
-        } else {
-            logEvent(LOG_PROGRAM_STOPPED, "Program manually stopped by user");
-            saveProgramLog();
-        }
-    }
-    
-    // Stop the program but preserve completion state if it was completed
     programState.isRunning = false;
-    
-    // Only reset stage info if program wasn't completed (manual stop)
-    if (!programState.isCompleted) {
-        programState.customStageIdx = 0;
-        programState.customStageStart = 0;
-    }
+    programState.customStageIdx = 0;
+    programState.customStageStart = 0;
     
     // Turn off all outputs
     setHeater(false);
@@ -453,14 +436,7 @@ void stopBreadmaker() {
     outputStates.buzzer = false;
     
     invalidateStatusCache();
-    
-    // Only clear resume state if not completed (preserve completion data)
-    if (!programState.isCompleted) {
-        clearResumeState();
-    } else {
-        // Save the completed state for review
-        saveResumeState();
-    }
+    clearResumeState();
 }
 
 // Initialize stage timing arrays when program is loaded or started
@@ -718,16 +694,6 @@ void streamStatusJson(Print& out) {
   out.print(programState.isRunning ? "true" : "false");
   out.print(",");
   
-  out.print("\"completed\":");
-  out.print(programState.isCompleted ? "true" : "false");
-  out.print(",");
-  
-  if (programState.programCompletedTime > 0) {
-    out.print("\"completedTime\":");
-    out.print((unsigned long)programState.programCompletedTime);
-    out.print(",");
-  }
-  
   // === Program Information ===
   if (programState.activeProgramId >= 0 && programState.activeProgramId < getProgramCount()) {
     // OPTIMIZATION: Cache program data to avoid frequent file system access
@@ -773,21 +739,29 @@ void streamStatusJson(Print& out) {
           unsigned long elapsed = (millis() - programState.customStageStart) / 1000;
           unsigned long baseStageDuration = stage.min * 60;
           
+          // Get or calculate adjusted stage duration with periodic updates (every 10 minutes)
+          unsigned long adjustedStageDuration = baseStageDuration;
+          if (stage.isFermentation) {
+            unsigned long timeSinceLastUpdate = millis() - programState.lastFermentationUpdate;
+            bool needsUpdate = (programState.adjustedStageDurations[programState.customStageIdx] == 0) || 
+                              (timeSinceLastUpdate > 600000); // 10 minutes = 600,000 ms
+            
+            if (needsUpdate) {
+              // Recalculate adjusted duration based on current fermentation conditions
+              adjustedStageDuration = getAdjustedStageTimeMs(baseStageDuration * 1000, true) / 1000;
+              programState.adjustedStageDurations[programState.customStageIdx] = adjustedStageDuration;
+              programState.lastFermentationUpdate = millis();
+            } else {
+              // Use cached adjusted duration
+              adjustedStageDuration = programState.adjustedStageDurations[programState.customStageIdx];
+            }
+          }
+          
           // Original time left (non-adjusted)
           timeLeft = (elapsed < baseStageDuration) ? (baseStageDuration - elapsed) : 0;
           
-          // Calculate fermentation-adjusted time left using the advanced tracking system
-          if (stage.isFermentation) {
-            // Use the sophisticated fermentation tracking: remaining biological time × current factor
-            double plannedStageSec = (double)stage.min * 60.0;
-            double remainingBiologicalSec = plannedStageSec - fermentState.scheduledElapsedSeconds;
-            if (remainingBiologicalSec < 0) remainingBiologicalSec = 0;
-            double currentFactor = fermentState.fermentationFactor > 0 ? fermentState.fermentationFactor : 1.0;
-            adjustedTimeLeft = (unsigned long)(remainingBiologicalSec * currentFactor);
-          } else {
-            // Non-fermentation stages: simple elapsed vs planned
-            adjustedTimeLeft = timeLeft;
-          }
+          // Fermentation-adjusted time left (using periodically updated duration)
+          adjustedTimeLeft = (elapsed < adjustedStageDuration) ? (adjustedStageDuration - elapsed) : 0;
         }
         out.printf("\"timeLeft\":%lu,", timeLeft);
         out.printf("\"adjustedTimeLeft\":%lu,", adjustedTimeLeft);
@@ -1231,13 +1205,13 @@ float calculateFermentationFactor(float actualTemp) {
     // TODO: Add warning flag for overheating
   } else if (actualTemp <= 36.0) {
     // 0°C to 36°C: Normal Q10 calculation, peak activity at 36°C
-    float tempDiff = baselineTemp - actualTemp;
+    float tempDiff = actualTemp - baselineTemp;  // Fixed: should be actual - baseline
     float exponent = tempDiff / 10.0;
     factor = pow(q10, exponent);
     
     // Special case: if baseline is above 36°C, calculate from 36°C as the peak
     if (baselineTemp > 36.0) {
-      float tempDiffFrom36 = 36.0 - actualTemp;
+      float tempDiffFrom36 = actualTemp - 36.0;  // Fixed: should be actual - 36
       float exponentFrom36 = tempDiffFrom36 / 10.0;
       factor = pow(q10, exponentFrom36);
     }
@@ -1249,7 +1223,7 @@ float calculateFermentationFactor(float actualTemp) {
   } else {
     // 36°C to 59°C: Linear interpolation from peak factor (at 36°C) down to 0 (at 59°C)
     // First calculate the peak factor at 36°C
-    float tempDiffAt36 = baselineTemp - 36.0;
+    float tempDiffAt36 = 36.0 - baselineTemp;  // Fixed: should be 36 - baseline
     float exponentAt36 = tempDiffAt36 / 10.0;
     float peakFactor = pow(q10, exponentAt36);
     
@@ -1288,8 +1262,14 @@ unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentat
     return baseTimeMs; // No fermentation adjustment
   }
   
-  // Apply current fermentation factor
-  return (unsigned long)(baseTimeMs * fermentState.fermentationFactor);
+  // FIXED: Apply current fermentation factor correctly
+  // fermentationFactor > 1 means faster fermentation = less time needed (hot)
+  // fermentationFactor < 1 means slower fermentation = more time needed (cold)
+  if (fermentState.fermentationFactor > 0) {
+    return (unsigned long)(baseTimeMs / fermentState.fermentationFactor); // FIXED: divide by factor
+  } else {
+    return baseTimeMs; // Fallback if factor is invalid
+  }
 }
 
 // Update fermentation cache - only recalculate when program or stage changes

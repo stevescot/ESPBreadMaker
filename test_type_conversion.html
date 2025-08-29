@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Type Conversion Test</title>
+</head>
+<body>
+    <h1>JavaScript Type Conversion Test</h1>
+    
+    <div>
+        <h2>Test Program:</h2>
+        <label>Name: <input type="text" id="name" value="Test Program"></label><br>
+        <label>Fermentation Baseline Temp (°C): <input type="number" id="fermentBaselineTemp" value="24"></label><br>
+        <label>Fermentation Q10 Factor: <input type="number" step="0.01" id="fermentQ10" value="2.0"></label><br>
+        <button onclick="testConversion()">Test Conversion</button>
+    </div>
+    
+    <div id="results"></div>
+    
+    <script>
+        function testConversion() {
+            const nameInput = document.getElementById('name');
+            const tempInput = document.getElementById('fermentBaselineTemp');
+            const q10Input = document.getElementById('fermentQ10');
+            
+            // Test original logic (problematic)
+            let originalVal1 = tempInput.value;
+            let originalVal2 = q10Input.value;
+            
+            // Test new logic (fixed)
+            let fixedVal1 = tempInput.valueAsNumber;
+            let fixedVal2 = parseFloat(tempInput.value) || 20;
+            let fixedVal3 = q10Input.valueAsNumber;
+            let fixedVal4 = parseFloat(q10Input.value) || 2.0;
+            
+            const results = document.getElementById('results');
+            results.innerHTML = `
+                <h3>Results:</h3>
+                <p><strong>Original (problematic):</strong></p>
+                <p>fermentBaselineTemp: "${originalVal1}" (type: ${typeof originalVal1})</p>
+                <p>fermentQ10: "${originalVal2}" (type: ${typeof originalVal2})</p>
+                
+                <p><strong>Fixed:</strong></p>
+                <p>fermentBaselineTemp: ${fixedVal1} (type: ${typeof fixedVal1})</p>
+                <p>fermentBaselineTemp (parseFloat): ${fixedVal2} (type: ${typeof fixedVal2})</p>
+                <p>fermentQ10: ${fixedVal3} (type: ${typeof fixedVal3})</p>
+                <p>fermentQ10 (parseFloat): ${fixedVal4} (type: ${typeof fixedVal4})</p>
+                
+                <h3>JSON Output:</h3>
+                <p><strong>Original (problematic):</strong></p>
+                <pre>${JSON.stringify({
+                    name: nameInput.value,
+                    fermentBaselineTemp: originalVal1,
+                    fermentQ10: originalVal2
+                }, null, 2)}</pre>
+                
+                <p><strong>Fixed:</strong></p>
+                <pre>${JSON.stringify({
+                    name: nameInput.value,
+                    fermentBaselineTemp: fixedVal1,
+                    fermentQ10: fixedVal3
+                }, null, 2)}</pre>
+            `;
+        }
+    </script>
+</body>
+</html>

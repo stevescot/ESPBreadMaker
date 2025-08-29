@@ -119,30 +119,8 @@
       opacity: 1.0;
       filter: drop-shadow(0 0 3px #fff8);
     }
-    .history-btn {
-      position: absolute;
-      top: 10px;
-      right: 55px;
-      z-index: 100;
-      width: 36px;
-      height: 36px;
-      opacity: 0.78;
-      transition: opacity 0.2s;
-      background: #2196F3;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-decoration: none;
-      font-size: 18px;
-    }
-    .history-btn:hover {
-      opacity: 1.0;
-      filter: drop-shadow(0 0 3px #2196F3);
-    }
     @media (max-width: 700px) {
       .config-cog { top: 8px; right: 8px; width: 32px; height: 32px; }
-      .history-btn { top: 8px; right: 48px; width: 32px; height: 32px; font-size: 16px; }
       .breadmaker-pic { max-width: 120px; }
     }
     .stage-progress {
@@ -320,9 +298,6 @@
         </g>
       </svg>
     </a>
-    <a href="/history.html" class="history-btn" title="Program History">
-      📊
-    </a>
     <a href="/config.html" class="config-cog" title="Configuration">
       <!-- Classic gear/cog SVG -->
       <svg width="36px" height="36px" viewBox="0 0 24 24" id="settings_cog" xmlns="http://www.w3.org/2000/svg">
@@ -480,7 +455,6 @@
       <button id="btnStart">Start</button>
       <button id="btnPauseResume">Pause</button>
       <button id="btnStop">Stop</button>
-      <button id="btnClearCompleted" style="display:none; background:#4caf50; color:white;">Clear & Start New</button>
       <button id="btnBack">Prev</button>
       <button id="btnAdvance">Next</button>
     </div>
