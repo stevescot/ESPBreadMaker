@@ -1,5 +1,5 @@
-# Quick OTA Build and Upload Script - LEGACY - Use esp32-manager.ps1 instead
-# Redirects to the new unified manager
+# Quick OTA Build and Upload Script
+# Configured for ESP32 at 192.168.250.125
 
 param(
     [switch]$UploadData,        # Also upload data files
@@ -8,21 +8,29 @@ param(
 )
 
 if ($Help) {
-    Write-Host "Legacy script! Use esp32-manager.ps1 instead:" -ForegroundColor Yellow
-    Write-Host "  .\esp32-manager.ps1 -Build -Upload -UploadWeb" -ForegroundColor Cyan
-    Write-Host "  .\esp32-manager.ps1 -Help" -ForegroundColor Cyan
+    Write-Host "Quick OTA Upload Script" -ForegroundColor Cyan
+    Write-Host "Pre-configured for ESP32 at 192.168.250.125" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Usage:" -ForegroundColor Yellow
+    Write-Host "  .\build_and_upload_ota.ps1 [options]" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Options:" -ForegroundColor Yellow
+    Write-Host "  -UploadData         Also upload web files after firmware" -ForegroundColor White
+    Write-Host "  -Password <pwd>     OTA password (if required by device)" -ForegroundColor White
+    Write-Host "  -Help               Show this help" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Examples:" -ForegroundColor Green
+    Write-Host "  .\build_and_upload_ota.ps1                    # Upload firmware only" -ForegroundColor Gray
+    Write-Host "  .\build_and_upload_ota.ps1 -UploadData        # Upload firmware + web files" -ForegroundColor Gray
+    Write-Host "  .\build_and_upload_ota.ps1 -Password mypass   # Upload with OTA password" -ForegroundColor Gray
     exit 0
 }
 
-Write-Host "⚠️ Legacy script detected!" -ForegroundColor Yellow
-Write-Host "Redirecting to esp32-manager.ps1 for better safety and features..." -ForegroundColor Cyan
-Write-Host ""
+$ESP32_IP = "192.168.250.125"
 
-if ($UploadData) {
-    & ".\esp32-manager.ps1" -Build -Upload -UploadWeb
-} else {
-    & ".\esp32-manager.ps1" -Build -Upload
-}
+Write-Host "ESP32 OTA Build and Upload" -ForegroundColor Green
+Write-Host "Target Device: $ESP32_IP" -ForegroundColor Cyan
+Write-Host ""
 
 # Build and upload firmware
 Write-Host "Building and uploading firmware..." -ForegroundColor Blue

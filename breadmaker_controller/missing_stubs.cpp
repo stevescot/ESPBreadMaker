@@ -2,6 +2,7 @@
 #include "globals.h"
 #include "programs_manager.h"
 #include "calibration.h"
+#include "program_logger.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <WebServer.h>
@@ -419,6 +420,12 @@ void updateActiveProgramVars() {
 
 void stopBreadmaker() {
     if (debugSerial) Serial.println("[ACTION] stopBreadmaker() called");
+    
+    // Log program stop
+    if (programState.isRunning) {
+        logProgramStop("User stop requested");
+    }
+    
     programState.isRunning = false;
     programState.customStageIdx = 0;
     programState.customStageStart = 0;

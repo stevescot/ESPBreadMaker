@@ -70,10 +70,9 @@
       <button class="config-link-btn" onclick="location.href='/calibration.html'">&#127777; Calibrate Temperature</button>
       <button class="config-link-btn" onclick="location.href='/pid-tune.html'">&#128293; PID Controller Tuning</button>
       <button class="config-link-btn" onclick="location.href='/ewma-monitor.html'" style="background:#4CAF50; color:#fff;">&#128202; EWMA Temperature Monitor</button>
-      <button class="config-link-btn" onclick="location.href='/history.html'" style="background:#2196F3; color:#fff;">📊 Program History & Logs</button>
-      <button class="config-link-btn" onclick="location.href='/diagnostics.html'">🔍 System Diagnostics</button>
       <button class="config-link-btn" onclick="toggleFirmwareUpload()">&#8593; Firmware Update</button>
       <button class="config-link-btn" onclick="toggleFileManager()">&#128193; File Manager</button>
+      <button class="config-link-btn" onclick="toggleActivityLog()" style="background:#9C27B0; color:#fff;">📋 Activity Log</button>
       <button class="config-link-btn" onclick="location.href='/home_assistant.html'" style="background:#ffb366; color:#232323;">🏠 Home Assistant Config Guide</button>
       <button class="config-link-btn" onclick="toggleTimingControls()">⏱️ Timing Override Controls</button>
     </div>
@@ -187,6 +186,37 @@
         </div>
       </div>
     </div>
+    
+    <!-- Activity Log Section -->
+    <div id="activityLogSection" style="display:none; margin-top:2em; padding:1.5em; border:1px solid #9C27B0; border-radius:8px; background:#2a1a2a;">
+      <h3 style="margin-top:0; color:#E1BEE7;">📋 Activity Log</h3>
+      <div style="display:flex; gap:1em; margin-bottom:1.5em; flex-wrap:wrap;">
+        <div style="flex:1; min-width:200px;">
+          <label style="display:block; margin-bottom:0.5em; color:#fff;">Status:</label>
+          <span id="activityLogStatus" style="color:#ffd600;">Loading...</span>
+        </div>
+        <div style="flex:1; min-width:200px;">
+          <label style="display:block; margin-bottom:0.5em; color:#fff;">Size:</label>
+          <span id="activityLogSize" style="color:#ffd600;">Loading...</span>
+        </div>
+      </div>
+      
+      <div style="display:flex; gap:0.5em; margin-bottom:1.5em; flex-wrap:wrap;">
+        <button onclick="viewActivityLog()" style="padding:0.5em 1em; border-radius:4px; background:#4CAF50; color:#fff; border:none; cursor:pointer;">📄 View Log</button>
+        <button onclick="testActivityLog()" style="padding:0.5em 1em; border-radius:4px; background:#2196F3; color:#fff; border:none; cursor:pointer;">🧪 Test Event</button>
+        <button onclick="clearActivityLog()" style="padding:0.5em 1em; border-radius:4px; background:#FF9800; color:#fff; border:none; cursor:pointer;">🗑️ Clear Log</button>
+        <button id="toggleActivityLogBtn" onclick="toggleActivityLogging()" style="padding:0.5em 1em; border-radius:4px; background:#9C27B0; color:#fff; border:none; cursor:pointer;">⚙️ Toggle</button>
+      </div>
+      
+      <div id="activityLogViewer" style="display:none; margin-top:1em;">
+        <h4 style="color:#fff;">Activity Log Content:</h4>
+        <pre id="activityLogContent" style="background:#1a1a1a; color:#00ff00; padding:1em; border-radius:4px; max-height:400px; overflow-y:auto; font-family:monospace; font-size:0.9em; white-space:pre-wrap; border:1px solid #555;"></pre>
+        <button onclick="document.getElementById('activityLogViewer').style.display='none'" style="margin-top:0.5em; padding:0.4em 1em; border-radius:4px; background:#666; color:#fff; border:none; cursor:pointer;">Close</button>
+      </div>
+      
+      <div id="activityLogStatusMessage" style="margin-top:1em; padding:0.5em; border-radius:4px; display:none;"></div>
+    </div>
+    
     <div style="margin:2em 0 1em 0; text-align:center;">
       <label style="font-size:1.1em;">
         Output Mode:
@@ -565,6 +595,123 @@
       .catch(error => {
         alert(`Error creating folder: ${error.message}`);
       });
+    }
+    
+    // Activity Log functionality
+    let activityLogEnabled = true;
+    
+    function toggleActivityLog() {
+      const activityLogSection = document.getElementById('activityLogSection');
+      if (activityLogSection.style.display === 'none') {
+        activityLogSection.style.display = 'block';
+        loadActivityLogInfo();
+        // Hide file manager if open
+        document.getElementById('fileManager').style.display = 'none';
+      } else {
+        activityLogSection.style.display = 'none';
+      }
+    }
+    
+    function loadActivityLogInfo() {
+      fetch('/api/activity/info')
+        .then(r => r.json())
+        .then(data => {
+          activityLogEnabled = data.enabled;
+          document.getElementById('activityLogStatus').textContent = data.enabled ? 'Enabled' : 'Disabled';
+          document.getElementById('activityLogSize').textContent = data.size;
+          document.getElementById('toggleActivityLogBtn').textContent = data.enabled ? '⚙️ Disable' : '⚙️ Enable';
+        })
+        .catch(e => {
+          document.getElementById('activityLogStatus').textContent = 'Error';
+          document.getElementById('activityLogSize').textContent = 'Error';
+        });
+    }
+    
+    function showActivityLogStatus(message, type = 'info') {
+      const statusDiv = document.getElementById('activityLogStatusMessage');
+      statusDiv.style.display = 'block';
+      statusDiv.style.background = type === 'error' ? '#d32f2f' : type === 'success' ? '#4CAF50' : '#333';
+      statusDiv.textContent = message;
+      setTimeout(() => {
+        statusDiv.style.display = 'none';
+      }, 3000);
+    }
+    
+    function viewActivityLog() {
+      const viewer = document.getElementById('activityLogViewer');
+      const content = document.getElementById('activityLogContent');
+      
+      viewer.style.display = 'block';
+      content.textContent = 'Loading activity log...';
+      
+      fetch('/api/activity/log')
+        .then(r => r.text())
+        .then(data => {
+          if (data.trim() === '' || data.includes('File Not Found')) {
+            content.textContent = 'Activity log is empty or not found.';
+          } else {
+            content.textContent = data;
+            // Scroll to bottom to show latest entries
+            content.scrollTop = content.scrollHeight;
+          }
+        })
+        .catch(e => {
+          content.textContent = 'Error loading activity log: ' + e.message;
+        });
+    }
+    
+    function testActivityLog() {
+      if (!confirm('Add a test event to the activity log?')) return;
+      
+      fetch('/api/activity/test', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+          showActivityLogStatus('Test event added to activity log', 'success');
+          loadActivityLogInfo(); // Refresh size
+        })
+        .catch(e => {
+          showActivityLogStatus('Failed to add test event: ' + e.message, 'error');
+        });
+    }
+    
+    function clearActivityLog() {
+      if (!confirm('Are you sure you want to clear the entire activity log? This cannot be undone.')) return;
+      
+      fetch('/api/activity/clear', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+          showActivityLogStatus('Activity log cleared successfully', 'success');
+          loadActivityLogInfo(); // Refresh size
+          // Clear viewer if open
+          const content = document.getElementById('activityLogContent');
+          if (content.textContent !== 'Loading activity log...') {
+            content.textContent = 'Activity log has been cleared.';
+          }
+        })
+        .catch(e => {
+          showActivityLogStatus('Failed to clear activity log: ' + e.message, 'error');
+        });
+    }
+    
+    function toggleActivityLogging() {
+      const newState = !activityLogEnabled;
+      const action = newState ? 'enable' : 'disable';
+      
+      if (!confirm(`Are you sure you want to ${action} activity logging?`)) return;
+      
+      fetch('/api/activity/enable', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `enabled=${newState}`
+      })
+        .then(r => r.json())
+        .then(data => {
+          showActivityLogStatus(`Activity logging ${data.status}`, 'success');
+          loadActivityLogInfo(); // Refresh status
+        })
+        .catch(e => {
+          showActivityLogStatus(`Failed to ${action} activity logging: ` + e.message, 'error');
+        });
     }
     
     // Firmware Upload functionality

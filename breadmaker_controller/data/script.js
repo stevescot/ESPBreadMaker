@@ -1075,8 +1075,8 @@ function showPlanSummary(s) {
   if (!s.actualStageStartTimes || !s.stageStatus || !s.adjustedStageDurations) {
     console.log('Timing arrays missing, requesting detailed status for plan summary');
     detailedStatusNeeded = true;
-    // Don't show incomplete data, wait for next update
-    return;
+    // Don't clear existing display - just request more data and continue with basic display
+    // return; // REMOVED: This was causing stages to disappear during startup
   }
   
   // Try to get program from status or cached programs

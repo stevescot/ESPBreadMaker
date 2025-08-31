@@ -1,12 +1,9 @@
 # Comprehensive Data Upload Script for ESP32 Breadmaker Controller
-# ⚠️ WARNING: THIS SCRIPT UPLOADS ALL FILES INCLUDING PROGRAM SETTINGS ⚠️
 # This script uploads all data files and forces cache refresh
-# USE WITH CAUTION - IT WILL OVERWRITE DEVICE PROGRAM SETTINGS
 
 param(
     [string]$DeviceIP = "192.168.250.125",
-    [string]$DataPath = "data",
-    [switch]$IncludePrograms = $false  # Must be explicitly enabled to upload program files
+    [string]$DataPath = "data"
 )
 
 Write-Host "=== ESP32 Data Upload Script ===" -ForegroundColor Cyan
@@ -66,16 +63,7 @@ if (-not (Test-Path $DataPath)) {
 }
 
 # Get all files in data directory
-if ($IncludePrograms) {
-    Write-Host "⚠️ WARNING: Including program files - device settings will be overwritten!" -ForegroundColor Red
-    $dataFiles = Get-ChildItem -Path $DataPath -File | Where-Object { $_.Extension -match '\.(html|js|css|json|svg)$' }
-} else {
-    Write-Host "Excluding program files (safe mode)" -ForegroundColor Green
-    $dataFiles = Get-ChildItem -Path $DataPath -File | Where-Object { 
-        $_.Extension -match '\.(html|js|css|json|svg)$' -and
-        $_.Name -notmatch '^(programs|program_\d+)\.json$'
-    }
-}
+$dataFiles = Get-ChildItem -Path $DataPath -File | Where-Object { $_.Extension -match '\.(html|js|css|json|svg)$' }
 
 Write-Host "Found $($dataFiles.Count) files to upload:" -ForegroundColor Cyan
 foreach ($file in $dataFiles) {

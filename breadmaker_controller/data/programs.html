@@ -68,7 +68,12 @@ Generate a JSON object for a custom breadmaker program. Each program must have:
     - "buzzer": "on" or "off"
     - Optional "isFermentation": true for stages that should adjust time based on temperature
     - Either:
-        - "mixPattern": array of steps, each with "mixSec" (int, seconds mixing) and "waitSec" (int, seconds waiting)
+        - "mixPattern": array of steps, each with:
+            - "mixSec" (int, seconds mixing) and "waitSec" (int, seconds waiting) - standard timing
+            - OR "mixMs" (int, milliseconds mixing) and "waitMs" (int, milliseconds waiting) - precise timing
+            - Optional "knockdown": true (for gentle 0.1s mixing, overrides other timing)
+            - Optional "label": "knockdown" or other identifier
+            - Optional "durationSec": total duration for this step
         - or "noMix": true (for stages with no mixing)
     - "instructions": (string, what the user should do at this stage, or "No action needed.")
 - Do not include any steps that would smash eggs with the mixer.
@@ -80,7 +85,7 @@ Generate a JSON object for a custom breadmaker program. Each program must have:
   "fermentQ10": 2.0,
   "customStages": [
     { "label": "Mix", "min": 8, "temp": 28, "light": "off", "buzzer": "off", "mixPattern": [ {"mixSec":60,"waitSec":30} ], "instructions": "Add flour and yeast, start mixing." },
-    { "label": "Rise", "min": 60, "temp": 28, "light": "off", "buzzer": "off", "noMix": true, "isFermentation": true, "instructions": "No action needed." },
+    { "label": "Rise", "min": 60, "temp": 28, "light": "off", "buzzer": "off", "mixPattern": [ {"knockdown":true,"waitSec":5,"durationSec":60,"label":"gentle knockdown"} ], "isFermentation": true, "instructions": "No action needed." },
     { "label": "Bake", "min": 35, "temp": 180, "light": "on", "buzzer": "on", "noMix": true, "instructions": "Remove bread after baking." }
   ]
 }

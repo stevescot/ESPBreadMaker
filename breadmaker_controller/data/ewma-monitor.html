@@ -4,10 +4,9 @@
   <title>EWMA Temperature Monitoring</title>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; background: #f0f0f0; }
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
     .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     h1 { color: #333; text-align: center; }
     .nav-btn { background: #007bff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 10px; margin-bottom: 10px; }
@@ -32,19 +31,13 @@
   </style>
 </head>
 <body>
-  <nav>
-    <a href="/">🏠 Home</a>
-    <a href="/config.html">⚙️ Config</a>
-    <a href="/programs.html">📝 Programs</a>
-    <a href="/calibration.html">🌡️ Calibration</a>
-    <a href="/pid-tune.html">🔥 PID Tuning</a>
-    <a href="/ewma-monitor.html" class="active">📈 Monitor</a>
-    <a href="/history.html">📊 History</a>
-    <a href="/diagnostics.html">🔍 Diagnostics</a>
-    <a href="/home_assistant.html">� HA Config</a>
-  </nav>
-  
   <div class="container">
+    <div style="margin-bottom: 20px;">
+      <button class="nav-btn" onclick="location.href='/'">🏠 Home</button>
+      <button class="nav-btn" onclick="location.href='/config.html'">⚙️ Config</button>
+      <button class="nav-btn" onclick="location.href='/pid-tune.html'">🎛️ PID Tuning</button>
+    </div>
+    
     <h1>🌡️ EWMA Temperature Monitoring</h1>
     
     <div class="refresh-controls">

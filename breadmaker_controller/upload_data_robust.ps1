@@ -4,8 +4,7 @@
 param(
     [string]$targetIP = "192.168.250.125",
     [string]$specificFile = "",
-    [switch]$IncludeJSON = $false,
-    [switch]$IncludePrograms = $false
+    [switch]$IncludeJSON = $false
 )
 
 Write-Host "=== ESP32 Data Upload (Fixed Method) ===" -ForegroundColor Cyan

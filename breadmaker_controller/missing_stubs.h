@@ -49,10 +49,6 @@ float calculateFermentationFactor(float actualTemp);
 void updateFermentationCache();
 unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentation);
 
-// Resume state management functions (from main .ino)
-extern void saveResumeState();
-extern void clearResumeState();
-
 // JSON streaming functions  
 void streamStatusJson(Print& out);
 

@@ -136,6 +136,10 @@ bool loadSpecificProgram(int programId) {
       ms.mixSec = m["mixSec"] | 0;
       ms.waitSec = m["waitSec"] | 0;
       ms.durationSec = m["durationSec"] | 0;
+      ms.mixMs = m["mixMs"] | 0;        // NEW: millisecond fields
+      ms.waitMs = m["waitMs"] | 0;      // NEW: millisecond fields
+      ms.knockdown = m["knockdown"] | false;  // NEW: knockdown flag
+      ms.label = m["label"] | String("");     // NEW: label field
       cs.mixPattern.push_back(ms);
     }
     activeProgram.customStages.push_back(cs);

@@ -20,6 +20,7 @@ typedef struct {
   double scheduledElapsedSeconds;     // Elapsed time in "scheduled fermentation time" (what the recipe expects)
   double realElapsedSeconds;          // Actual real-world elapsed time since stage start
   double accumulatedFermentMinutes;   // Accumulated fermentation progress in minute increments
+  int lastFermentStageIdx;            // Track last fermentation stage for reset detection
 } FermentationState;
 
 extern FermentationState fermentState;

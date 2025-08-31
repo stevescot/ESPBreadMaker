@@ -1,0 +1,47 @@
+{
+  "id": 999,
+  "name": "Test Knockdown (Gentle)",
+  "customStages": [
+    {
+      "label": "Initial Mix",
+      "min": 5,
+      "temp": 25.0,
+      "noMix": false,
+      "isFermentation": false,
+      "mixPattern": [
+        {
+          "mixSec": 30,
+          "waitSec": 30,
+          "durationSec": 300,
+          "label": "normal mix"
+        }
+      ]
+    },
+    {
+      "label": "Proof Stage",
+      "min": 60,
+      "temp": 30.0,
+      "noMix": false,
+      "isFermentation": true,
+      "mixPattern": [
+        {
+          "mixSec": 0,
+          "waitSec": 0,
+          "mixMs": 100,
+          "waitMs": 5000,
+          "knockdown": true,
+          "durationSec": 60,
+          "label": "gentle knockdown"
+        }
+      ]
+    },
+    {
+      "label": "Bake Stage",
+      "min": 45,
+      "temp": 180.0,
+      "noMix": true,
+      "isFermentation": false,
+      "mixPattern": []
+    }
+  ]
+}

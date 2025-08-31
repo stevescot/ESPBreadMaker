@@ -108,10 +108,24 @@ function renderPrograms(progs) {
           html += ` <button type='button' data-addmix='${idx},${cidx}'>+ Add Step</button><br>`;
           if (Array.isArray(st.mixPattern)) {
             st.mixPattern.forEach((mp, midx) => {
-              html += `&nbsp; Mix: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='mixSec' value='${mp.mixSec||0}' style='width:4em;'> sec, ` +
-                `Wait: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='waitSec' value='${mp.waitSec||0}' style='width:4em;'> sec, ` +
-                `<span style='white-space:nowrap;'>Duration: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='durationSec' value='${mp.durationSec!=null?mp.durationSec:(mp.mixSec||0)+(mp.waitSec||0)}' style='width:4em;' min='0'> sec</span> ` +
-                `<button type='button' data-delmix='${idx},${cidx},${midx}'>Delete</button><br>`;
+              html += `<div style='margin:0.5em 0;padding:0.5em;background:rgba(255,255,255,0.3);border-radius:5px;'>`;
+              html += `<label>Label: <input type='text' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='label' value='${mp.label||''}' placeholder='e.g. knockdown, gentle' style='width:8em;'></label><br>`;
+              html += `<label><input type='checkbox' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='knockdown'${mp.knockdown?' checked':''}> Fine Control (precise 0.1s mixing)</label><br>`;
+              
+              // Always show millisecond fields for easier access
+              html += `<b>Fine Control (Milliseconds):</b><br>`;
+              html += `&nbsp; Mix: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='mixMs' value='${mp.mixMs||0}' style='width:5em;' min='0' max='60000' placeholder='0'> ms, `;
+              html += `Wait: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='waitMs' value='${mp.waitMs||0}' style='width:5em;' min='0' max='3600000' placeholder='0'> ms<br>`;
+              
+              html += `<b>Standard (Seconds):</b><br>`;
+              html += `&nbsp; Mix: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='mixSec' value='${mp.mixSec||0}' style='width:4em;' min='0' max='3600' placeholder='0'> sec, `;
+              html += `Wait: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='waitSec' value='${mp.waitSec||0}' style='width:4em;' min='0' max='3600' placeholder='0'> sec<br>`;
+              
+              html += `<small style='color:#666;'><b>Priority:</b> Fine Control checkbox → Millisecond values → Second values</small><br>`;
+              
+              html += `<span style='white-space:nowrap;'>Duration: <input type='number' data-idx='${idx}' data-cidx='${cidx}' data-midx='${midx}' data-mfield='durationSec' value='${mp.durationSec!=null?mp.durationSec:(mp.mixSec||0)+(mp.waitSec||0)}' style='width:4em;' min='0'> sec</span> `;
+              html += `<button type='button' data-delmix='${idx},${cidx},${midx}'>Delete</button>`;
+              html += `</div>`;
             });
           }
         } else {
@@ -249,7 +263,7 @@ function renderPrograms(progs) {
       const [pidx, cidx] = btn.getAttribute('data-addmix').split(',').map(Number);
       btn.onclick = () => {
         progs[pidx].customStages[cidx].mixPattern = progs[pidx].customStages[cidx].mixPattern || [];
-        progs[pidx].customStages[cidx].mixPattern.push({mixSec:10,waitSec:10});
+        progs[pidx].customStages[cidx].mixPattern.push({mixSec:10,waitSec:10,mixMs:0,waitMs:0,knockdown:false,label:''});
         progs[pidx].customStages[cidx].noMix = false;
         renderPrograms(progs);
       };
@@ -267,8 +281,20 @@ function renderPrograms(progs) {
         const c = parseInt(inp.getAttribute('data-cidx'));
         const m = parseInt(inp.getAttribute('data-midx'));
         const fld = inp.getAttribute('data-mfield');
-        let val = inp.valueAsNumber;
-        progs[i].customStages[c].mixPattern[m][fld] = val;
+        
+        if (fld === 'knockdown') {
+          // Special handling for knockdown checkbox
+          progs[i].customStages[c].mixPattern[m][fld] = inp.checked;
+          // Re-render the programs to show/hide millisecond fields
+          renderPrograms(progs);
+        } else if (fld === 'label') {
+          // Handle text fields
+          progs[i].customStages[c].mixPattern[m][fld] = inp.value;
+        } else {
+          // Handle numeric fields
+          let val = inp.valueAsNumber;
+          progs[i].customStages[c].mixPattern[m][fld] = val;
+        }
       };
     });
     card.querySelectorAll('[data-movecustom]').forEach(btn => {

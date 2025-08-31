@@ -13,6 +13,7 @@
 #include <algorithm>  // For std::sort
 #include "missing_stubs.h"  // For getAdjustedStageTimeMs and other functions
 #include "display_manager.h"  // For screensaver control
+#include "program_logger.h"  // For activity logging
 
 // External OTA status for web integration
 extern OTAStatus otaStatus;
@@ -712,6 +713,10 @@ void stateMachineEndpoints(WebServer& server) {
         if (debugSerial) {
             Serial.printf("[TIMING] Program started at stage %d, time %lu\n", programState.customStageIdx, (unsigned long)programState.programStartTime);
         }
+        
+        // Log program start
+        String programName = getProgramName(programState.activeProgramId);
+        logProgramStart(programName, programState.activeProgramId);
         
         resetFermentationTracking(getAveragedTemperature());
         invalidateStatusCache();
@@ -1634,6 +1639,29 @@ void calibrationEndpoints(WebServer& server) {
             server.send(400, "application/json", "{\"error\":\"Missing parameters\"}");
         }
     });
+    
+    // Delete calibration point endpoint
+    server.on("/api/calibration/delete", HTTP_POST, [&](){
+        if (server.hasArg("index")) {
+            int index = server.arg("index").toInt();
+            
+            // Validate index
+            if (index < 0 || index >= (int)rtdCalibTable.size()) {
+                server.send(400, "application/json", "{\"error\":\"Invalid index\"}");
+                return;
+            }
+            
+            // Remove point from calibration table
+            rtdCalibTable.erase(rtdCalibTable.begin() + index);
+            
+            // Save to file
+            saveCalibration();
+            
+            server.send(200, "application/json", "{\"status\":\"deleted\"}");
+        } else {
+            server.send(400, "application/json", "{\"error\":\"Missing index parameter\"}");
+        }
+    });
 }
 
 void fileEndPoints(WebServer& server) {
@@ -2371,6 +2399,23 @@ void registerWebEndpoints(WebServer& server) {
                 programState.programStartTime = time(nullptr);
                 // Initialize stage arrays for new program
                 initializeStageArrays();
+            } else {
+                // Ensure stage arrays are initialized for manual starts
+                if (!programState.adjustedStageDurations || programState.adjustedStageDurations[stage] == 0) {
+                    initializeStageArrays();
+                }
+                
+                // If starting at a fermentation stage, reset fermentation timing
+                if (stage < (int)numStages && p->customStages[stage].isFermentation) {
+                    // Force complete fermentation state reset for manual stage starts
+                    fermentState.lastFermentStageIdx = -1;  // Force reset detection
+                    fermentState.fermentLastUpdateMs = 0;
+                    fermentState.scheduledElapsedSeconds = 0.0;
+                    fermentState.realElapsedSeconds = 0.0;
+                    fermentState.accumulatedFermentMinutes = 0.0;
+                    fermentState.fermentationFactor = 0.0;
+                    if (debugSerial) Serial.printf("[MANUAL-START] Reset fermentation timing for stage %d\n", stage);
+                }
             }
             invalidateStatusCache();
             
@@ -2863,6 +2908,46 @@ void registerWebEndpoints(WebServer& server) {
         
         server.sendContent("}");
         server.sendContent("");  // End chunked response
+    });
+    
+    // Activity log management endpoints
+    server.on("/api/activity/log", HTTP_GET, [&](){
+        trackWebActivity();
+        if (serveStaticFile(server, "/activity.log")) {
+            return;
+        }
+        server.send(404, "text/plain", "Activity log not found");
+    });
+    
+    server.on("/api/activity/info", HTTP_GET, [&](){
+        trackWebActivity();
+        String response = "{";
+        response += "\"enabled\":" + String(isActivityLogEnabled() ? "true" : "false") + ",";
+        response += "\"size\":\"" + getActivityLogSize() + "\"";
+        response += "}";
+        server.send(200, "application/json", response);
+    });
+    
+    server.on("/api/activity/clear", HTTP_POST, [&](){
+        trackWebActivity();
+        clearActivityLog();
+        server.send(200, "application/json", "{\"status\":\"cleared\"}");
+    });
+    
+    server.on("/api/activity/enable", HTTP_POST, [&](){
+        trackWebActivity();
+        bool enable = true;
+        if (server.hasArg("enabled")) {
+            enable = server.arg("enabled") == "true";
+        }
+        setActivityLogEnabled(enable);
+        server.send(200, "application/json", "{\"status\":\"" + String(enable ? "enabled" : "disabled") + "\"}");
+    });
+    
+    server.on("/api/activity/test", HTTP_POST, [&](){
+        trackWebActivity();
+        logSystemEvent("Activity log test event triggered from web interface");
+        server.send(200, "application/json", "{\"status\":\"test event logged\"}");
     });
     
     server.onNotFound([&](){

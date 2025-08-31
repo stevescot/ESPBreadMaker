@@ -11,6 +11,10 @@ struct MixStep {
     uint16_t mixSec = 0;
     uint16_t waitSec = 0;
     uint16_t durationSec = 0; // Optional: total duration for this step
+    uint16_t mixMs = 0;       // NEW: millisecond precision mixing
+    uint16_t waitMs = 0;      // NEW: millisecond precision waiting
+    bool knockdown = false;   // NEW: flag for knockdown mode (auto-sets to 100ms)
+    String label = "";        // NEW: label for mix step identification
 };
 
 // --- CustomStage struct ---

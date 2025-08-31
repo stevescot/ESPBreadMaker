@@ -1,0 +1,144 @@
+<!-- Activity Log Section for Config Page -->
+<div class="config-section">
+    <h2>📋 Activity Log</h2>
+    <div class="config-content">
+        <div class="config-row">
+            <div class="config-item">
+                <label>Status:</label>
+                <span id="activityLogStatus">Loading...</span>
+            </div>
+            <div class="config-item">
+                <label>Size:</label>
+                <span id="activityLogSize">Loading...</span>
+            </div>
+        </div>
+        
+        <div class="config-buttons">
+            <button class="config-btn" id="viewActivityLogBtn" style="background:#4CAF50;">📄 View Log</button>
+            <button class="config-btn" id="testActivityLogBtn" style="background:#2196F3;">🧪 Test Event</button>
+            <button class="config-btn" id="clearActivityLogBtn" style="background:#FF9800;">🗑️ Clear Log</button>
+            <button class="config-btn" id="toggleActivityLogBtn" style="background:#9C27B0;">⚙️ Toggle</button>
+        </div>
+        
+        <div id="activityLogViewer" style="display:none; margin-top:1em;">
+            <h3>Activity Log Content:</h3>
+            <pre id="activityLogContent" style="background:#1a1a1a; color:#00ff00; padding:1em; border-radius:4px; max-height:400px; overflow-y:auto; font-family:monospace; font-size:0.9em; white-space:pre-wrap;"></pre>
+            <button class="config-btn" onclick="document.getElementById('activityLogViewer').style.display='none'" style="background:#666;">Close</button>
+        </div>
+        
+        <div id="activityLogStatus" style="margin-top:1em; padding:0.5em; border-radius:4px; display:none;"></div>
+    </div>
+</div>
+
+<script>
+// Activity Log Management Functions
+let activityLogEnabled = true;
+
+function loadActivityLogInfo() {
+    fetch('/api/activity/info')
+        .then(r => r.json())
+        .then(data => {
+            activityLogEnabled = data.enabled;
+            document.getElementById('activityLogStatus').textContent = data.enabled ? 'Enabled' : 'Disabled';
+            document.getElementById('activityLogSize').textContent = data.size;
+            document.getElementById('toggleActivityLogBtn').textContent = data.enabled ? '⚙️ Disable' : '⚙️ Enable';
+        })
+        .catch(e => {
+            document.getElementById('activityLogStatus').textContent = 'Error';
+            document.getElementById('activityLogSize').textContent = 'Error';
+        });
+}
+
+function showActivityLogStatus(message, type = 'info') {
+    const statusDiv = document.getElementById('activityLogStatus');
+    statusDiv.style.display = 'block';
+    statusDiv.style.background = type === 'error' ? '#d32f2f' : type === 'success' ? '#4CAF50' : '#333';
+    statusDiv.textContent = message;
+    setTimeout(() => {
+        statusDiv.style.display = 'none';
+    }, 3000);
+}
+
+document.getElementById('viewActivityLogBtn').onclick = function() {
+    const viewer = document.getElementById('activityLogViewer');
+    const content = document.getElementById('activityLogContent');
+    
+    viewer.style.display = 'block';
+    content.textContent = 'Loading activity log...';
+    
+    fetch('/api/activity/log')
+        .then(r => r.text())
+        .then(data => {
+            if (data.trim() === '' || data.includes('File Not Found')) {
+                content.textContent = 'Activity log is empty or not found.';
+            } else {
+                content.textContent = data;
+                // Scroll to bottom to show latest entries
+                content.scrollTop = content.scrollHeight;
+            }
+        })
+        .catch(e => {
+            content.textContent = 'Error loading activity log: ' + e.message;
+        });
+};
+
+document.getElementById('testActivityLogBtn').onclick = function() {
+    if (!confirm('Add a test event to the activity log?')) return;
+    
+    fetch('/api/activity/test', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            showActivityLogStatus('Test event added to activity log', 'success');
+            loadActivityLogInfo(); // Refresh size
+        })
+        .catch(e => {
+            showActivityLogStatus('Failed to add test event: ' + e.message, 'error');
+        });
+};
+
+document.getElementById('clearActivityLogBtn').onclick = function() {
+    if (!confirm('Are you sure you want to clear the entire activity log? This cannot be undone.')) return;
+    
+    fetch('/api/activity/clear', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            showActivityLogStatus('Activity log cleared successfully', 'success');
+            loadActivityLogInfo(); // Refresh size
+            // Clear viewer if open
+            const content = document.getElementById('activityLogContent');
+            if (content.textContent !== 'Loading activity log...') {
+                content.textContent = 'Activity log has been cleared.';
+            }
+        })
+        .catch(e => {
+            showActivityLogStatus('Failed to clear activity log: ' + e.message, 'error');
+        });
+};
+
+document.getElementById('toggleActivityLogBtn').onclick = function() {
+    const newState = !activityLogEnabled;
+    const action = newState ? 'enable' : 'disable';
+    
+    if (!confirm(`Are you sure you want to ${action} activity logging?`)) return;
+    
+    fetch('/api/activity/enable', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `enabled=${newState}`
+    })
+        .then(r => r.json())
+        .then(data => {
+            showActivityLogStatus(`Activity logging ${data.status}`, 'success');
+            loadActivityLogInfo(); // Refresh status
+        })
+        .catch(e => {
+            showActivityLogStatus(`Failed to ${action} activity logging: ` + e.message, 'error');
+        });
+};
+
+// Load activity log info on page load
+loadActivityLogInfo();
+
+// Refresh activity log info every 30 seconds
+setInterval(loadActivityLogInfo, 30000);
+</script>

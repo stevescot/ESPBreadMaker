@@ -9,7 +9,10 @@ FermentationState fermentState = {
   0.0, // fermentLastTemp
   1.0, // fermentLastFactor
   0,   // fermentLastUpdateMs
-  0.0  // fermentWeightedSec
+  0.0, // scheduledElapsedSeconds
+  0.0, // realElapsedSeconds
+  0.0, // accumulatedFermentMinutes
+  -1   // lastFermentStageIdx (start with -1 to detect first fermentation stage)
 };
 
 // Settings save deferral timer

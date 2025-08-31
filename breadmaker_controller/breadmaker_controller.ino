@@ -37,6 +37,7 @@ FEATURES:
 #include "outputs_manager.h"
 #include "web_endpoints.h"
 #include "ota_manager.h"   // OTA update support
+#include "program_logger.h" // Activity logging support
 
 // --- Firmware build date ---
 #define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
@@ -246,11 +247,25 @@ void initialState(){
     Serial.println(F("[setup] FFat mounted successfully."));
   }
   Serial.println(F("[setup] FFat mounted."));
+  
+  // Initialize activity logging after FFat is ready
+  Serial.println(F("[setup] Initializing activity logging..."));
+  initActivityLog();
+  Serial.println(F("[setup] Activity logging initialized."));
+  
   Serial.println(F("[setup] Loading programs..."));
   loadProgramMetadata();
   Serial.print(F("[setup] Programs loaded. Count: "));
   Serial.println(getProgramCount());
   updateActiveProgramVars(); // Initialize program variables after loading
+  
+  // CRITICAL FIX: DO NOT initialize stage arrays here with potentially wrong fermentation factor
+  // Stage arrays will be initialized when fermentation tracking starts with correct factor
+  if (programState.isRunning && programState.activeProgramId < getProgramCount()) {
+    Serial.printf("[setup] Program %d resumed at stage %d. Stage arrays will be initialized when fermentation starts.\n", 
+                  programState.activeProgramId, programState.customStageIdx);
+  }
+  
   loadCalibration();
   Serial.println(F("[setup] Calibration loaded."));
   
@@ -596,6 +611,8 @@ void loadResumeState() {
   unsigned long elapsedStageSec = doc["elapsedStageSec"] | 0;
   unsigned long elapsedMixSec = doc["elapsedMixSec"] | 0;
   programState.programStartTime = doc["programStartTime"] | 0;
+  // CRITICAL FIX: Reset stage start time on resume to prevent instant advancement
+  // The old customStageStart is invalid after restart since millis() resets to 0
   programState.customStageStart = doc["customStageStart"] | 0;
   bool wasRunning = doc["isRunning"] | false;
 
@@ -606,6 +623,31 @@ void loadResumeState() {
   fermentState.accumulatedFermentMinutes = doc["accumulatedFermentMinutes"] | 0.0;
   fermentState.predictedCompleteTime = doc["predictedCompleteTime"] | 0UL;
   fermentState.lastFermentAdjust = doc["lastFermentAdjust"] | 0UL;
+  
+  // CRITICAL FIX: Reset fermentation state if it seems corrupted or from wrong stage
+  // This prevents resuming with wrong fermentation timing from previous stages
+  if (fermentState.scheduledElapsedSeconds > 100000) { // More than ~28 hours indicates corruption
+    if (debugSerial) {
+      Serial.printf("[RESUME] WARNING: Corrupted fermentation state detected (%.1fs), resetting\n", 
+                   fermentState.scheduledElapsedSeconds);
+    }
+    fermentState.scheduledElapsedSeconds = 0.0;
+    fermentState.realElapsedSeconds = 0.0;
+    fermentState.accumulatedFermentMinutes = 0.0;
+  }
+  
+  // CRITICAL FIX: Always reset timing on resume to prevent instant advancement
+  // The timing accumulation should start fresh from the resumed stage
+  if (wasRunning) {
+    if (debugSerial) {
+      Serial.printf("[RESUME] Resetting fermentation timing to prevent instant advancement (was %.1fs)\n", 
+                   fermentState.scheduledElapsedSeconds);
+    }
+    fermentState.scheduledElapsedSeconds = 0.0;
+    fermentState.realElapsedSeconds = 0.0;
+    fermentState.accumulatedFermentMinutes = 0.0;
+    fermentState.fermentLastUpdateMs = 0; // Force fresh timing start
+  }
   
   if (debugSerial && fermentState.fermentationFactor != 1.0f) {
     Serial.printf("[RESUME] Restored fermentation state: factor=%.3f, scheduled=%.1fs, real=%.1fs, accum=%.2fmin\n",
@@ -623,6 +665,14 @@ void loadResumeState() {
     }
   } else {
     programState.isRunning = wasRunning;
+    // CRITICAL FIX: Reset stage start time to current millis() on resume
+    // This prevents instant advancement due to stale timestamps
+    if (wasRunning) {
+      programState.customStageStart = millis();
+      if (debugSerial) {
+        Serial.printf("[RESUME] Resumed at stage %d, reset stage start time to prevent instant advancement\n", programState.customStageIdx);
+      }
+    }
   }
 
   // Load actual stage start times
@@ -662,16 +712,33 @@ void loadResumeState() {
     programState.customMixIdx = 0;
   }
 
-  // Fast-forward logic: if elapsed time > stage/mix durations, advance indices
-  if (programState.isRunning && programState.activeProgramId >= 0 && isProgramValid(programState.activeProgramId)) {
+  // Fast-forward logic: DISABLED - too aggressive and causes incorrect stage advancement
+  // The fast-forward logic was advancing stages incorrectly during resume, especially for short 
+  // non-fermentation stages like "Initial Mix". Instead, rely on normal program execution timing
+  // to handle stage advancement after resume. This is safer and more predictable.
+  if (false && programState.isRunning && programState.activeProgramId >= 0 && isProgramValid(programState.activeProgramId)) {
     if (ensureProgramLoaded(programState.activeProgramId)) {
       Program* p = getActiveProgramMutable();
       if (p != nullptr) {
-        // Fast-forward stages
+        // Fast-forward stages (DISABLED for fermentation stages to prevent incorrect advancement)
         size_t stageIdx = programState.customStageIdx;
         unsigned long remainStageSec = elapsedStageSec;
+        
         while (stageIdx < p->customStages.size()) {
-          unsigned long stageDurSec = p->customStages[stageIdx].min * 60UL;
+          CustomStage& stage = p->customStages[stageIdx];
+          
+          // CRITICAL FIX: Skip fast-forward for fermentation stages entirely
+          // Fermentation timing is too complex and should only be handled by the normal timing logic
+          if (stage.isFermentation) {
+            if (debugSerial) {
+              Serial.printf("[LOAD_RESUME_DEBUG] Skipping fast-forward for fermentation stage %d (%s)\n", 
+                           (int)stageIdx, stage.label.c_str());
+            }
+            break; // Stop fast-forward at first fermentation stage
+          }
+          
+          // Only fast-forward non-fermentation stages using original duration
+          unsigned long stageDurSec = stage.min * 60UL;
           if (remainStageSec < stageDurSec) break;
           remainStageSec -= stageDurSec;
           stageIdx++;
@@ -726,9 +793,27 @@ void loadResumeState() {
       }
     }
   } else {
-    // Not running or invalid program
-    programState.customStageStart = millis() - elapsedStageSec * 1000UL;
+    // Not running or invalid program - use safer fallback timing
+    // CRITICAL: When resuming, use the saved customStageStart if available, 
+    // otherwise calculate conservatively to avoid incorrect stage advancement
+    if (programState.customStageStart == 0) {
+      // No saved stage start time, calculate conservatively
+      programState.customStageStart = millis() - elapsedStageSec * 1000UL;
+      if (programState.customStageStart == 0) programState.customStageStart = millis(); // Ensure nonzero for UI
+      if (debugSerial) {
+        Serial.printf("[RESUME] No saved stage start, calculated: %lu (elapsed: %lus)\n", 
+                     programState.customStageStart, elapsedStageSec);
+      }
+    } else {
+      // Use saved stage start time - much safer
+      if (debugSerial) {
+        Serial.printf("[RESUME] Using saved stage start time: %lu\n", programState.customStageStart);
+      }
+    }
+    
     programState.customMixStepStart = millis() - elapsedMixSec * 1000UL;
+    if (programState.customMixStepStart == 0) programState.customMixStepStart = millis(); // Ensure nonzero for UI
+    
     // Ensure all outputs are OFF if not running
     setHeater(false);
     setMotor(false);
@@ -761,6 +846,13 @@ void resetFermentationTracking(float temp) {
   fermentState.scheduledElapsedSeconds = 0.0;
   fermentState.realElapsedSeconds = 0.0;
   fermentState.accumulatedFermentMinutes = 0.0;
+  
+  // CRITICAL FIX: Initialize stage arrays AFTER fermentation factor is properly calculated
+  // This ensures adjustedStageDurations use the correct factor
+  if (programState.isRunning && programState.activeProgramId < getProgramCount()) {
+    initializeStageArrays();
+    if (debugSerial) Serial.printf("[FERMENT] Stage arrays re-initialized with correct factor %.3fx\n", fermentState.fermentationFactor);
+  }
   
   // Reset rate limiting to allow immediate update for new stage
   lastFermentUpdate = 0;
@@ -941,6 +1033,7 @@ void triggerEmergencyShutdown(const String& reason) {
   // Log the emergency shutdown
   Serial.print(F("[EMERGENCY SHUTDOWN] "));
   Serial.println(reason);
+  logEmergencyShutdown(reason, readTemperature());
   
   // Update display to show shutdown reason
   displayError(reason);
@@ -1085,6 +1178,17 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
     if (p && programState.customStageIdx < p->customStages.size()) {
       CustomStage &st = p->customStages[programState.customStageIdx];
       if (st.isFermentation) {
+        // IMPROVED FIX: Reset fermentation state when starting any fermentation stage
+        // Use a global variable instead of static to avoid reboot persistence issues
+        if (fermentState.lastFermentStageIdx != programState.customStageIdx) {
+          fermentState.lastFermentStageIdx = programState.customStageIdx;
+          fermentState.fermentLastUpdateMs = 0;  // Force complete reset
+          fermentState.scheduledElapsedSeconds = 0.0;
+          fermentState.realElapsedSeconds = 0.0;
+          fermentState.accumulatedFermentMinutes = 0.0;
+          if (debugSerial) Serial.printf("[FERMENT-RESET] New fermentation stage %d detected, forcing complete reset\n", programState.customStageIdx);
+        }
+        
         float baseline = p->fermentBaselineTemp > 0 ? p->fermentBaselineTemp : 20.0;
         float q10 = p->fermentQ10 > 0 ? p->fermentQ10 : 2.0;
         double actualTemp = getAveragedTemperature();
@@ -1096,31 +1200,53 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         unsigned long nowMs = millis();
         
         // Rate limiting for fermentation updates to prevent excessive processing
-        if (nowMs - lastFermentUpdate < 5000 && fermentState.fermentLastUpdateMs > 0) {
-          // Skip update if less than 5 seconds since last update
-          return;
+        // IMPROVED: Reduce interval and separate advancement check from time accumulation
+        bool shouldUpdateTiming = (nowMs - lastFermentUpdate >= 2000) || (fermentState.fermentLastUpdateMs == 0);
+        bool shouldCheckAdvancement = (nowMs - lastFermentUpdate >= 1000) || (fermentState.fermentLastUpdateMs == 0);
+        
+        if (!shouldUpdateTiming && fermentState.fermentLastUpdateMs > 0) {
+          // Still check for advancement even if we skip timing updates
+          if (shouldCheckAdvancement) {
+            // Quick advancement check without full timing update
+            // CRITICAL FIX: Use adjusted durations, NOT st.min
+            double plannedStageSec = programState.adjustedStageDurations[programState.customStageIdx];
+            if (!programState.adjustedStageDurations || programState.customStageIdx >= 20 || plannedStageSec <= 0) {
+              // Fallback only if adjustedStageDurations is invalid
+              plannedStageSec = (double)st.min * 60.0;
+            }
+            double epsilon = 0.05;
+            if (!stageJustAdvanced && (fermentState.scheduledElapsedSeconds + epsilon >= plannedStageSec)) {
+              // Stage should advance - do full processing
+              shouldUpdateTiming = true;
+            }
+          }
+          
+          if (!shouldUpdateTiming) {
+            return; // Skip update if not needed
+          }
         }
         lastFermentUpdate = nowMs;
         
         if (fermentState.fermentLastUpdateMs == 0) {
           fermentState.fermentLastTemp = actualTemp;
-          fermentState.fermentLastFactor = calculateFermentationFactor(actualTemp); // Use stage-aware biological calculation
+          fermentState.fermentLastFactor = calculateFermentationFactor(actualTemp); // Use proper biological calculation
           Serial.printf("[FERMENT-TIMING-CALC] Initial factor calculation: temp=%.1f°C -> factor=%.3f\n", 
                        actualTemp, fermentState.fermentLastFactor);
           fermentState.fermentLastUpdateMs = nowMs;
-          // Initialize new time tracking system
+          // Initialize new time tracking system - CRITICAL: Reset for each stage
           fermentState.scheduledElapsedSeconds = 0.0;
           fermentState.realElapsedSeconds = 0.0;
           fermentState.accumulatedFermentMinutes = 0.0;
           if (debugSerial) Serial.printf("[FERMENT] Stage %d (%s) initialized: temp=%.1f, baseline=%.1f, q10=%.1f, factor=%.3f, planned=%.1fs (%.1f hours)\n", 
                                         programState.customStageIdx, st.label.c_str(), actualTemp, baseline, q10, 
-                                        fermentState.fermentLastFactor, (double)st.min * 60.0, (double)st.min / 60.0);
+                                        fermentState.fermentLastFactor, programState.adjustedStageDurations[programState.customStageIdx], programState.adjustedStageDurations[programState.customStageIdx] / 3600.0);
         } else if (programState.isRunning) {
           // Prevent overflow: Check if millis() has wrapped around
           if (nowMs < fermentState.fermentLastUpdateMs) {
-            if (debugSerial) Serial.println("[FERMENT] WARNING: millis() overflow detected, resetting tracking");
+            if (debugSerial) Serial.println("[FERMENT] WARNING: millis() overflow detected, adjusting tracking");
+            // Don't reset completely - just adjust the last update time
             fermentState.fermentLastUpdateMs = nowMs;
-            return;
+            // Continue processing instead of returning to preserve accumulated progress
           }
           
           double realElapsedSec = (nowMs - fermentState.fermentLastUpdateMs) / 1000.0;
@@ -1142,7 +1268,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           
           // THEN update fermentation factor based on current temperature for NEXT interval
           fermentState.fermentLastTemp = actualTemp;
-          fermentState.fermentLastFactor = calculateFermentationFactor(actualTemp); // Use stage-aware biological calculation
+          fermentState.fermentLastFactor = calculateFermentationFactor(actualTemp); // Use proper biological calculation
           Serial.printf("[FERMENT-TIMING-UPDATE] Used previous factor %.3f for elapsed %.1fs, updated to new factor %.3f for temp %.1f°C\n", 
                        secondsPerScheduledMinute / 60.0, realElapsedSec, fermentState.fermentLastFactor, actualTemp);
           
@@ -1152,17 +1278,62 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           
           fermentState.fermentLastUpdateMs = nowMs;
           
+          // Log fermentation progress every 10% completion or every hour
+          static double lastLoggedProgress = 0.0;
+          static unsigned long lastProgressLog = 0;
+          
+          // CRITICAL FIX: Use adjusted duration for progress calculation
+          double stageDurationMinutes = st.min; // Fallback to original
+          if (programState.adjustedStageDurations && programState.customStageIdx < 20) {
+            if (programState.adjustedStageDurations[programState.customStageIdx] > 0) {
+              stageDurationMinutes = programState.adjustedStageDurations[programState.customStageIdx] / 60.0;
+            }
+          }
+          
+          double progressPercent = (fermentState.accumulatedFermentMinutes / stageDurationMinutes) * 100.0;
+          bool significantProgressChange = (progressPercent - lastLoggedProgress) >= 10.0;
+          bool hourlyLog = (nowMs - lastProgressLog) >= 3600000; // 1 hour
+          
+          if (significantProgressChange || hourlyLog) {
+            logFermentationProgress(progressPercent, fermentState.fermentLastFactor, actualTemp);
+            lastLoggedProgress = progressPercent;
+            lastProgressLog = nowMs;
+          }
+          
           // Enhanced debug output with clear real vs scheduled time
           if (debugSerial) {
+            // Use adjusted duration for accurate completion percentage
+            double targetDurationSec = (double)st.min * 60.0; // Original
+            if (programState.adjustedStageDurations && programState.customStageIdx < 20) {
+              if (programState.adjustedStageDurations[programState.customStageIdx] > 0) {
+                targetDurationSec = programState.adjustedStageDurations[programState.customStageIdx];
+              }
+            }
+            
             Serial.printf("[FERMENT] Stage %d (%s): real_elapsed=%.1fs, sched_elapsed=%.1fs, factor=%.3f, secs_per_sched_min=%.1f, temp=%.1f, target=%.1fs (%.1f%% complete)\n", 
                          programState.customStageIdx, st.label.c_str(), 
                          fermentState.realElapsedSeconds, fermentState.scheduledElapsedSeconds, 
                          fermentState.fermentLastFactor, secondsPerScheduledMinute, actualTemp, 
-                         (double)st.min * 60.0, (fermentState.scheduledElapsedSeconds / ((double)st.min * 60.0)) * 100.0);
+                         targetDurationSec, (fermentState.scheduledElapsedSeconds / targetDurationSec) * 100.0);
           }
         }
         fermentState.fermentationFactor = fermentState.fermentLastFactor; // For reference: multiply planned time by this factor for Q10
-        double plannedStageSec = (double)st.min * 60.0;
+        
+        // CRITICAL FIX: Use adjusted stage duration instead of original st.min
+        // Get the adjusted duration for this stage from the program state
+        double plannedStageSec = (double)st.min * 60.0; // Fallback to original
+        if (programState.adjustedStageDurations && programState.customStageIdx < 20) {
+          // Ensure adjusted durations are calculated
+          if (programState.adjustedStageDurations[programState.customStageIdx] == 0) {
+            initializeStageArrays(); // Recalculate if missing
+          }
+          if (programState.adjustedStageDurations[programState.customStageIdx] > 0) {
+            plannedStageSec = programState.adjustedStageDurations[programState.customStageIdx];
+            if (debugSerial) Serial.printf("[FERMENT-FIX] Using adjusted duration %.1fs instead of original %.1fs\n", 
+                                          plannedStageSec, (double)st.min * 60.0);
+          }
+        }
+        
         double epsilon = 0.05;
         if (!stageJustAdvanced && (fermentState.scheduledElapsedSeconds + epsilon >= plannedStageSec)) {
           if (debugSerial) Serial.printf("[FERMENT] Auto-advance: Stage %d (%s) COMPLETE - scheduled %.1fs >= planned %.1fs (%.1f%% complete, real %.1fs actual, ratio %.2f)\n", 
@@ -1177,13 +1348,43 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
             if (debugSerial) Serial.printf("[TIMING] Stage %d ended at %lu\n", programState.customStageIdx, (unsigned long)now);
           }
           
+          // Log stage completion before advancing
+          if (ensureProgramLoaded(programState.activeProgramId)) {
+            Program* prog = getActiveProgramMutable();
+            if (prog && programState.customStageIdx < prog->customStages.size()) {
+              CustomStage& completedStage = prog->customStages[programState.customStageIdx];
+              unsigned long stageDuration = (millis() - programState.customStageStart) / 1000;
+              logStageEnd(completedStage.label, programState.customStageIdx, stageDuration, actualTemp);
+            }
+          }
+          
+          // CRITICAL FIX: Save resume state BEFORE advancing to prevent firmware upload stage skipping
+          yield(); // Allow other tasks to run
+          saveResumeState();
+          yield(); // Allow other tasks to run
+          
           programState.customStageIdx++;
           programState.customStageStart = millis();
+          
+          // **CRITICAL FIX: Reset fermentation timing completely for next stage**
+          fermentState.scheduledElapsedSeconds = 0.0;  // Reset to zero!
+          fermentState.realElapsedSeconds = 0.0;
+          fermentState.accumulatedFermentMinutes = 0.0;
+          fermentState.fermentLastUpdateMs = 0;  // Force fresh start
           
           // Record when the new stage started for timing display
           if (now > 1640995200 && programState.customStageIdx < 20) { // Valid NTP time and within bounds
             programState.actualStageStartTimes[programState.customStageIdx] = now;
             if (debugSerial) Serial.printf("[TIMING] Stage %d started at %lu\n", programState.customStageIdx, (unsigned long)now);
+          }
+          
+          // Log new stage start
+          if (ensureProgramLoaded(programState.activeProgramId)) {
+            Program* prog = getActiveProgramMutable();
+            if (prog && programState.customStageIdx < prog->customStages.size()) {
+              CustomStage& newStage = prog->customStages[programState.customStageIdx];
+              logStageStart(newStage.label, programState.customStageIdx, actualTemp);
+            }
           }
           
           // Optimize fermentation stage transition: batch operations and add yield points
@@ -1192,7 +1393,7 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           yield(); // Allow other tasks to run
           invalidateStatusCache();
           yield(); // Allow other tasks to run
-          saveResumeState();
+          saveResumeState(); // Save again with new stage index
           yield(); // Allow other tasks to run
           
           stageJustAdvanced = true;
@@ -1317,19 +1518,25 @@ void handleCustomStages(bool &stageJustAdvanced) {
     return;
   }
   
-  stageJustAdvanced = false;
+  // IMPROVED: Only clear the flag at the end to prevent race conditions
   if (programState.customStageIdx >= p->customStages.size()) {
-    stageJustAdvanced = false;
+    // Log program completion before stopping
+    logProgramComplete();
     stopBreadmaker();
     programState.customStageIdx = 0;
     programState.customStageStart = 0;
     clearResumeState();
+    stageJustAdvanced = false; // Clear flag after processing completion
     yield();
     delay(1);
     return;
   }
   CustomStage &st = p->customStages[programState.customStageIdx];
+    double previousSetpoint = pid.Setpoint;
     pid.Setpoint = st.temp;
+    if (abs(previousSetpoint - pid.Setpoint) > 0.1) {
+      logTemperatureTargetChange(pid.Setpoint, pid.Input);
+    }
     checkAndSwitchPIDProfile(); // Auto-switch profile when stage changes temperature
     pid.Input = getAveragedTemperature();
     
@@ -1489,58 +1696,104 @@ void handleCustomStages(bool &stageJustAdvanced) {
           programState.customMixIdx = 0;
           if (debugSerial) Serial.printf("[MIX] Index out of bounds, reset to 0 (total patterns: %d)\n", st.mixPattern.size());
         }
+        
         MixStep &step = st.mixPattern[programState.customMixIdx];
-        unsigned long stepDuration = (step.durationSec > 0) ? (unsigned long)step.durationSec : (unsigned long)(step.mixSec + step.waitSec);
+        
+        // **NEW: Knockdown detection and millisecond support**
+        unsigned long mixTimeMs, waitTimeMs, stepDurationMs;
+        
+        if (step.knockdown || step.label.indexOf("knockdown") >= 0 || step.label.indexOf("Knockdown") >= 0) {
+          // Knockdown mode: use 100ms mix, rest as wait
+          mixTimeMs = (step.mixMs > 0) ? step.mixMs : 100;  // Default 100ms for knockdown
+          waitTimeMs = (step.waitMs > 0) ? step.waitMs : (step.waitSec * 1000);
+          if (waitTimeMs == 0) waitTimeMs = 5000; // Default 5 second wait
+          stepDurationMs = (step.durationSec > 0) ? (step.durationSec * 1000) : (mixTimeMs + waitTimeMs);
+          
+          if (debugSerial && programState.customMixStepStart == 0) {
+            Serial.printf("[MIX] KNOCKDOWN mode: mix=%lums, wait=%lums, duration=%lums\n", 
+                         mixTimeMs, waitTimeMs, stepDurationMs);
+          }
+        } else {
+          // Normal mode: use seconds or milliseconds
+          mixTimeMs = (step.mixMs > 0) ? step.mixMs : (step.mixSec * 1000);
+          waitTimeMs = (step.waitMs > 0) ? step.waitMs : (step.waitSec * 1000);
+          stepDurationMs = (step.durationSec > 0) ? (step.durationSec * 1000) : (mixTimeMs + waitTimeMs);
+        }
+        
         if (programState.customMixStepStart == 0) {
           programState.customMixStepStart = millis();
           if (debugSerial) {
-            if (stepDuration > (unsigned long)(step.mixSec + step.waitSec)) {
-              unsigned long expectedCycles = stepDuration / (step.mixSec + step.waitSec);
-              Serial.printf("[MIX] Starting pattern %d/%d: mix=%ds, wait=%ds, duration=%ds (≈%lu cycles)\n", 
-                          programState.customMixIdx + 1, st.mixPattern.size(), step.mixSec, step.waitSec, stepDuration, expectedCycles);
+            if (stepDurationMs > (mixTimeMs + waitTimeMs)) {
+              unsigned long expectedCycles = stepDurationMs / (mixTimeMs + waitTimeMs);
+              Serial.printf("[MIX] Starting pattern %d/%d: mix=%lums, wait=%lums, duration=%lums (≈%lu cycles)\n", 
+                          programState.customMixIdx + 1, st.mixPattern.size(), mixTimeMs, waitTimeMs, stepDurationMs, expectedCycles);
             } else {
-              Serial.printf("[MIX] Starting pattern %d/%d: mix=%ds, wait=%ds, duration=%ds (single cycle)\n", 
-                          programState.customMixIdx + 1, st.mixPattern.size(), step.mixSec, step.waitSec, stepDuration);
+              Serial.printf("[MIX] Starting pattern %d/%d: mix=%lums, wait=%lums, duration=%lums (single cycle)\n", 
+                          programState.customMixIdx + 1, st.mixPattern.size(), mixTimeMs, waitTimeMs, stepDurationMs);
             }
           }
         }
-        unsigned long elapsed = (millis() - programState.customMixStepStart) / 1000UL;
-        if (stepDuration > (unsigned long)(step.mixSec + step.waitSec)) {
-          unsigned long cycleTime = step.mixSec + step.waitSec;
-          unsigned long cycleElapsed = elapsed % cycleTime;
-          if (cycleElapsed < (unsigned long)step.mixSec) {
+        
+        unsigned long elapsedMs = millis() - programState.customMixStepStart;
+        
+        // Handle cycling patterns (duration > single cycle)
+        if (stepDurationMs > (mixTimeMs + waitTimeMs)) {
+          unsigned long cycleTimeMs = mixTimeMs + waitTimeMs;
+          unsigned long cycleElapsedMs = elapsedMs % cycleTimeMs;
+          
+          if (cycleElapsedMs < mixTimeMs) {
+            bool previousMotorState = outputStates.motor;
             setMotor(true);
-            if (debugSerial && (elapsed / cycleTime) != ((elapsed - 1) / cycleTime)) {
-              Serial.printf("[MIX] Pattern %d cycle %lu: mixing (%lus elapsed)\n", programState.customMixIdx + 1, elapsed / cycleTime + 1, elapsed);
+            if (!previousMotorState && outputStates.motor) {
+              logMixStart(programState.customMixIdx + 1, millis() - programState.customMixStepStart);
+            }
+            if (debugSerial && (elapsedMs / cycleTimeMs) != ((elapsedMs - 1000) / cycleTimeMs)) {
+              Serial.printf("[MIX] Pattern %d cycle %lu: mixing (%lums elapsed)\n", programState.customMixIdx + 1, elapsedMs / cycleTimeMs + 1, elapsedMs);
             }
           } else {
+            bool previousMotorState = outputStates.motor;
             setMotor(false);
+            if (previousMotorState && !outputStates.motor) {
+              logMixStop(programState.customMixIdx + 1, millis() - programState.customMixStepStart);
+            }
           }
-          if (elapsed >= stepDuration) {
+          
+          if (elapsedMs >= stepDurationMs) {
             programState.customMixIdx++;
             programState.customMixStepStart = millis();
             if (programState.customMixIdx >= st.mixPattern.size()) {
               programState.customMixIdx = 0;
               if (debugSerial) Serial.printf("[MIX] All %d patterns complete, restarting from pattern 0\n", st.mixPattern.size());
+              logMixCycleComplete(st.mixPattern.size());
             } else {
               if (debugSerial) Serial.printf("[MIX] Advancing to pattern %d\n", programState.customMixIdx);
+              logMixPatternAdvance(programState.customMixIdx + 1);
             }
           }
         } else {
-          if (elapsed < (unsigned long)step.mixSec) {
+          // Single cycle pattern
+          if (elapsedMs < mixTimeMs) {
+            bool previousMotorState = outputStates.motor;
             setMotor(true);
-          } else if (elapsed < (unsigned long)(step.mixSec + step.waitSec)) {
+            if (!previousMotorState && outputStates.motor) {
+              logMixStart(programState.customMixIdx + 1, millis() - programState.customMixStepStart);
+            }
+          } else if (elapsedMs < (mixTimeMs + waitTimeMs)) {
+            bool previousMotorState = outputStates.motor;
             setMotor(false);
-          } else if (elapsed < stepDuration) {
-            setMotor(false);
+            if (previousMotorState && !outputStates.motor) {
+              logMixStop(programState.customMixIdx + 1, millis() - programState.customMixStepStart);
+            }
           } else {
             programState.customMixIdx++;
             programState.customMixStepStart = millis();
             if (programState.customMixIdx >= st.mixPattern.size()) {
               programState.customMixIdx = 0;
               if (debugSerial) Serial.printf("[MIX] All %d patterns complete, restarting from pattern 0\n", st.mixPattern.size());
+              logMixCycleComplete(st.mixPattern.size());
             } else {
               if (debugSerial) Serial.printf("[MIX] Advancing to pattern %d\n", programState.customMixIdx);
+              logMixPatternAdvance(programState.customMixIdx + 1);
             }
           }
         }
@@ -1622,6 +1875,12 @@ void handleCustomStages(bool &stageJustAdvanced) {
           if (debugSerial) Serial.printf("[FERMENT] Stage advanced, NTP not synced (now=%lu), predictedCompleteTime disabled\n", (unsigned long)now);
         }
       }
+      
+      // CRITICAL FIX: Save resume state BEFORE advancing to prevent firmware upload stage skipping
+      yield(); // Allow other tasks to run
+      saveResumeState();
+      yield(); // Allow other tasks to run
+      
       programState.customStageIdx++;
       programState.customStageStart = millis();
       programState.customMixIdx = 0;
@@ -1635,7 +1894,7 @@ void handleCustomStages(bool &stageJustAdvanced) {
       
       // Optimize stage transition: batch operations and add yield points
       yield(); // Allow other tasks to run
-      saveResumeState();
+      saveResumeState(); // Save again with new stage index
       yield(); // Allow other tasks to run
       invalidateStatusCache();
       yield(); // Allow other tasks to run
