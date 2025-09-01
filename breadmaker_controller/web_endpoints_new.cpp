@@ -1055,6 +1055,63 @@ void stateMachineEndpoints(WebServer& server) {
         streamStatusJson(webPrint);
         server.sendContent(""); // End chunked response
     });
+
+    // Endpoint to add pre-fermentation time to current fermentation tracking
+    server.on("/api/add_prefermentation", HTTP_GET, [&](){
+        if (debugSerial) Serial.println(F("[ACTION] /api/add_prefermentation called"));
+        
+        if (!programState.isRunning) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Program not running\"}");
+            return;
+        }
+        
+        Program* p = getActiveProgramMutable();
+        if (!p || p->customStages.empty()) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"No active program\"}");
+            return;
+        }
+        
+        if (programState.customStageIdx >= p->customStages.size()) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid stage index\"}");
+            return;
+        }
+        
+        // Only allow on fermentation stages
+        if (!p->customStages[programState.customStageIdx].isFermentation) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Current stage is not a fermentation stage\"}");
+            return;
+        }
+        
+        // Get the seconds parameter
+        String secondsParam = server.arg("seconds");
+        if (secondsParam.length() == 0) {
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing 'seconds' parameter\"}");
+            return;
+        }
+        
+        float addSeconds = secondsParam.toFloat();
+        if (addSeconds <= 0 || addSeconds > 86400) { // Max 24 hours
+            server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Seconds must be between 0 and 86400 (24 hours)\"}");
+            return;
+        }
+        
+        // Add the pre-fermentation time to scheduled elapsed seconds
+        fermentState.scheduledElapsedSeconds += addSeconds;
+        
+        // Save the state
+        invalidateStatusCache();
+        saveResumeState();
+        
+        if (debugSerial) Serial.printf("[PRE-FERMENTATION] Added %.1f seconds to fermentation tracking (now %.1f total)\n", 
+                                     addSeconds, fermentState.scheduledElapsedSeconds);
+
+        // Stream status response directly - no buffer needed
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, "application/json", "");
+        WebServerPrint webPrint(server);
+        streamStatusJson(webPrint);
+        server.sendContent(""); // End chunked response
+    });
 }
 
 // Manual Output Endpoints

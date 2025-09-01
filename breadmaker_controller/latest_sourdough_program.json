@@ -1,0 +1,219 @@
+[
+  {
+    "id": 0,
+    "name": "Bread - Sourdough Basic",
+    "fermentBaselineTemp": 20,
+    "fermentQ10": 2,
+    "customStages": [
+      {
+        "label": "Autolyse",
+        "min": 30,
+        "temp": 25,
+        "noMix": true,
+        "instructions": "Add 500g bread flour and 350g water at the beginning of this stage."
+      },
+      {
+        "label": "Mix",
+        "min": 15,
+        "temp": 25,
+        "mixPattern": [
+          {
+            "mixSec": 60,
+            "waitSec": 60,
+            "durationSec": 300
+          },
+          {
+            "mixSec": 120,
+            "waitSec": 30,
+            "durationSec": 600
+          }
+        ],
+        "instructions": "Add 150g active sourdough starter and 10g salt at the beginning of this stage."
+      },
+      {
+        "label": "Bulk Ferment",
+        "min": 240,
+        "temp": 25,
+        "noMix": true,
+        "isFermentation": true,
+        "instructions": "Perform stretch and folds every 30 minutes for the first 2 hours if desired."
+      },
+      {
+        "label": "Knockdown",
+        "min": 5,
+        "temp": 0,
+        "mixPattern": [
+          {
+            "mixSec": 2,
+            "waitSec": 30,
+            "durationSec": 360
+          }
+        ],
+        "instructions": "Degas dough gently, then rest."
+      },
+      {
+        "label": "Shape & Proof",
+        "min": 120,
+        "temp": 25,
+        "noMix": true,
+        "isFermentation": true,
+        "instructions": "Shape dough and proof outside the machine. Bake after this stage."
+      }
+    ]
+  },
+  {
+    "id": 1,
+    "name": "Bread - Sourdough In-Machine",
+    "fermentBaselineTemp": "24",
+    "fermentQ10": 2,
+    "customStages": [
+      {
+        "label": "Initial Mix",
+        "min": 20,
+        "temp": 0,
+        "mixPattern": [
+          {
+            "mixSec": 2,
+            "waitSec": 1,
+            "durationSec": 60
+          },
+          {
+            "mixSec": 30,
+            "waitSec": 5,
+            "durationSec": 240
+          }
+        ],
+        "instructions": "Pre-mix flour and water before adding starter and salt. 20-5 min"
+      },
+      {
+        "label": "Autolyse",
+        "min": 30,
+        "temp": 24,
+        "noMix": true,
+        "instructions": ""
+      },
+      {
+        "label": "Mix",
+        "min": 7,
+        "temp": 0,
+        "mixPattern": [
+          {
+            "mixSec": 20,
+            "waitSec": 3,
+            "durationSec": 300
+          },
+          {
+            "mixSec": 120,
+            "waitSec": 0,
+            "mixMs": 0,
+            "waitMs": 0,
+            "knockdown": false,
+            "label": "",
+            "durationSec": 120
+          }
+        ],
+        "instructions": "Add 120g active sourdough starter, let it mix, then add 10g salt.",
+        "noMix": false,
+        "isFermentation": false
+      },
+      {
+        "label": "Bulk Ferment",
+        "min": 390,
+        "temp": 21,
+        "noMix": true,
+        "instructions": "",
+        "isFermentation": true
+      },
+      {
+        "label": "Stretch",
+        "min": 1,
+        "temp": 0,
+        "mixPattern": [],
+        "instructions": "disabled for now",
+        "noMix": true
+      },
+      {
+        "label": "Proof",
+        "min": 60,
+        "temp": 27,
+        "noMix": true,
+        "instructions": "Score dough now, then close lid to bake.",
+        "isFermentation": true
+      },
+      {
+        "label": "Bake 1",
+        "min": 30,
+        "temp": 180,
+        "noMix": true
+      },
+      {
+        "label": "Bake 2",
+        "min": 35,
+        "temp": 175,
+        "noMix": true
+      },
+      {
+        "label": "Cool",
+        "min": 10,
+        "temp": 0,
+        "noMix": true,
+        "instructions": "Remove bread when cool."
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "name": "Bread - Sourdough Pizza Dough",
+    "customStages": [
+      {
+        "label": "Autolyse",
+        "min": 20,
+        "temp": 24,
+        "noMix": true,
+        "instructions": "Add 500g bread flour and 325g water at the beginning of this stage."
+      },
+      {
+        "label": "Mix",
+        "min": 10,
+        "temp": 24,
+        "mixPattern": [
+          {
+            "mixSec": 60,
+            "waitSec": 60
+          },
+          {
+            "mixSec": 60,
+            "waitSec": 0
+          }
+        ],
+        "instructions": "Add 100g sourdough starter, 10g salt, and 30g olive oil at the beginning of this stage."
+      },
+      {
+        "label": "Bulk Ferment",
+        "min": 180,
+        "temp": 24,
+        "noMix": true,
+        "instructions": "Perform stretch and folds every 30 minutes for the first 2 hours if desired."
+      },
+      {
+        "label": "Knockdown",
+        "min": 2,
+        "temp": 24,
+        "mixPattern": [
+          {
+            "mixSec": 60,
+            "waitSec": 60
+          }
+        ],
+        "instructions": "Degas dough gently, then rest."
+      },
+      {
+        "label": "Cold Proof",
+        "min": 720,
+        "temp": 5,
+        "noMix": true,
+        "instructions": "Refrigerate dough. Use as needed after this stage."
+      }
+    ]
+  }
+]

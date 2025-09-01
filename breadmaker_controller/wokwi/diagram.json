@@ -1,0 +1,225 @@
+{
+  "version": 1,
+  "author": "ESP32 Breadmaker Project",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp32",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-st7789",
+      "id": "display1",
+      "top": -148.67,
+      "left": 173.33,
+      "attrs": {
+        "width": "135",
+        "height": "240"
+      }
+    },
+    {
+      "type": "wokwi-ntc-temperature-sensor",
+      "id": "temp1",
+      "top": 48,
+      "left": 288,
+      "attrs": {
+        "temperature": "20"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "heater_led",
+      "top": 120,
+      "left": 288,
+      "attrs": {
+        "color": "red"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "motor_led",
+      "top": 160,
+      "left": 288,
+      "attrs": {
+        "color": "blue"
+      }
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "temp_control",
+      "top": 200,
+      "left": 288,
+      "attrs": {
+        "value": "500"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 48,
+      "left": 400,
+      "attrs": {
+        "color": "green"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn2",
+      "top": 100,
+      "left": 400,
+      "attrs": {
+        "color": "blue"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "esp32:TX0",
+      "$serialMonitor:RX",
+      "",
+      []
+    ],
+    [
+      "esp32:RX0",
+      "$serialMonitor:TX",
+      "",
+      []
+    ],
+    [
+      "display1:VCC",
+      "esp32:3V3",
+      "red",
+      []
+    ],
+    [
+      "display1:GND",
+      "esp32:GND",
+      "black",
+      []
+    ],
+    [
+      "display1:SCL",
+      "esp32:D18",
+      "yellow",
+      []
+    ],
+    [
+      "display1:SDA",
+      "esp32:D19",
+      "blue",
+      []
+    ],
+    [
+      "display1:RES",
+      "esp32:D23",
+      "white",
+      []
+    ],
+    [
+      "display1:DC",
+      "esp32:D16",
+      "green",
+      []
+    ],
+    [
+      "display1:CS",
+      "esp32:D5",
+      "purple",
+      []
+    ],
+    [
+      "display1:BLK",
+      "esp32:D4",
+      "orange",
+      []
+    ],
+    [
+      "temp1:VCC",
+      "esp32:3V3",
+      "red",
+      []
+    ],
+    [
+      "temp1:GND",
+      "esp32:GND",
+      "black",
+      []
+    ],
+    [
+      "temp1:OUT",
+      "esp32:A0",
+      "green",
+      []
+    ],
+    [
+      "heater_led:A",
+      "esp32:D2",
+      "red",
+      []
+    ],
+    [
+      "heater_led:C",
+      "esp32:GND",
+      "black",
+      []
+    ],
+    [
+      "motor_led:A",
+      "esp32:D12",
+      "blue",
+      []
+    ],
+    [
+      "motor_led:C",
+      "esp32:GND",
+      "black",
+      []
+    ],
+    [
+      "temp_control:VCC",
+      "esp32:3V3",
+      "red",
+      []
+    ],
+    [
+      "temp_control:GND",
+      "esp32:GND",
+      "black",
+      []
+    ],
+    [
+      "temp_control:SIG",
+      "esp32:A3",
+      "yellow",
+      []
+    ],
+    [
+      "btn1:1.l",
+      "esp32:D0",
+      "green",
+      []
+    ],
+    [
+      "btn1:1.r",
+      "esp32:GND",
+      "black",
+      []
+    ],
+    [
+      "btn2:1.l",
+      "esp32:D35",
+      "blue",
+      []
+    ],
+    [
+      "btn2:1.r",
+      "esp32:GND",
+      "black",
+      []
+    ]
+  ],
+  "dependencies": {}
+}

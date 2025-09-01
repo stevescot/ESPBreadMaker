@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP32 Breadmaker Simulator</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .panel { background: white; border-radius: 8px; padding: 20px; margin: 10px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; }
+        .control-group { border: 1px solid #ddd; padding: 15px; border-radius: 5px; }
+        .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+        .status-item { padding: 10px; background: #f9f9f9; border-radius: 4px; }
+        input, select, button { padding: 8px; margin: 5px 0; width: 100%; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        button.stop { background: #dc3545; }
+        button.stop:hover { background: #c82333; }
+        .log { height: 200px; overflow-y: auto; background: #f8f9fa; border: 1px solid #dee2e6; padding: 10px; font-family: monospace; font-size: 12px; }
+        .fermentation-viz { height: 300px; border: 1px solid #ddd; position: relative; overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .stage-current { background-color: #d4edda; }
+        .stage-completed { background-color: #f8d7da; }
+        .chart-container { position: relative; height: 250px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🍞 ESP32 Breadmaker Simulator</h1>
+        <p>Test fermentation calculations, temperature control, and timing in a controlled environment with accelerated time.</p>
+        
+        <!-- Control Panel -->
+        <div class="panel">
+            <h2>Simulation Controls</h2>
+            <div class="controls">
+                <div class="control-group">
+                    <h3>Time Control</h3>
+                    <label>Time Acceleration Factor:</label>
+                    <select id="timeAcceleration">
+                        <option value="1">1x (Real Time)</option>
+                        <option value="60" selected>60x (1 hour = 1 minute)</option>
+                        <option value="300">300x (5 hours = 1 minute)</option>
+                        <option value="1800">1800x (30 hours = 1 minute)</option>
+                        <option value="3600">3600x (1 hour = 1 second)</option>
+                    </select>
+                    <button onclick="simulator.resetTime()">Reset Time</button>
+                </div>
+                
+                <div class="control-group">
+                    <h3>Environmental Controls</h3>
+                    <label>Room Temperature (°C):</label>
+                    <input type="number" id="roomTemp" value="20" min="5" max="35" step="0.1">
+                    
+                    <label>Target Temperature (°C):</label>
+                    <input type="number" id="targetTemp" value="21" min="5" max="250" step="0.1">
+                    
+                    <label>Heater Power (%):</label>
+                    <input type="range" id="heaterPower" value="0" min="0" max="100" step="1">
+                    <span id="heaterPowerValue">0%</span>
+                </div>
+                
+                <div class="control-group">
+                    <h3>Program Control</h3>
+                    <select id="programSelect">
+                        <option value="sourdough">Sourdough In-Machine</option>
+                        <option value="white">White Bread</option>
+                        <option value="test">Test Program (Short)</option>
+                    </select>
+                    <button onclick="simulator.startProgram()">Start Program</button>
+                    <button onclick="simulator.stopProgram()" class="stop">Stop Program</button>
+                    <button onclick="simulator.advanceStage()">Advance Stage</button>
+                </div>
+                
+                <div class="control-group">
+                    <h3>Fermentation Testing</h3>
+                    <label>Test Temperature (°C):</label>
+                    <input type="number" id="testTemp" value="25" min="5" max="40" step="0.1">
+                    <button onclick="simulator.calculateFermentationFactor()">Calculate Q10 Factor</button>
+                    <div id="fermentationResult"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Display -->
+        <div class="panel">
+            <h2>Current Status</h2>
+            <div class="status-grid">
+                <div class="status-item">
+                    <strong>Program:</strong><br>
+                    <span id="currentProgram">None</span>
+                </div>
+                <div class="status-item">
+                    <strong>Stage:</strong><br>
+                    <span id="currentStage">Idle</span>
+                </div>
+                <div class="status-item">
+                    <strong>Temperature:</strong><br>
+                    <span id="currentTemp">20.0°C</span>
+                </div>
+                <div class="status-item">
+                    <strong>Time Left:</strong><br>
+                    <span id="timeLeft">--:--</span>
+                </div>
+                <div class="status-item">
+                    <strong>Fermentation Factor:</strong><br>
+                    <span id="fermentFactor">1.000</span>
+                </div>
+                <div class="status-item">
+                    <strong>Scheduled Elapsed:</strong><br>
+                    <span id="scheduledElapsed">0s</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stage Timeline -->
+        <div class="panel">
+            <h2>Stage Timeline</h2>
+            <div id="stageTimeline">
+                <table id="stageTable">
+                    <thead>
+                        <tr>
+                            <th>Stage</th>
+                            <th>Original (min)</th>
+                            <th>Adjusted (min)</th>
+                            <th>Status</th>
+                            <th>Temperature</th>
+                            <th>Is Fermentation</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stageTableBody">
+                        <tr><td colspan="6">No program loaded</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Temperature Chart -->
+        <div class="panel">
+            <h2>Temperature & Fermentation Chart</h2>
+            <div class="chart-container">
+                <canvas id="tempChart" width="800" height="250"></canvas>
+            </div>
+        </div>
+
+        <!-- Event Log -->
+        <div class="panel">
+            <h2>Event Log</h2>
+            <div class="log" id="eventLog">
+                <div>Simulator initialized</div>
+            </div>
+            <button onclick="document.getElementById('eventLog').innerHTML = ''">Clear Log</button>
+        </div>
+    </div>
+
+    <script>
+        class BreadmakerSimulator {
+            constructor() {
+                this.isRunning = false;
+                this.currentProgram = null;
+                this.currentStageIndex = 0;
+                this.stageStartTime = 0;
+                this.simulationStartTime = Date.now();
+                this.temperature = 20.0;
+                this.targetTemperature = 20.0;
+                this.heaterOn = false;
+                this.timeAcceleration = 60;
+                this.fermentationState = {
+                    scheduledElapsedSeconds: 0,
+                    realElapsedSeconds: 0,
+                    fermentationFactor: 1.0,
+                    initialFermentTemp: 20.0
+                };
+                this.temperatureHistory = [];
+                this.fermentationHistory = [];
+                
+                this.programs = {
+                    sourdough: {
+                        name: "Sourdough In-Machine",
+                        customStages: [
+                            {label: "Autolyse", min: 5, temp: 24, isFermentation: false},
+                            {label: "Mix 1", min: 30, temp: 24, isFermentation: false},
+                            {label: "Mix 2", min: 7, temp: 0, isFermentation: false},
+                            {label: "Bulk Ferment", min: 720, temp: 21, isFermentation: true},
+                            {label: "Rest", min: 1, temp: 0, isFermentation: false},
+                            {label: "Shape", min: 420, temp: 27, isFermentation: true},
+                            {label: "Pre-heat", min: 30, temp: 180, isFermentation: false},
+                            {label: "Bake", min: 35, temp: 175, isFermentation: false},
+                            {label: "Cool", min: 10, temp: 0, isFermentation: false}
+                        ]
+                    },
+                    test: {
+                        name: "Test Program (Short)",
+                        customStages: [
+                            {label: "Mix", min: 2, temp: 25, isFermentation: false},
+                            {label: "Ferment", min: 10, temp: 28, isFermentation: true},
+                            {label: "Bake", min: 5, temp: 180, isFermentation: false}
+                        ]
+                    }
+                };
+                
+                this.initializeUI();
+                this.startUpdateLoop();
+            }
+            
+            initializeUI() {
+                // Bind UI events
+                document.getElementById('heaterPower').addEventListener('input', (e) => {
+                    document.getElementById('heaterPowerValue').textContent = e.target.value + '%';
+                });
+                
+                document.getElementById('timeAcceleration').addEventListener('change', (e) => {
+                    this.timeAcceleration = parseInt(e.target.value);
+                    this.log(`Time acceleration set to ${this.timeAcceleration}x`);
+                });
+                
+                document.getElementById('roomTemp').addEventListener('input', (e) => {
+                    if (!this.heaterOn) {
+                        this.temperature = parseFloat(e.target.value);
+                    }
+                });
+                
+                document.getElementById('targetTemp').addEventListener('input', (e) => {
+                    this.targetTemperature = parseFloat(e.target.value);
+                });
+            }
+            
+            startProgram() {
+                const programId = document.getElementById('programSelect').value;
+                if (!this.programs[programId]) {
+                    this.log("ERROR: Program not found");
+                    return;
+                }
+                
+                this.currentProgram = this.programs[programId];
+                this.currentStageIndex = 0;
+                this.isRunning = true;
+                this.stageStartTime = this.getSimulationTime();
+                this.fermentationState.scheduledElapsedSeconds = 0;
+                this.fermentationState.realElapsedSeconds = 0;
+                this.fermentationState.initialFermentTemp = this.temperature;
+                
+                this.log(`Started program: ${this.currentProgram.name}`);
+                this.updateFermentationFactor();
+                this.updateStageDisplay();
+            }
+            
+            stopProgram() {
+                this.isRunning = false;
+                this.currentProgram = null;
+                this.currentStageIndex = 0;
+                this.heaterOn = false;
+                this.log("Program stopped");
+                this.updateDisplay();
+            }
+            
+            advanceStage() {
+                if (!this.isRunning || !this.currentProgram) return;
+                
+                if (this.currentStageIndex < this.currentProgram.customStages.length - 1) {
+                    this.currentStageIndex++;
+                    this.stageStartTime = this.getSimulationTime();
+                    this.log(`Advanced to stage ${this.currentStageIndex + 1}: ${this.getCurrentStage().label}`);
+                    this.updateStageDisplay();
+                } else {
+                    this.log("Program completed!");
+                    this.stopProgram();
+                }
+            }
+            
+            calculateFermentationFactor() {
+                const testTemp = parseFloat(document.getElementById('testTemp').value);
+                const factor = this.getQ10Factor(testTemp);
+                document.getElementById('fermentationResult').innerHTML = 
+                    `<strong>Q10 Factor:</strong> ${factor.toFixed(3)}<br>
+                     <strong>Speed:</strong> ${(1/factor).toFixed(2)}x faster than 21°C`;
+                this.log(`Q10 factor for ${testTemp}°C: ${factor.toFixed(3)}`);
+            }
+            
+            getQ10Factor(temperature) {
+                const Q10 = 2.0;
+                const baselineTemp = 21.0;
+                const tempDiff = temperature - baselineTemp;
+                return Math.pow(Q10, tempDiff / 10.0);
+            }
+            
+            updateFermentationFactor() {
+                this.fermentationState.fermentationFactor = this.getQ10Factor(this.temperature);
+            }
+            
+            getCurrentStage() {
+                if (!this.currentProgram || this.currentStageIndex >= this.currentProgram.customStages.length) {
+                    return null;
+                }
+                return this.currentProgram.customStages[this.currentStageIndex];
+            }
+            
+            getSimulationTime() {
+                return Date.now();
+            }
+            
+            getElapsedStageTime() {
+                if (!this.isRunning) return 0;
+                return (this.getSimulationTime() - this.stageStartTime) * this.timeAcceleration / 1000;
+            }
+            
+            updateTemperature() {
+                const heaterPower = parseInt(document.getElementById('heaterPower').value);
+                const roomTemp = parseFloat(document.getElementById('roomTemp').value);
+                
+                if (this.isRunning && this.getCurrentStage()) {
+                    this.targetTemperature = this.getCurrentStage().temp || roomTemp;
+                    this.heaterOn = this.temperature < this.targetTemperature;
+                }
+                
+                // Simple temperature physics simulation
+                const tempDiff = this.targetTemperature - this.temperature;
+                const heatingRate = this.heaterOn ? (heaterPower / 100) * 0.1 : 0;
+                const coolingRate = (this.temperature - roomTemp) * 0.02;
+                
+                this.temperature += heatingRate - coolingRate;
+                this.temperature = Math.max(roomTemp, Math.min(250, this.temperature));
+                
+                // Update heater power display based on actual usage
+                if (this.heaterOn && this.isRunning) {
+                    const autoPower = Math.min(100, Math.max(0, tempDiff * 10));
+                    document.getElementById('heaterPower').value = autoPower;
+                    document.getElementById('heaterPowerValue').textContent = autoPower.toFixed(0) + '%';
+                }
+            }
+            
+            updateFermentationTracking() {
+                if (!this.isRunning || !this.getCurrentStage()) return;
+                
+                const stage = this.getCurrentStage();
+                if (stage.isFermentation) {
+                    const realElapsed = this.getElapsedStageTime();
+                    const scheduledElapsed = realElapsed / this.fermentationState.fermentationFactor;
+                    
+                    this.fermentationState.realElapsedSeconds = realElapsed;
+                    this.fermentationState.scheduledElapsedSeconds += scheduledElapsed / 60; // Convert to minutes for display
+                }
+            }
+            
+            checkStageCompletion() {
+                if (!this.isRunning || !this.getCurrentStage()) return;
+                
+                const stage = this.getCurrentStage();
+                const elapsedMinutes = this.getElapsedStageTime() / 60;
+                
+                let adjustedDuration = stage.min;
+                if (stage.isFermentation) {
+                    adjustedDuration = stage.min * this.fermentationState.fermentationFactor;
+                }
+                
+                if (elapsedMinutes >= adjustedDuration) {
+                    this.log(`Stage "${stage.label}" completed after ${elapsedMinutes.toFixed(1)} minutes`);
+                    this.advanceStage();
+                }
+            }
+            
+            updateDisplay() {
+                // Update status display
+                document.getElementById('currentProgram').textContent = 
+                    this.currentProgram ? this.currentProgram.name : 'None';
+                
+                const stage = this.getCurrentStage();
+                document.getElementById('currentStage').textContent = 
+                    stage ? `${this.currentStageIndex + 1}. ${stage.label}` : 'Idle';
+                
+                document.getElementById('currentTemp').textContent = `${this.temperature.toFixed(1)}°C`;
+                document.getElementById('fermentFactor').textContent = this.fermentationState.fermentationFactor.toFixed(3);
+                document.getElementById('scheduledElapsed').textContent = `${this.fermentationState.scheduledElapsedSeconds.toFixed(1)}s`;
+                
+                // Update time left
+                if (this.isRunning && stage) {
+                    const elapsedMinutes = this.getElapsedStageTime() / 60;
+                    let adjustedDuration = stage.min;
+                    if (stage.isFermentation) {
+                        adjustedDuration = stage.min * this.fermentationState.fermentationFactor;
+                    }
+                    const remainingMinutes = Math.max(0, adjustedDuration - elapsedMinutes);
+                    const hours = Math.floor(remainingMinutes / 60);
+                    const mins = Math.floor(remainingMinutes % 60);
+                    document.getElementById('timeLeft').textContent = `${hours}:${mins.toString().padStart(2, '0')}`;
+                } else {
+                    document.getElementById('timeLeft').textContent = '--:--';
+                }
+            }
+            
+            updateStageDisplay() {
+                const tbody = document.getElementById('stageTableBody');
+                if (!this.currentProgram) {
+                    tbody.innerHTML = '<tr><td colspan="6">No program loaded</td></tr>';
+                    return;
+                }
+                
+                tbody.innerHTML = '';
+                this.currentProgram.customStages.forEach((stage, index) => {
+                    const row = tbody.insertRow();
+                    const adjustedMin = stage.isFermentation ? 
+                        (stage.min * this.fermentationState.fermentationFactor).toFixed(1) : 
+                        stage.min.toString();
+                    
+                    let status = 'Pending';
+                    let className = '';
+                    if (index < this.currentStageIndex) {
+                        status = 'Completed';
+                        className = 'stage-completed';
+                    } else if (index === this.currentStageIndex && this.isRunning) {
+                        status = 'Current';
+                        className = 'stage-current';
+                    }
+                    
+                    row.className = className;
+                    row.innerHTML = `
+                        <td>${stage.label}</td>
+                        <td>${stage.min}</td>
+                        <td>${adjustedMin}</td>
+                        <td>${status}</td>
+                        <td>${stage.temp || 'Room'}°C</td>
+                        <td>${stage.isFermentation ? 'Yes' : 'No'}</td>
+                    `;
+                });
+            }
+            
+            resetTime() {
+                this.simulationStartTime = Date.now();
+                this.stageStartTime = this.getSimulationTime();
+                this.fermentationState.scheduledElapsedSeconds = 0;
+                this.fermentationState.realElapsedSeconds = 0;
+                this.log("Simulation time reset");
+            }
+            
+            log(message) {
+                const logElement = document.getElementById('eventLog');
+                const timestamp = new Date().toLocaleTimeString();
+                const logEntry = document.createElement('div');
+                logEntry.textContent = `[${timestamp}] ${message}`;
+                logElement.appendChild(logEntry);
+                logElement.scrollTop = logElement.scrollHeight;
+            }
+            
+            startUpdateLoop() {
+                setInterval(() => {
+                    this.updateTemperature();
+                    this.updateFermentationFactor();
+                    this.updateFermentationTracking();
+                    this.checkStageCompletion();
+                    this.updateDisplay();
+                    this.updateStageDisplay();
+                }, 100); // Update every 100ms
+            }
+        }
+        
+        // Initialize simulator when page loads
+        const simulator = new BreadmakerSimulator();
+    </script>
+</body>
+</html>

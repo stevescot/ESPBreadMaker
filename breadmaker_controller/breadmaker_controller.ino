@@ -12,19 +12,26 @@ FEATURES:
 
 */
 
+// Simulation compatibility - must be included before other headers
+#include "simulation_compatibility.h"
+
 #include <Arduino.h>
 #include <functional>       // For std::function
+
+#ifndef NATIVE_SIMULATION
 #include <WiFi.h>          // ESP32 WiFi library
 #include <ESPmDNS.h>       // ESP32 mDNS library
 #include <ArduinoOTA.h>    // ESP32 OTA updates
 #include <FFat.h>      // ESP32 FATFS support for 16MB
 #include <WebServer.h>     // Standard ESP32 WebServer (stable alternative to AsyncWebServer)
-#include <ArduinoJson.h>
 #include <PID_v1.h>
+#include <EEPROM.h>
+#endif
+
+#include <ArduinoJson.h>
 #include <map>
 #include <vector>
 #include <time.h>
-#include <EEPROM.h>
 
 #include "globals.h"       // Must be included for global definitions
 #include "display_manager.h"  // LovyanGFX display management

@@ -1,0 +1,65 @@
+[
+  {
+    "name": "Fermentation Test Program",
+    "description": "Short program for testing fermentation calculations",
+    "customStages": [
+      {
+        "label": "Mix",
+        "min": 1,
+        "temp": 25.0,
+        "mixPattern": [
+          {"action": "mix", "durationSec": 30},
+          {"action": "wait", "durationSec": 30}
+        ],
+        "heater": "off",
+        "light": "on",
+        "buzzer": "off",
+        "instructions": "Quick mix for test",
+        "isFermentation": false,
+        "disableAutoAdjust": false
+      },
+      {
+        "label": "Ferment Test 1",
+        "min": 5,
+        "temp": 28.0,
+        "mixPattern": [
+          {"action": "wait", "durationSec": 300}
+        ],
+        "heater": "on",
+        "light": "off",
+        "buzzer": "off",
+        "instructions": "Test fermentation at 28°C",
+        "isFermentation": true,
+        "disableAutoAdjust": false
+      },
+      {
+        "label": "Ferment Test 2",
+        "min": 3,
+        "temp": 21.0,
+        "mixPattern": [
+          {"action": "wait", "durationSec": 180}
+        ],
+        "heater": "on",
+        "light": "off",
+        "buzzer": "off",
+        "instructions": "Test fermentation at 21°C baseline",
+        "isFermentation": true,
+        "disableAutoAdjust": false
+      },
+      {
+        "label": "Cool Test",
+        "min": 1,
+        "temp": 18.0,
+        "mixPattern": [
+          {"action": "wait", "durationSec": 60}
+        ],
+        "heater": "off",
+        "light": "off",
+        "buzzer": "off",
+        "instructions": "Test fermentation at cool temperature",
+        "isFermentation": true,
+        "disableAutoAdjust": false
+      }
+    ]
+  }
+]
