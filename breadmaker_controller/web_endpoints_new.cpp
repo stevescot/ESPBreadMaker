@@ -3009,6 +3009,7 @@ void registerWebEndpoints(WebServer& server) {
     
     server.onNotFound([&](){
         String path = server.uri();
+        
         if (serveStaticFile(server, path)) {
             return;
         }

@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sourdough In-Machine Timing Analysis</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background: #f5f5f5; 
+        }
+        .header { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+            color: white; 
+            padding: 20px; 
+            border-radius: 10px; 
+            text-align: center; 
+            margin-bottom: 30px; 
+        }
+        .summary-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .stage-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .stage-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px;
+            text-align: left;
+        }
+        .stage-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #eee;
+        }
+        .stage-table tr:hover {
+            background: #f8f9fa;
+        }
+        .fermentation { background: #e8f5e8; }
+        .non-fermentation { background: #f8f8f8; }
+        .total-row { 
+            background: #fff3cd; 
+            font-weight: bold;
+            border-top: 2px solid #ffc107;
+        }
+        .time-change {
+            font-weight: bold;
+        }
+        .time-increase { color: #dc3545; }
+        .time-decrease { color: #28a745; }
+        .q10-info {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .fermentation-highlight {
+            background: #e8f5e8;
+            border-left: 4px solid #4caf50;
+            padding: 15px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🍞 Sourdough In-Machine Program</h1>
+        <h2>Q10 Temperature-Adjusted Timing Analysis</h2>
+    </div>
+
+    <div class="summary-card">
+        <h3>Program Overview</h3>
+        <div id="programInfo"></div>
+    </div>
+
+    <div class="q10-info">
+        <h4>📊 Q10 Fermentation Model</h4>
+        <p><strong>Q10 Factor:</strong> <span id="q10Factor"></span> (doubling rate every 10°C increase)</p>
+        <p><strong>Baseline Temperature:</strong> <span id="baselineTemp"></span>°C</p>
+        <p><strong>Formula:</strong> Adjusted Time = Original Time × Q10^((Current Temp - Baseline Temp) / 10)</p>
+    </div>
+
+    <table class="stage-table">
+        <thead>
+            <tr>
+                <th>Stage</th>
+                <th>Name</th>
+                <th>Original (min)</th>
+                <th>Temperature (°C)</th>
+                <th>Fermentation</th>
+                <th>Q10 Factor</th>
+                <th>Adjusted (min)</th>
+                <th>Cumulative (min)</th>
+                <th>Change</th>
+            </tr>
+        </thead>
+        <tbody id="stageTableBody">
+        </tbody>
+    </table>
+
+    <div class="summary-card">
+        <h3>📈 Timing Summary</h3>
+        <div id="timingSummary"></div>
+    </div>
+
+    <div class="summary-card">
+        <h3>🦠 Key Fermentation Stages</h3>
+        <div id="fermentationStages"></div>
+    </div>
+
+    <script>
+        // Load the sourdough program data
+        const sourdoughProgram = {
+            "name": "Bread - Sourdough In-Machine",
+            "fermentBaselineTemp": 24,
+            "fermentQ10": 2,
+            "customStages": [
+                {"label": "Initial Mix", "min": 20, "temp": 0, "isFermentation": false},
+                {"label": "Autolyse", "min": 30, "temp": 24, "isFermentation": true},
+                {"label": "Mix", "min": 7, "temp": 0, "isFermentation": false},
+                {"label": "Bulk Ferment", "min": 390, "temp": 21, "isFermentation": true},
+                {"label": "Stretch", "min": 1, "temp": 0, "isFermentation": false},
+                {"label": "Proof", "min": 60, "temp": 27, "isFermentation": true},
+                {"label": "Bake 1", "min": 10, "temp": 200, "isFermentation": false},
+                {"label": "Bake 2", "min": 25, "temp": 220, "isFermentation": false},
+                {"label": "Cool", "min": 30, "temp": 0, "isFermentation": false}
+            ]
+        };
+
+        function calculateQ10Factor(currentTemp, baselineTemp, Q10) {
+            const tempDiff = currentTemp - baselineTemp;
+            return Math.pow(Q10, tempDiff / 10.0);
+        }
+
+        function analyzeProgram() {
+            const baselineTemp = sourdoughProgram.fermentBaselineTemp;
+            const Q10 = sourdoughProgram.fermentQ10;
+            
+            // Update program info
+            document.getElementById('programInfo').innerHTML = `
+                <p><strong>Name:</strong> ${sourdoughProgram.name}</p>
+                <p><strong>Total Stages:</strong> ${sourdoughProgram.customStages.length}</p>
+                <p><strong>Fermentation Model:</strong> Q10 biological temperature response</p>
+            `;
+            
+            // Update Q10 info
+            document.getElementById('q10Factor').textContent = Q10;
+            document.getElementById('baselineTemp').textContent = baselineTemp;
+
+            let totalOriginal = 0;
+            let totalAdjusted = 0;
+            let cumulativeTime = 0;
+            let tableHTML = '';
+            let fermentationHTML = '';
+
+            sourdoughProgram.customStages.forEach((stage, index) => {
+                const temp = stage.temp > 0 ? stage.temp : 20; // Default to 20°C if no temp set
+                const q10Factor = calculateQ10Factor(temp, baselineTemp, Q10);
+                const adjustedTime = stage.isFermentation ? stage.min * q10Factor : stage.min;
+                const timeDiff = adjustedTime - stage.min;
+                
+                totalOriginal += stage.min;
+                totalAdjusted += adjustedTime;
+                cumulativeTime += adjustedTime;
+
+                const rowClass = stage.isFermentation ? 'fermentation' : 'non-fermentation';
+                const changeText = timeDiff === 0 ? 'No change' : 
+                                 timeDiff > 0 ? `+${timeDiff.toFixed(0)} min` : 
+                                 `${timeDiff.toFixed(0)} min`;
+                const changeClass = timeDiff === 0 ? '' : 
+                                   timeDiff > 0 ? 'time-increase' : 
+                                   'time-decrease';
+
+                tableHTML += `
+                    <tr class="${rowClass}">
+                        <td>${index + 1}</td>
+                        <td>${stage.label}</td>
+                        <td>${stage.min}</td>
+                        <td>${temp}</td>
+                        <td>${stage.isFermentation ? '✓' : '✗'}</td>
+                        <td>${q10Factor.toFixed(3)}</td>
+                        <td>${adjustedTime.toFixed(0)}</td>
+                        <td>${cumulativeTime.toFixed(0)}</td>
+                        <td class="time-change ${changeClass}">${changeText}</td>
+                    </tr>
+                `;
+
+                // Add to fermentation stages if applicable
+                if (stage.isFermentation) {
+                    fermentationHTML += `
+                        <div class="fermentation-highlight">
+                            <strong>${stage.label}:</strong> ${stage.min} min → ${adjustedTime.toFixed(0)} min at ${temp}°C 
+                            (${(adjustedTime / 60).toFixed(1)} hours)
+                            <br><small>Q10 factor: ${q10Factor.toFixed(3)} | Change: ${changeText}</small>
+                        </div>
+                    `;
+                }
+            });
+
+            // Add total row
+            const totalTimeDiff = totalAdjusted - totalOriginal;
+            const totalChangeText = totalTimeDiff === 0 ? 'No change' : 
+                                   totalTimeDiff > 0 ? `+${totalTimeDiff.toFixed(0)} min` : 
+                                   `${totalTimeDiff.toFixed(0)} min`;
+            const totalChangeClass = totalTimeDiff === 0 ? '' : 
+                                    totalTimeDiff > 0 ? 'time-increase' : 
+                                    'time-decrease';
+
+            tableHTML += `
+                <tr class="total-row">
+                    <td colspan="2"><strong>TOTAL</strong></td>
+                    <td><strong>${totalOriginal}</strong></td>
+                    <td><strong>Mixed</strong></td>
+                    <td><strong>Mixed</strong></td>
+                    <td><strong>Weighted</strong></td>
+                    <td><strong>${totalAdjusted.toFixed(0)}</strong></td>
+                    <td><strong>${totalAdjusted.toFixed(0)}</strong></td>
+                    <td class="time-change ${totalChangeClass}"><strong>${totalChangeText}</strong></td>
+                </tr>
+            `;
+
+            document.getElementById('stageTableBody').innerHTML = tableHTML;
+
+            // Update timing summary
+            const originalHours = totalOriginal / 60;
+            const adjustedHours = totalAdjusted / 60;
+            const hoursDiff = adjustedHours - originalHours;
+            
+            document.getElementById('timingSummary').innerHTML = `
+                <p><strong>Original Duration:</strong> ${originalHours.toFixed(1)} hours (${totalOriginal} minutes)</p>
+                <p><strong>Temperature-Adjusted Duration:</strong> ${adjustedHours.toFixed(1)} hours (${totalAdjusted.toFixed(0)} minutes)</p>
+                <p><strong>Time Difference:</strong> <span class="time-change ${hoursDiff >= 0 ? 'time-increase' : 'time-decrease'}">
+                    ${hoursDiff >= 0 ? '+' : ''}${hoursDiff.toFixed(1)} hours (${hoursDiff >= 0 ? '+' : ''}${(hoursDiff * 60).toFixed(0)} minutes)
+                </span></p>
+            `;
+
+            // Update fermentation stages
+            document.getElementById('fermentationStages').innerHTML = fermentationHTML;
+        }
+
+        // Run analysis when page loads
+        window.onload = analyzeProgram;
+    </script>
+</body>
+</html>

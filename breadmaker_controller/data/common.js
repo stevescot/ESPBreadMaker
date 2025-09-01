@@ -425,7 +425,7 @@ function initializeFinishBy() {
         finishByRow.style.display = 'block';
         
         // Load the selected program data
-        fetch(`/programs/${encodeURIComponent(this.value)}`)
+        fetch(`/programs/program_${encodeURIComponent(this.value)}.json`)
           .then(response => response.json())
           .then(program => {
             currentProgram = program;
