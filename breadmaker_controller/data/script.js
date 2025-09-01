@@ -107,6 +107,14 @@ function populateProgramSelect() {
     }
   });
   
+  // Initialize finish-by controls visibility based on current selection
+  const currentSelection = programSelect.value;
+  if (currentSelection && currentSelection !== "") {
+    showFinishByControls(true);
+  } else {
+    showFinishByControls(false);
+  }
+
   // Add change event listener with running program confirmation
   programSelect.onchange = function() {
     const selectedProgramId = parseInt(this.value);
@@ -759,15 +767,68 @@ function autoSelectProgram(s) {
   const programSelect = document.getElementById('programSelect');
   if (!programSelect) return;
   
+  // Check if program has actually changed since last update
+  const currentProgramId = s?.programId;
+  const currentProgramName = s?.program;
+  const currentIsRunning = s?.running || s?.state === 'Running' || s?.state === 'Paused';
+  
+  // Only rebuild dropdown if program state has changed
+  const programStateChanged = (
+    window.lastProgramId !== currentProgramId ||
+    window.lastProgramName !== currentProgramName ||
+    window.lastIsRunning !== currentIsRunning
+  );
+  
+  // Store current state for next comparison
+  window.lastProgramId = currentProgramId;
+  window.lastProgramName = currentProgramName;
+  window.lastIsRunning = currentIsRunning;
+  
+  if (!programStateChanged) {
+    // No change in program state - skip rebuilding to avoid flickering
+    console.log('[AUTO-SELECT] Program state unchanged, skipping rebuild');
+    return;
+  }
+  
+  console.log('[AUTO-SELECT] Program state changed, rebuilding dropdown');
+  
   // Refresh the program dropdown to show running status
   const currentValue = programSelect.value;
   populateProgramSelect();
   
+  // Update finish-by controls visibility based on program selection
+  // (Only when program state changes to avoid flickering)
+  if (currentValue && currentValue !== "") {
+    showFinishByControls(true);
+  } else if (s && s.program && s.program !== "No program selected") {
+    // If status shows a program is selected but dropdown isn't set yet, show finish-by controls
+    showFinishByControls(true);
+  } else {
+    showFinishByControls(false);
+  }
+  
   // Only auto-select if no program is currently selected (empty value or default option)
   // This prevents overriding user's manual selection when they're trying to select a different program
   if (currentValue && currentValue !== "") {
-    programSelect.value = currentValue; // Restore previous selection
-    console.log('[AUTO-SELECT] Preserving user selection:', currentValue);
+    // Use a small delay to ensure the dropdown is fully populated before restoring selection
+    setTimeout(() => {
+      if (programSelect.querySelector(`option[value="${currentValue}"]`)) {
+        programSelect.value = currentValue;
+        console.log('[AUTO-SELECT] Preserving user selection:', currentValue);
+        
+        // Ensure finish-by controls and stage dropdown are updated for preserved selection
+        const selectedProgramId = parseInt(currentValue);
+        if (selectedProgramId >= 0) {
+          const programIdx = window.cachedPrograms.findIndex(p => p.id === selectedProgramId);
+          if (programIdx >= 0) {
+            populateStageDropdown(programIdx);
+            showFinishByControls(true);
+          }
+        }
+      } else {
+        console.warn('[AUTO-SELECT] Could not preserve selection - option not found:', currentValue);
+      }
+    }, 10);
     return;
   }
   
@@ -1910,9 +1971,14 @@ function showFinishByControls(show) {
     finishByRow.style.display = show ? 'flex' : 'none';
     
     // Set default time to 8 hours from now if no time is set
+    // BUT only if the input is not currently being used by the user
     if (show) {
       const finishByTime = document.getElementById('finishByTime');
-      if (finishByTime && !finishByTime.value) {
+      const userIsInteracting = window.finishByUserInteracting && window.finishByUserInteracting();
+      
+      if (finishByTime && !finishByTime.value && 
+          document.activeElement !== finishByTime && 
+          !userIsInteracting) {
         const defaultTime = new Date();
         defaultTime.setHours(defaultTime.getHours() + 8);
         finishByTime.value = defaultTime.toISOString().slice(0, 16); // Format for datetime-local

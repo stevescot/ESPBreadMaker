@@ -120,13 +120,28 @@ function getSmartDefaultEndTime() {
 function setSmartDefaultTime() {
   const defaultTime = getSmartDefaultEndTime();
   const finishByInput = document.getElementById('finishByTime');
-  if (finishByInput) {
-    // Format as datetime-local string
-    const isoString = defaultTime.toISOString();
-    const localDateTime = isoString.substring(0, 16); // Remove seconds and timezone
-    finishByInput.value = localDateTime;
+  
+  // Only set the default time if:
+  // 1. Input exists
+  // 2. Input is not currently focused (user isn't actively setting it)
+  // 3. User is not currently interacting with it
+  // 4. Input is empty or user hasn't started modifying it recently
+  const userIsInteracting = window.finishByUserInteracting && window.finishByUserInteracting();
+  
+  if (finishByInput && 
+      document.activeElement !== finishByInput && 
+      !userIsInteracting) {
+    const currentValue = finishByInput.value;
     
-    console.log('Set smart default time:', defaultTime.toLocaleString());
+    // If there's no value, set the default
+    if (!currentValue) {
+      // Format as datetime-local string
+      const isoString = defaultTime.toISOString();
+      const localDateTime = isoString.substring(0, 16); // Remove seconds and timezone
+      finishByInput.value = localDateTime;
+      
+      console.log('Set smart default time:', defaultTime.toLocaleString());
+    }
   }
 }
 
@@ -134,16 +149,40 @@ function setSmartDefaultTime() {
 function calculateTemperatureAdjustment() {
   const finishByInput = document.getElementById('finishByTime');
   const tempDeltaInput = document.getElementById('tempDelta');
+  const programSelect = document.getElementById('programSelect');
   
-  if (!finishByInput.value || !currentProgram) {
+  // Get the currently selected program
+  let selectedProgram = null;
+  if (programSelect && programSelect.value) {
+    const programId = parseInt(programSelect.value);
+    selectedProgram = window.cachedPrograms?.find(p => p.id === programId);
+  }
+  
+  if (!finishByInput.value) {
+    alert('Please set a target finish time first.');
+    return;
+  }
+  
+  if (!selectedProgram) {
+    alert('Please select a program first.');
+    return;
+  }
+  
+  if (!selectedProgram.customStages || !Array.isArray(selectedProgram.customStages)) {
+    alert('Selected program does not have valid stage data.');
     return;
   }
   
   const targetEndTime = new Date(finishByInput.value);
   const now = new Date();
   
+  if (targetEndTime <= now) {
+    alert('Target time must be in the future.');
+    return;
+  }
+  
   // Calculate total program time and time available
-  const totalProgramTime = currentProgram.customStages.reduce((sum, stage) => sum + (stage.min * 60), 0);
+  const totalProgramTime = selectedProgram.customStages.reduce((sum, stage) => sum + (stage.min * 60), 0);
   const timeAvailable = Math.floor((targetEndTime - now) / 1000);
   
   // Simple heuristic: if we have less time, increase temperature; if more time, decrease
@@ -153,9 +192,21 @@ function calculateTemperatureAdjustment() {
   // Rough estimate: 1°C change per 2 hours difference (for fermentation stages)
   const suggestedDelta = Math.round((-hoursOverUnder / 2) * 2) / 2; // Round to 0.5°C
   
-  if (tempDeltaInput && Math.abs(suggestedDelta) <= 10) {
-    tempDeltaInput.value = suggestedDelta;
-    console.log(`Suggested temperature adjustment: ${suggestedDelta}°C (${hoursOverUnder.toFixed(1)}h difference)`);
+  if (tempDeltaInput) {
+    // Clamp to reasonable range
+    const clampedDelta = Math.max(-10, Math.min(10, suggestedDelta));
+    tempDeltaInput.value = clampedDelta;
+    
+    console.log(`Temperature calculation:
+      Program: ${selectedProgram.name}
+      Program time: ${(totalProgramTime/3600).toFixed(1)}h
+      Time available: ${(timeAvailable/3600).toFixed(1)}h
+      Difference: ${hoursOverUnder.toFixed(1)}h
+      Suggested adjustment: ${clampedDelta}°C`);
+      
+    // Show feedback to user
+    const status = hoursOverUnder > 0 ? 'more time than needed' : 'less time than needed';
+    alert(`Temperature adjustment calculated: ${clampedDelta}°C\n\nYou have ${Math.abs(hoursOverUnder).toFixed(1)} hours ${status}.`);
   }
 }
 
@@ -165,9 +216,27 @@ function previewFinishByChanges() {
   const tempDeltaInput = document.getElementById('tempDelta');
   const minTempInput = document.getElementById('minTempLimit');
   const maxTempInput = document.getElementById('maxTempLimit');
+  const programSelect = document.getElementById('programSelect');
   
-  if (!finishByInput.value || !currentProgram) {
-    showStatus('Please select a program and target end time first.', 'error');
+  // Get the currently selected program
+  let selectedProgram = null;
+  if (programSelect && programSelect.value) {
+    const programId = parseInt(programSelect.value);
+    selectedProgram = window.cachedPrograms?.find(p => p.id === programId);
+  }
+  
+  if (!finishByInput.value) {
+    showStatus('Please set a target end time first.', 'error');
+    return;
+  }
+  
+  if (!selectedProgram) {
+    showStatus('Please select a program first.', 'error');
+    return;
+  }
+  
+  if (!selectedProgram.customStages || !Array.isArray(selectedProgram.customStages)) {
+    showStatus('Selected program does not have valid stage data.', 'error');
     return;
   }
   
@@ -177,7 +246,7 @@ function previewFinishByChanges() {
   const maxTemp = parseFloat(maxTempInput.value) || finishByConfig.defaultMaxTemp;
   
   if (tempDelta === 0) {
-    showStatus('Please set a temperature adjustment value.', 'error');
+    showStatus('Please set a temperature adjustment value first. Use the Calculate button to get a suggestion.', 'error');
     return;
   }
   
@@ -185,7 +254,7 @@ function previewFinishByChanges() {
   const affectedStages = [];
   const stageList = [];
   
-  currentProgram.customStages.forEach((stage, index) => {
+  selectedProgram.customStages.forEach((stage, index) => {
     if (!stage.disableAutoAdjust) {
       const originalTemp = stage.targetTemperature || 0;
       let newTemp = originalTemp + tempDelta;
@@ -237,16 +306,72 @@ function previewFinishByChanges() {
   if (detailsEl) {
     const now = new Date();
     const timeUntil = Math.floor((targetEndTime - now) / 1000);
-    const totalProgramTime = currentProgram.customStages.reduce((sum, stage) => sum + (stage.min * 60), 0);
+    const totalProgramTime = selectedProgram.customStages.reduce((sum, stage) => sum + (stage.min * 60), 0);
+    
+    // Check for temperature warnings
+    let temperatureWarnings = [];
+    let predictedEndTimeWarning = '';
+    
+    // Check if any adjustments hit the minimum temperature
+    const hitMinTemp = affectedStages.some(stage => stage.wasClampedLow);
+    const hitMaxTemp = affectedStages.some(stage => stage.wasClampedHigh);
+    
+    // Get current breadmaker temperature from global status
+    let currentBreadmakerTemp = null;
+    if (window.currentStatus && typeof window.currentStatus.temperature === 'number') {
+      currentBreadmakerTemp = window.currentStatus.temperature;
+    }
+    
+    if (hitMinTemp) {
+      temperatureWarnings.push(`⚠️ Some temperatures limited to minimum (${minTemp}°C)`);
+      
+      // Check if minimum temp is lower than current breadmaker temperature
+      if (currentBreadmakerTemp !== null && minTemp < currentBreadmakerTemp) {
+        temperatureWarnings.push(`🌡️ Warning: Target ${minTemp}°C is below current temperature (${currentBreadmakerTemp.toFixed(1)}°C)`);
+        temperatureWarnings.push(`   The breadmaker cannot cool below ambient temperature`);
+        
+        // Predict end time if minimum temperature is current temperature
+        const adjustedDelta = currentBreadmakerTemp - affectedStages[0].originalTemp;
+        const tempRatio = Math.pow(2, adjustedDelta / 10); // Q10 = 2, baseline temp differences
+        const adjustedProgramTime = totalProgramTime / tempRatio;
+        const predictedEndTime = new Date(now.getTime() + (adjustedProgramTime * 1000));
+        
+        predictedEndTimeWarning = `📊 If minimum temp is ${currentBreadmakerTemp.toFixed(1)}°C, predicted end: ${predictedEndTime.toLocaleString()}`;
+      }
+    }
+    
+    if (hitMaxTemp) {
+      temperatureWarnings.push(`⚠️ Some temperatures limited to maximum (${maxTemp}°C)`);
+    }
     
     detailsEl.innerHTML = `
-Program: ${currentProgram.name}
-Target end time: ${targetEndTime.toLocaleString()}
-Time available: ${formatDuration(timeUntil)}
-Estimated program time: ${formatDuration(totalProgramTime)}
-Temperature adjustment: ${tempDelta > 0 ? '+' : ''}${tempDelta}°C
-Safety limits: ${minTemp}°C to ${maxTemp}°C
-Stages affected: ${affectedStages.length} of ${currentProgram.customStages.length}
+<div style="background: #1a1a2e; padding: 12px; border-radius: 8px; margin-bottom: 10px;">
+  <h4 style="margin: 0 0 8px 0; color: #4CAF50;">🎯 Finish-By Configuration</h4>
+  <div style="color: #ccc; font-size: 0.9em;">
+    The program will <strong>stay the same</strong> but temperature adjustments will be applied 
+    for this run only to finish close to your target time.
+  </div>
+</div>
+
+<div style="background: #2a2a3e; padding: 10px; border-radius: 6px;">
+  <strong>Program:</strong> ${selectedProgram.name}<br>
+  <strong>Target end time:</strong> ${targetEndTime.toLocaleString()}<br>
+  <strong>Time available:</strong> ${formatDuration(timeUntil)}<br>
+  <strong>Estimated program time:</strong> ${formatDuration(totalProgramTime)}<br>
+  <strong>Temperature adjustment:</strong> ${tempDelta > 0 ? '+' : ''}${tempDelta}°C<br>
+  <strong>Safety limits:</strong> ${minTemp}°C to ${maxTemp}°C<br>
+  <strong>Stages affected:</strong> ${affectedStages.length} of ${selectedProgram.customStages.length}
+</div>
+
+${temperatureWarnings.length > 0 ? `
+<div style="background: #4a2c2a; padding: 10px; border-radius: 6px; margin-top: 8px; border-left: 4px solid #ff6b6b;">
+  ${temperatureWarnings.map(warning => `<div style="margin: 2px 0;">${warning}</div>`).join('')}
+</div>` : ''}
+
+${predictedEndTimeWarning ? `
+<div style="background: #2a3a4a; padding: 10px; border-radius: 6px; margin-top: 8px; border-left: 4px solid #4dabf7;">
+  ${predictedEndTimeWarning}
+</div>` : ''}
     `.trim();
   }
   
@@ -267,8 +392,8 @@ Stages affected: ${affectedStages.length} of ${currentProgram.customStages.lengt
 
 // Confirm and start with finish-by
 function confirmFinishBy() {
-  if (!finishByState.preview || !currentProgram) {
-    showStatus('No preview data available.', 'error');
+  if (!finishByState.preview) {
+    showStatus('No preview data available. Please preview your changes first.', 'error');
     return;
   }
   
@@ -287,6 +412,14 @@ function confirmFinishBy() {
   formData.append('tempDelta', preview.tempDelta.toString());
   formData.append('minTemp', preview.minTemp.toString());
   formData.append('maxTemp', preview.maxTemp.toString());
+  
+  console.log('Starting program with finish-by parameters:', {
+    program: programSelect.value,
+    finishByTime: preview.targetEndTime.toISOString(),
+    tempDelta: preview.tempDelta,
+    minTemp: preview.minTemp,
+    maxTemp: preview.maxTemp
+  });
   
   // Start the program with finish-by parameters
   fetch('/start', {
@@ -408,6 +541,42 @@ function initializeFinishBy() {
     btnConfirmFinishBy.addEventListener('click', confirmFinishBy);
   }
   
+  // Add protection against value changes during user interaction
+  const finishByInput = document.getElementById('finishByTime');
+  if (finishByInput) {
+    // Track when user is actively interacting with the input
+    let userIsInteracting = false;
+    let interactionTimeout = null;
+    
+    finishByInput.addEventListener('focus', () => {
+      userIsInteracting = true;
+      console.log('User started interacting with finish-by time input');
+    });
+    
+    finishByInput.addEventListener('blur', () => {
+      // Add a small delay before allowing automatic changes
+      // This prevents issues when the datetime picker causes brief blur events
+      clearTimeout(interactionTimeout);
+      interactionTimeout = setTimeout(() => {
+        userIsInteracting = false;
+        console.log('User finished interacting with finish-by time input');
+      }, 1000);
+    });
+    
+    finishByInput.addEventListener('input', () => {
+      userIsInteracting = true;
+      // Reset the interaction timeout
+      clearTimeout(interactionTimeout);
+      interactionTimeout = setTimeout(() => {
+        userIsInteracting = false;
+        console.log('User finished modifying finish-by time input');
+      }, 2000);
+    });
+    
+    // Make the interaction state available globally
+    window.finishByUserInteracting = () => userIsInteracting;
+  }
+  
   if (btnModifyFinishBy) {
     btnModifyFinishBy.addEventListener('click', modifyFinishBy);
   }
@@ -424,16 +593,17 @@ function initializeFinishBy() {
       if (this.value && finishByRow) {
         finishByRow.style.display = 'block';
         
-        // Load the selected program data
-        fetch(`/programs/program_${encodeURIComponent(this.value)}.json`)
-          .then(response => response.json())
-          .then(program => {
-            currentProgram = program;
-            console.log('Loaded program for finish-by:', program.name);
-          })
-          .catch(error => {
-            console.warn('Could not load program data:', error);
-          });
+        // Load the selected program data using the correct filename format
+        const programId = parseInt(this.value);
+        const selectedProgram = window.cachedPrograms?.find(p => p.id === programId);
+        
+        if (selectedProgram) {
+          currentProgram = selectedProgram;
+          console.log('Set current program for finish-by:', selectedProgram.name);
+        } else {
+          console.warn('Could not find program data for ID:', programId);
+          currentProgram = null;
+        }
       } else if (finishByRow) {
         finishByRow.style.display = 'none';
         currentProgram = null;

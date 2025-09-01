@@ -563,6 +563,22 @@ void serializeResumeStateJson(Print& f) {
   f.print((unsigned long)fermentState.predictedCompleteTime);
   f.print(F(",\"lastFermentAdjust\":"));
   f.print((unsigned long)fermentState.lastFermentAdjust);
+  
+  // Add finish-by state information
+  f.print(F(",\"finishBy\":{\"active\":"));
+  f.print(finishByState.active ? F("true") : F("false"));
+  if (finishByState.active) {
+    f.print(F(",\"targetEndTime\":"));
+    f.print((unsigned long)finishByState.targetEndTime);
+    f.print(F(",\"tempDelta\":"));
+    f.print(finishByState.tempDelta, 1);
+    f.print(F(",\"appliedMinTemp\":"));
+    f.print(finishByState.appliedMinTemp, 1);
+    f.print(F(",\"appliedMaxTemp\":"));
+    f.print(finishByState.appliedMaxTemp, 1);
+  }
+  f.print(F("}"));
+  
   f.print(F("}\n"));
 }
 
@@ -826,6 +842,54 @@ void loadResumeState() {
     setMotor(false);
     setLight(false);
     setBuzzer(false);
+  }
+  
+  // Restore finish-by state if present
+  if (doc.containsKey("finishBy") && doc["finishBy"].is<JsonObject>()) {
+    JsonObject finishByObj = doc["finishBy"];
+    finishByState.active = finishByObj["active"] | false;
+    if (finishByState.active) {
+      finishByState.targetEndTime = finishByObj["targetEndTime"] | 0;
+      finishByState.tempDelta = finishByObj["tempDelta"] | 0.0f;
+      finishByState.appliedMinTemp = finishByObj["appliedMinTemp"] | 15.0f;
+      finishByState.appliedMaxTemp = finishByObj["appliedMaxTemp"] | 35.0f;
+      
+      // Re-apply temperature adjustments to the loaded program if currently running
+      if (programState.isRunning && programState.activeProgramId >= 0 && finishByState.tempDelta != 0.0f) {
+        if (ensureProgramLoaded(programState.activeProgramId)) {
+          Program* activeProgram = getActiveProgramMutable();
+          if (activeProgram != nullptr) {
+            int adjustedStages = 0;
+            for (auto& stage : activeProgram->customStages) {
+              if (stage.isFermentation && stage.temp > 0.0f) {
+                float newTemp = stage.temp + finishByState.tempDelta;
+                if (newTemp >= finishByState.appliedMinTemp && newTemp <= finishByState.appliedMaxTemp) {
+                  stage.temp = newTemp;
+                  adjustedStages++;
+                }
+              }
+            }
+            if (debugSerial && adjustedStages > 0) {
+              Serial.printf("[RESUME] Re-applied finish-by temp delta %.1f°C to %d stages\n", 
+                           finishByState.tempDelta, adjustedStages);
+            }
+          }
+        }
+      }
+      
+      if (debugSerial) {
+        Serial.printf("[RESUME] Restored finish-by state: target=%lu, delta=%.1f°C, limits=%.1f-%.1f°C\n",
+                     (unsigned long)finishByState.targetEndTime, finishByState.tempDelta, 
+                     finishByState.appliedMinTemp, finishByState.appliedMaxTemp);
+      }
+    }
+  } else {
+    // No finish-by state in resume file, ensure it's reset
+    finishByState.active = false;
+    finishByState.targetEndTime = 0;
+    finishByState.tempDelta = 0.0f;
+    finishByState.appliedMinTemp = 15.0f;
+    finishByState.appliedMaxTemp = 35.0f;
   }
 }
 

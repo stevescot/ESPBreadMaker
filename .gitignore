@@ -18,3 +18,4 @@ breadmaker_controller/data/program_*.json
 !CODE_DOCUMENTATION.md
 !copilot_instructions.md
 !DOCUMENTATION_CONSOLIDATION.md
+/build
