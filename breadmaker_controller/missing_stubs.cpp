@@ -795,12 +795,11 @@ void streamStatusJson(Print& out) {
         }
         
         // Stage ready time (using adjusted duration)
+        // Note: Keep in seconds to avoid integer overflow. Frontend multiplies by 1000 when milliseconds needed.
         if (programState.isRunning && adjustedTimeLeft > 0) {
-          unsigned long readyAt = (time(nullptr) + adjustedTimeLeft) * 1000; // Convert to ms
-          out.printf("\"stage_ready_at\":%lu,", readyAt);
-          out.printf("\"stageReadyAt\":%lu", readyAt / 1000);
+          unsigned long readyAtSeconds = time(nullptr) + adjustedTimeLeft;
+          out.printf("\"stageReadyAt\":%lu", readyAtSeconds);
         } else {
-          out.print("\"stage_ready_at\":0,");
           out.print("\"stageReadyAt\":0");
         }
         out.print(",");
@@ -1269,14 +1268,10 @@ unsigned long getAdjustedStageTimeMs(unsigned long baseTimeMs, bool hasFermentat
     return baseTimeMs; // No fermentation adjustment
   }
   
-  // FIXED: Apply current fermentation factor correctly
-  // fermentationFactor > 1 means faster fermentation = less time needed (hot)
-  // fermentationFactor < 1 means slower fermentation = more time needed (cold)
-  if (fermentState.fermentationFactor > 0) {
-    return (unsigned long)(baseTimeMs / fermentState.fermentationFactor); // FIXED: divide by factor
-  } else {
-    return baseTimeMs; // Fallback if factor is invalid
-  }
+  // For fermentation stages, just return the base time without any adjustment
+  // Stage durations should be stable and not change based on current temperature
+  // Real-time fermentation tracking is handled separately in updateFermentationTiming()
+  return baseTimeMs;
 }
 
 // Update fermentation cache - only recalculate when program or stage changes

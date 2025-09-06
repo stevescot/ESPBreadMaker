@@ -33,11 +33,61 @@ function formatTime(date, withSeconds = false) {
 let statusRequestPending = false;
 let detailedStatusNeeded = false; // Flag for when timing arrays are needed
 let lastDetailedUpdate = 0; // Timestamp of last detailed update
+let programStarting = false; // Flag to indicate program is starting
 
 // ---- Utility Functions ----
 function showStartAtStatus(msg) {
   let el = document.getElementById('startAtStatus');
   if (el) el.textContent = msg || '';
+}
+
+// ---- Starting State Feedback Functions ----
+function showStartingFeedback(message) {
+  // Grey out the stage table
+  const planSummary = document.getElementById('planSummary');
+  if (planSummary) {
+    planSummary.style.opacity = '0.5';
+    planSummary.style.pointerEvents = 'none';
+  }
+  
+  // Show starting message
+  let startingIndicator = document.getElementById('startingIndicator');
+  if (!startingIndicator) {
+    startingIndicator = document.createElement('div');
+    startingIndicator.id = 'startingIndicator';
+    startingIndicator.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: #66bb6a;
+      padding: 20px 30px;
+      border-radius: 8px;
+      border: 1px solid #66bb6a;
+      font-size: 1.1em;
+      z-index: 1000;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    `;
+    document.body.appendChild(startingIndicator);
+  }
+  startingIndicator.textContent = message;
+  startingIndicator.style.display = 'block';
+}
+
+function hideStartingFeedback() {
+  // Remove grey out from stage table
+  const planSummary = document.getElementById('planSummary');
+  if (planSummary) {
+    planSummary.style.opacity = '';
+    planSummary.style.pointerEvents = '';
+  }
+  
+  // Hide starting indicator
+  const startingIndicator = document.getElementById('startingIndicator');
+  if (startingIndicator) {
+    startingIndicator.style.display = 'none';
+  }
 }
 
 // ---- Utility: Format Duration ----
@@ -72,6 +122,13 @@ function toGCalDate(date) {
     pad(date.getUTCHours()) +
     pad(date.getUTCMinutes()) +
     pad(date.getUTCSeconds()) + 'Z';
+}
+
+// ---- Helper Functions ----
+function getSelectedProgramId() {
+  const programSelect = document.getElementById('programSelect');
+  if (!programSelect || !programSelect.value) return -1;
+  return parseInt(programSelect.value) || -1;
 }
 
 // ---- Program Selection Management ----
@@ -148,7 +205,11 @@ function populateProgramSelect() {
       const programIdx = window.cachedPrograms.findIndex(p => p.id === selectedProgramId);
       if (programIdx >= 0) {
         populateStageDropdown(programIdx);
-        showFinishByControls(true);
+        
+        // Check if any program is currently running
+        const status = window.status;
+        const programRunning = status?.running || status?.state === 'Running' || status?.state === 'Paused';
+        showFinishByControls(true, programRunning);
       }
     } else {
       // Hide stage selection if no program selected
@@ -672,6 +733,19 @@ function updateStatusInternal(s) {
   // ---- Manual Mode UI ----
   updateManualModeToggle(s);
 
+  // ---- Finish By Controls Management ----
+  // Check if program is running to manage finish-by control visibility
+  const programRunning = s && (s.running || s.stage !== 'Idle');
+  const selectedProgramId = getSelectedProgramId();
+  if (selectedProgramId >= 0) {
+    showFinishByControls(true, programRunning);
+  } else {
+    showFinishByControls(false, programRunning);
+  }
+
+  // ---- Update Finish By Status Display ----
+  updateFinishByStatus(s);
+
   // Update manual temperature input field
   const manualTempInput = document.getElementById('manualTempInput');
   if (manualTempInput && s && s.manualMode && typeof s.setpoint === 'number' && s.setpoint > 0) {
@@ -1125,18 +1199,27 @@ function hideLoadingIndicator() {
 function showPlanSummary(s) {
   const planSummary = document.getElementById('planSummary');
   if (!planSummary || !s || !s.program) {
-    if (planSummary) {
+    if (planSummary && !programStarting) {
       hideLoadingIndicator();
       planSummary.innerHTML = '<i>No bread program selected.</i>';
     }
     return;
   }
   
+  // Hide starting feedback if program has successfully started
+  if (programStarting && s.running) {
+    programStarting = false;
+    hideStartingFeedback();
+  }
+  
   // Check if we have timing arrays - if not, request detailed status
   if (!s.actualStageStartTimes || !s.stageStatus || !s.adjustedStageDurations) {
     console.log('Timing arrays missing, requesting detailed status for plan summary');
     detailedStatusNeeded = true;
-    // Don't clear existing display - just request more data and continue with basic display
+    // Don't clear existing display during starting state - just request more data and continue with basic display
+    if (programStarting) {
+      return; // Keep existing table greyed out while starting
+    }
     // return; // REMOVED: This was causing stages to disappear during startup
   }
   
@@ -1158,14 +1241,14 @@ function showPlanSummary(s) {
   }
   
   if (!prog) {
-    // If we have a program name but no details, show the name
-    if (s.program && s.program.trim() !== '') {
+    // If we have a program name but no details, show the name (unless starting)
+    if (s.program && s.program.trim() !== '' && !programStarting) {
       hideLoadingIndicator();
       planSummary.innerHTML = `<div style="padding:15px; background:#1e1e1e; border:1px solid #444; border-radius:8px; margin:10px 0;">
         <h4 style="color:#66bb6a; margin:0 0 8px 0; font-size:1.1em;">${s.program}</h4>
         <p style="color:#bbb; margin:0; font-style:italic;">Program details loading...</p>
       </div>`;
-    } else {
+    } else if (!programStarting) {
       hideLoadingIndicator();
       planSummary.innerHTML = '<i>Program details not available.</i>';
     }
@@ -1368,6 +1451,13 @@ function showPlanSummary(s) {
     summary += '</table>';
     hideLoadingIndicator();
     planSummary.innerHTML = summary;
+    
+    // Clear starting state and restore table appearance
+    if (programStarting) {
+      programStarting = false;
+      hideStartingFeedback();
+    }
+    
     // Add click listeners for info icons
     document.querySelectorAll('.stage-info-icon').forEach(function(el) {
       el.onclick = function() {
@@ -1722,11 +1812,17 @@ window.addEventListener('DOMContentLoaded', () => {
         confirmMessage += `\n\nAre you sure?`;
         
         if (confirm(confirmMessage)) {
+          // Set starting state and show feedback
+          programStarting = true;
+          showStartingFeedback(`Starting at stage ${stageIdx + 1}...`);
+          
           fetch(`/start_at_stage?stage=${stageIdx}`)
             .then(r => r.json())
             .then(response => {
+              programStarting = false;
               if (response.error) {
                 alert(`Error: ${response.error}\n${response.message || ''}`);
+                hideStartingFeedback();
               } else {
                 console.log(`Started at stage ${stageIdx}: ${response.stageName || ''}`);
                 showStartAtStatus(`Started at stage ${stageIdx + 1}`);
@@ -1734,8 +1830,10 @@ window.addEventListener('DOMContentLoaded', () => {
               }
             })
             .catch(err => {
+              programStarting = false;
               console.error('Failed to start at stage:', err);
               alert('Failed to start at stage. Please try again.');
+              hideStartingFeedback();
             });
         }
       } else {
@@ -1767,17 +1865,38 @@ window.addEventListener('DOMContentLoaded', () => {
       
       if (isRunning) {
         if (confirm(`🔄 Restart Program?\n\nCurrent Program: ${currentProgram}\nSelected Program: ${selectedProgram}\n\nThis will stop the current program and start a new one.\nAll progress will be lost!\n\nAre you sure?`)) {
+          // Set starting state and show feedback
+          programStarting = true;
+          showStartingFeedback('Restarting program...');
+          
           fetch('/start')
             .then(r => r.json())
-            .then(window.updateStatus)
-            .catch(err => console.error('Start failed:', err));
+            .then(response => {
+              programStarting = false;
+              window.updateStatus(response);
+            })
+            .catch(err => {
+              programStarting = false;
+              console.error('Start failed:', err);
+              hideStartingFeedback();
+            });
         }
       } else {
         // No program running, start normally
+        programStarting = true;
+        showStartingFeedback('Starting program...');
+        
         fetch('/start')
           .then(r => r.json())
-          .then(window.updateStatus)
-          .catch(err => console.error('Start failed:', err));
+          .then(response => {
+            programStarting = false;
+            window.updateStatus(response);
+          })
+          .catch(err => {
+            programStarting = false;
+            console.error('Start failed:', err);
+            hideStartingFeedback();
+          });
       }
     });
   }
@@ -1891,15 +2010,25 @@ window.addEventListener('DOMContentLoaded', () => {
       }
       
       if (confirm(confirmMsg)) {
+        // Set starting state and show feedback
+        programStarting = true;
+        const message = stageIdx === '' ? 
+          `Scheduling start at ${time}...` : 
+          `Scheduling start at ${time}, stage ${stageIdx + 1}...`;
+        showStartingFeedback(message);
+        
         fetch(url)
           .then(r => r.text())
           .then(text => {
+            programStarting = false;
             showStartAtStatus(text);
             window.updateStatus();
           })
           .catch(err => {
+            programStarting = false;
             console.error('Failed to set timed start:', err);
             showStartAtStatus('Failed to set timed start');
+            hideStartingFeedback();
           });
       }
     };
@@ -1963,30 +2092,105 @@ function showInstructionModal(title, instructions) {
 
 // ---- Finish By Time Functionality ----
 
-function showFinishByControls(show) {
+function showFinishByControls(show, programRunning = false) {
+  const finishByToggle = document.getElementById('finishByToggle');
+  const finishByRow = document.getElementById('finishByRow');
+  const finishByResults = document.getElementById('finishByResults');
+  
+  // Hide everything if program is running
+  if (programRunning) {
+    if (finishByToggle) finishByToggle.style.display = 'none';
+    if (finishByRow) finishByRow.style.display = 'none';
+    if (finishByResults) finishByResults.style.display = 'none';
+    return;
+  }
+  
+  // Show toggle button when program is selected but not running
+  if (finishByToggle) {
+    finishByToggle.style.display = show ? 'block' : 'none';
+  }
+  
+  // Hide the full controls and results by default
+  if (finishByRow) {
+    finishByRow.style.display = 'none';
+  }
+  if (finishByResults) {
+    finishByResults.style.display = 'none';
+  }
+  
+  // Set default time to 8 hours from now if no time is set
+  if (show) {
+    const finishByTime = document.getElementById('finishByTime');
+    const userIsInteracting = window.finishByUserInteracting && window.finishByUserInteracting();
+    
+    if (finishByTime && !finishByTime.value && 
+        document.activeElement !== finishByTime && 
+        !userIsInteracting) {
+      const defaultTime = new Date();
+      defaultTime.setHours(defaultTime.getHours() + 8);
+      finishByTime.value = defaultTime.toISOString().slice(0, 16); // Format for datetime-local
+    }
+  }
+}
+
+function toggleFinishByControls() {
   const finishByRow = document.getElementById('finishByRow');
   const finishByResults = document.getElementById('finishByResults');
   
   if (finishByRow) {
-    finishByRow.style.display = show ? 'flex' : 'none';
+    const isVisible = finishByRow.style.display !== 'none';
+    finishByRow.style.display = isVisible ? 'none' : 'block';
     
-    // Set default time to 8 hours from now if no time is set
-    // BUT only if the input is not currently being used by the user
-    if (show) {
-      const finishByTime = document.getElementById('finishByTime');
-      const userIsInteracting = window.finishByUserInteracting && window.finishByUserInteracting();
-      
-      if (finishByTime && !finishByTime.value && 
-          document.activeElement !== finishByTime && 
-          !userIsInteracting) {
-        const defaultTime = new Date();
-        defaultTime.setHours(defaultTime.getHours() + 8);
-        finishByTime.value = defaultTime.toISOString().slice(0, 16); // Format for datetime-local
-      }
+    // Hide results when closing controls
+    if (isVisible && finishByResults) {
+      finishByResults.style.display = 'none';
     }
   }
-  if (finishByResults) {
-    finishByResults.style.display = 'none';
+}
+
+function closeFinishByControls() {
+  const finishByRow = document.getElementById('finishByRow');
+  const finishByResults = document.getElementById('finishByResults');
+  
+  if (finishByRow) finishByRow.style.display = 'none';
+  if (finishByResults) finishByResults.style.display = 'none';
+}
+
+function updateFinishByStatus(status) {
+  const finishByStatusDiv = document.getElementById('activeFinishByStatus');
+  if (!finishByStatusDiv) return;
+  
+  // Check if finish-by is active
+  if (status && status.finishBy && status.finishBy.active && status.finishBy.targetEndTime) {
+    const targetTime = new Date(status.finishBy.targetEndTime * 1000);
+    const now = new Date();
+    const timeUntilFinish = targetTime - now;
+    
+    let statusText = '';
+    if (timeUntilFinish > 0) {
+      const hours = Math.floor(timeUntilFinish / (1000 * 60 * 60));
+      const minutes = Math.floor((timeUntilFinish % (1000 * 60 * 60)) / (1000 * 60));
+      
+      statusText = `🎯 Target Finish: ${targetTime.toLocaleDateString()} ${targetTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+      if (hours > 0 || minutes > 0) {
+        statusText += `<br>⏱️ Time remaining: ${hours}h ${minutes}m`;
+      }
+      
+      // Show temperature adjustment if active
+      if (status.finishBy.tempDelta && status.finishBy.tempDelta !== 0) {
+        const tempSign = status.finishBy.tempDelta > 0 ? '+' : '';
+        statusText += `<br>🌡️ Temp adjustment: ${tempSign}${status.finishBy.tempDelta.toFixed(1)}°C`;
+      }
+    } else {
+      statusText = '🎯 Program should be finishing now';
+    }
+    
+    finishByStatusDiv.innerHTML = statusText;
+    finishByStatusDiv.style.display = 'block';
+  } else {
+    // No active finish-by time
+    finishByStatusDiv.innerHTML = '';
+    finishByStatusDiv.style.display = 'none';
   }
 }
 
@@ -2192,9 +2396,22 @@ function clearFinishByTime() {
   const finishByTime = document.getElementById('finishByTime');
   const finishByResults = document.getElementById('finishByResults');
   
+  // Clear UI
   if (finishByTime) finishByTime.value = '';
   if (finishByResults) finishByResults.style.display = 'none';
   window.finishByRecommendedTemp = null;
+  
+  // Clear backend state
+  fetch('/api/finish-by/clear', { method: 'POST' })
+    .then(response => response.json())
+    .then(data => {
+      console.log('Finish-by state cleared:', data);
+      // Refresh status to update UI
+      if (window.updateStatus) window.updateStatus();
+    })
+    .catch(error => {
+      console.error('Error clearing finish-by state:', error);
+    });
 }
 
 async function applyFinishByTemperature() {
@@ -2244,6 +2461,8 @@ document.addEventListener('DOMContentLoaded', function() {
   const btnCalculateFinishBy = document.getElementById('btnCalculateFinishBy');
   const btnClearFinishBy = document.getElementById('btnClearFinishBy');
   const btnApplyFinishByTemp = document.getElementById('btnApplyFinishByTemp');
+  const btnToggleFinishBy = document.getElementById('btnToggleFinishBy');
+  const btnCloseFinishBy = document.getElementById('btnCloseFinishBy');
   
   if (btnCalculateFinishBy) {
     btnCalculateFinishBy.addEventListener('click', calculateFinishByTime);
@@ -2255,5 +2474,13 @@ document.addEventListener('DOMContentLoaded', function() {
   
   if (btnApplyFinishByTemp) {
     btnApplyFinishByTemp.addEventListener('click', applyFinishByTemperature);
+  }
+  
+  if (btnToggleFinishBy) {
+    btnToggleFinishBy.addEventListener('click', toggleFinishByControls);
+  }
+  
+  if (btnCloseFinishBy) {
+    btnCloseFinishBy.addEventListener('click', closeFinishByControls);
   }
 });

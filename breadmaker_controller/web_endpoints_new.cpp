@@ -632,6 +632,10 @@ void stateMachineEndpoints(WebServer& server) {
             if (minTemp == 0.0f) minTemp = finishByConfig.defaultMinTemp;
             if (maxTemp == 0.0f) maxTemp = finishByConfig.defaultMaxTemp;
             
+            // Safety limit on temperature delta to prevent extreme adjustments
+            // Limit to ±10°C to prevent catastrophic timing changes
+            tempDelta = constrain(tempDelta, -10.0f, 10.0f);
+            
             // Parse target end time if provided
             time_t targetEndTime = 0;
             if (finishTimeStr.length() > 0) {
@@ -782,6 +786,22 @@ void stateMachineEndpoints(WebServer& server) {
         } else {
             server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing required parameters\"}");
         }
+    });
+
+    // Clear finish-by state endpoint
+    server.on("/api/finish-by/clear", HTTP_POST, [&](){
+        if (debugSerial) Serial.println(F("[API] POST /api/finish-by/clear"));
+        
+        // Clear finish-by state
+        finishByState.active = false;
+        finishByState.targetEndTime = 0;
+        finishByState.tempDelta = 0.0f;
+        finishByState.appliedMinTemp = 15.0f;
+        finishByState.appliedMaxTemp = 35.0f;
+        
+        if (debugSerial) Serial.println(F("[FINISH-BY] State cleared manually"));
+        
+        server.send(200, "application/json", "{\"status\":\"cleared\",\"message\":\"Finish-by state has been cleared\"}");
     });
     
     // Set scheduled start time only (no stage)

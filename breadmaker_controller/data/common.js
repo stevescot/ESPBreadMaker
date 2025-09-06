@@ -241,9 +241,15 @@ function previewFinishByChanges() {
   }
   
   const targetEndTime = new Date(finishByInput.value);
-  const tempDelta = parseFloat(tempDeltaInput.value) || 0;
+  let tempDelta = parseFloat(tempDeltaInput.value) || 0;
   const minTemp = parseFloat(minTempInput.value) || finishByConfig.defaultMinTemp;
   const maxTemp = parseFloat(maxTempInput.value) || finishByConfig.defaultMaxTemp;
+  
+  // Safety validation: Limit temperature delta to prevent extreme adjustments
+  if (tempDelta < -10 || tempDelta > 10) {
+    showStatus('Temperature adjustment must be between -10°C and +10°C for safety.', 'error');
+    return;
+  }
   
   if (tempDelta === 0) {
     showStatus('Please set a temperature adjustment value first. Use the Calculate button to get a suggestion.', 'error');
@@ -255,8 +261,9 @@ function previewFinishByChanges() {
   const stageList = [];
   
   selectedProgram.customStages.forEach((stage, index) => {
-    if (!stage.disableAutoAdjust) {
-      const originalTemp = stage.targetTemperature || 0;
+    // Only adjust fermentation stages that allow auto-adjustment (match backend logic)
+    if (stage.isFermentation && !stage.disableAutoAdjust) {
+      const originalTemp = stage.temp || 0;
       let newTemp = originalTemp + tempDelta;
       
       // Apply clamping
@@ -345,38 +352,40 @@ function previewFinishByChanges() {
     }
     
     detailsEl.innerHTML = `
-<div style="background: #1a1a2e; padding: 12px; border-radius: 8px; margin-bottom: 10px;">
-  <h4 style="margin: 0 0 8px 0; color: #4CAF50;">🎯 Finish-By Configuration</h4>
-  <div style="color: #ccc; font-size: 0.9em;">
+<div style="background: #1a1a2e; padding: 10px; border-radius: 6px; margin-bottom: 8px;">
+  <h4 style="margin: 0 0 6px 0; color: #4CAF50; font-size: 0.95em;">🎯 Finish-By Configuration</h4>
+  <div style="color: #ccc; font-size: 0.8em; line-height: 1.3;">
     The program will <strong>stay the same</strong> but temperature adjustments will be applied 
     for this run only to finish close to your target time.
   </div>
 </div>
 
-<div style="background: #2a2a3e; padding: 10px; border-radius: 6px;">
-  <strong>Program:</strong> ${selectedProgram.name}<br>
-  <strong>Target end time:</strong> ${targetEndTime.toLocaleString()}<br>
-  <strong>Time available:</strong> ${formatDuration(timeUntil)}<br>
-  <strong>Estimated program time:</strong> ${formatDuration(totalProgramTime)}<br>
-  <strong>Temperature adjustment:</strong> ${tempDelta > 0 ? '+' : ''}${tempDelta}°C<br>
-  <strong>Safety limits:</strong> ${minTemp}°C to ${maxTemp}°C<br>
-  <strong>Stages affected:</strong> ${affectedStages.length} of ${selectedProgram.customStages.length}
+<div style="background: #2a2a3e; padding: 8px; border-radius: 4px; font-size: 0.85em; line-height: 1.4;">
+  <div style="margin-bottom: 3px;"><strong>Program:</strong> ${selectedProgram.name}</div>
+  <div style="margin-bottom: 3px;"><strong>Target:</strong> ${targetEndTime.toLocaleString()}</div>
+  <div style="margin-bottom: 3px;"><strong>Time available:</strong> ${formatDuration(timeUntil)}</div>
+  <div style="margin-bottom: 3px;"><strong>Program time:</strong> ${formatDuration(totalProgramTime)}</div>
+  <div style="margin-bottom: 3px;"><strong>Temperature:</strong> ${tempDelta > 0 ? '+' : ''}${tempDelta}°C</div>
+  <div style="margin-bottom: 3px;"><strong>Limits:</strong> ${minTemp}°C to ${maxTemp}°C</div>
+  <div><strong>Stages affected:</strong> ${affectedStages.length} of ${selectedProgram.customStages.length}</div>
 </div>
 
 ${temperatureWarnings.length > 0 ? `
-<div style="background: #4a2c2a; padding: 10px; border-radius: 6px; margin-top: 8px; border-left: 4px solid #ff6b6b;">
+<div style="background: #4a2c2a; padding: 8px; border-radius: 4px; margin-top: 6px; border-left: 3px solid #ff6b6b; font-size: 0.8em; line-height: 1.3;">
   ${temperatureWarnings.map(warning => `<div style="margin: 2px 0;">${warning}</div>`).join('')}
 </div>` : ''}
 
 ${predictedEndTimeWarning ? `
-<div style="background: #2a3a4a; padding: 10px; border-radius: 6px; margin-top: 8px; border-left: 4px solid #4dabf7;">
+<div style="background: #2a3a4a; padding: 8px; border-radius: 4px; margin-top: 6px; border-left: 3px solid #4dabf7; font-size: 0.8em; line-height: 1.3;">
   ${predictedEndTimeWarning}
 </div>` : ''}
     `.trim();
   }
   
   if (stageListEl) {
-    stageListEl.innerHTML = stageList.map(stage => `<div style="margin:0.2em 0;padding:0.3em;background:#222;border-radius:4px;">${stage}</div>`).join('');
+    stageListEl.innerHTML = stageList.map(stage => 
+      `<div style="margin:0.15em 0;padding:0.4em;background:#222;border-radius:3px;font-size:0.85em;line-height:1.2;word-break:break-word;">${stage}</div>`
+    ).join('');
   }
   
   if (resultsEl) {
@@ -405,27 +414,40 @@ function confirmFinishBy() {
     return;
   }
   
-  // Prepare form data
-  const formData = new FormData();
-  formData.append('program', programSelect.value);
-  formData.append('finishByTime', preview.targetEndTime.toISOString());
-  formData.append('tempDelta', preview.tempDelta.toString());
-  formData.append('minTemp', preview.minTemp.toString());
-  formData.append('maxTemp', preview.maxTemp.toString());
+  // First select the program, then start with finish-by parameters
+  const programId = programSelect.value;
   
   console.log('Starting program with finish-by parameters:', {
-    program: programSelect.value,
+    programId: programId,
     finishByTime: preview.targetEndTime.toISOString(),
     tempDelta: preview.tempDelta,
     minTemp: preview.minTemp,
     maxTemp: preview.maxTemp
   });
   
-  // Start the program with finish-by parameters
-  fetch('/start', {
-    method: 'POST',
-    body: formData
+  // Step 1: Select the program
+  fetch(`/select?idx=${programId}`, {
+    method: 'GET'
   })
+  .then(response => response.json())
+  .then(result => {
+    if (result.status === 'ok') {
+      // Step 2: Start the program with finish-by parameters
+      const params = new URLSearchParams();
+      if (preview.tempDelta !== 0) {
+        params.append('finishByTime', preview.targetEndTime.toISOString());
+        params.append('tempDelta', preview.tempDelta.toString());
+        params.append('minTemp', preview.minTemp.toString());
+        params.append('maxTemp', preview.maxTemp.toString());
+      }
+      
+      const startUrl = `/start?${params.toString()}`;
+      return fetch(startUrl, { method: 'GET' });
+    } else {
+      throw new Error('Failed to select program: ' + (result.message || result.error || 'Unknown error'));
+    }
+  })
+  .then(response => response.json())
   .then(response => response.json())
   .then(result => {
     if (result.status === 'ok') {

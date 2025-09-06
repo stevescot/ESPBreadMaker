@@ -291,6 +291,11 @@ void initialState(){
   
   loadSettings();
   Serial.println(F("[setup] Settings loaded."));
+  
+  // Force safety system to be enabled for production (override stored setting)
+  safetySystem.safetyEnabled = true;
+  Serial.println(F("[setup] Safety system enabled by default."));
+  
   loadResumeState();
   Serial.println(F("[setup] Resume state loaded."));
 }
@@ -918,12 +923,13 @@ void resetFermentationTracking(float temp) {
   fermentState.realElapsedSeconds = 0.0;
   fermentState.accumulatedFermentMinutes = 0.0;
   
-  // CRITICAL FIX: Initialize stage arrays AFTER fermentation factor is properly calculated
-  // This ensures adjustedStageDurations use the correct factor
-  if (programState.isRunning && programState.activeProgramId < getProgramCount()) {
-    initializeStageArrays();
-    if (debugSerial) Serial.printf("[FERMENT] Stage arrays re-initialized with correct factor %.3fx\n", fermentState.fermentationFactor);
-  }
+  // CRITICAL FIX: DO NOT re-initialize stage arrays during fermentation tracking reset
+  // This was causing stage durations to be recalculated with potentially corrupted factors
+  // Stage arrays should only be initialized once when a program starts, not during transitions
+  // if (programState.isRunning && programState.activeProgramId < getProgramCount()) {
+  //   initializeStageArrays();
+  //   if (debugSerial) Serial.printf("[FERMENT] Stage arrays re-initialized with correct factor %.3fx\n", fermentState.fermentationFactor);
+  // }
   
   // Reset rate limiting to allow immediate update for new stage
   lastFermentUpdate = 0;
@@ -1249,6 +1255,61 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
     if (p && programState.customStageIdx < p->customStages.size()) {
       CustomStage &st = p->customStages[programState.customStageIdx];
       if (st.isFermentation) {
+        // CRITICAL FIX: Check if stage duration has already been exceeded before resetting timing
+        // This prevents stages from getting stuck after reboots or timing resets
+        unsigned long stageElapsedMs = millis() - programState.customStageStart;
+        double stageElapsedSec = stageElapsedMs / 1000.0;
+        
+        // Get planned duration for comparison
+        double plannedStageSec = (double)st.min * 60.0; // Default to original
+        if (programState.adjustedStageDurations && programState.customStageIdx < 20) {
+          if (programState.adjustedStageDurations[programState.customStageIdx] > 0) {
+            plannedStageSec = programState.adjustedStageDurations[programState.customStageIdx];
+          }
+        }
+        
+        // If stage has already exceeded its planned duration, advance immediately
+        if (stageElapsedSec >= plannedStageSec) {
+          if (debugSerial) Serial.printf("[FERMENT-TIMEOUT] Stage %d (%s) has exceeded planned duration (%.1fs >= %.1fs), advancing immediately\n", 
+                                        programState.customStageIdx, st.label.c_str(), stageElapsedSec, plannedStageSec);
+          
+          // Record when the current stage ended (BEFORE advancing)
+          time_t now = time(nullptr);
+          if (now > 1640995200 && programState.customStageIdx < 20) { // Valid NTP time and within bounds
+            programState.actualStageEndTimes[programState.customStageIdx] = now;
+            if (debugSerial) Serial.printf("[TIMING] Stage %d ended at %lu (timeout)\n", programState.customStageIdx, (unsigned long)now);
+          }
+          
+          // Log stage completion before advancing
+          if (ensureProgramLoaded(programState.activeProgramId)) {
+            Program* prog = getActiveProgramMutable();
+            if (prog && programState.customStageIdx < prog->customStages.size()) {
+              CustomStage& completedStage = prog->customStages[programState.customStageIdx];
+              unsigned long stageDuration = (millis() - programState.customStageStart) / 1000;
+              logStageEnd(completedStage.label, programState.customStageIdx, stageDuration, getAveragedTemperature());
+            }
+          }
+          
+          // Save resume state BEFORE advancing
+          yield();
+          saveResumeState();
+          yield();
+          
+          programState.customStageIdx++;
+          programState.customStageStart = millis();
+          stageJustAdvanced = true;
+          
+          // Reset fermentation timing for next stage
+          fermentState.lastFermentStageIdx = programState.customStageIdx;
+          fermentState.fermentLastUpdateMs = 0;
+          fermentState.scheduledElapsedSeconds = 0.0;
+          fermentState.realElapsedSeconds = 0.0;
+          fermentState.accumulatedFermentMinutes = 0.0;
+          
+          if (debugSerial) Serial.printf("[FERMENT-ADVANCE] Advanced from timed-out stage to stage %d\n", programState.customStageIdx);
+          return; // Exit early after advancement
+        }
+        
         // IMPROVED FIX: Reset fermentation state when starting any fermentation stage
         // Use a global variable instead of static to avoid reboot persistence issues
         if (fermentState.lastFermentStageIdx != programState.customStageIdx) {
@@ -1272,8 +1333,10 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         
         // Rate limiting for fermentation updates to prevent excessive processing
         // IMPROVED: Reduce interval and separate advancement check from time accumulation
-        bool shouldUpdateTiming = (nowMs - lastFermentUpdate >= 2000) || (fermentState.fermentLastUpdateMs == 0);
-        bool shouldCheckAdvancement = (nowMs - lastFermentUpdate >= 1000) || (fermentState.fermentLastUpdateMs == 0);
+        // User requested: "dynamic fermentation adjustment with the real temperature, doing that every 20 mins is acceptable"
+        // NOTE: Using 20 seconds for testing - change to 1200000 (20 minutes) for production use
+        bool shouldUpdateTiming = (nowMs - lastFermentUpdate >= 20000) || (fermentState.fermentLastUpdateMs == 0); // Every 20 seconds for testing (will be 20 minutes in production)
+        bool shouldCheckAdvancement = (nowMs - lastFermentUpdate >= 1000) || (fermentState.fermentLastUpdateMs == 0); // Check advancement every second
         
         if (!shouldUpdateTiming && fermentState.fermentLastUpdateMs > 0) {
           // Still check for advancement even if we skip timing updates
@@ -1331,17 +1394,20 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
           fermentState.realElapsedSeconds += realElapsedSec;
           
           // FIXED: Calculate accumulated minutes using PREVIOUS factor FIRST (for time that passed at previous temperature)
-          // NEW APPROACH: Every (fermentationFactor * 60) real seconds = 1 minute of scheduled fermentation
-          // Example: factor 0.84 means every 50.4 real seconds = 1 scheduled minute (faster fermentation)
-          // Example: factor 1.2 means every 72 real seconds = 1 scheduled minute (slower fermentation)
-          double secondsPerScheduledMinute = fermentState.fermentLastFactor * 60.0;
+          // CRITICAL FIX: Corrected fermentation factor calculation
+          // Fermentation factor represents the RATE relative to baseline (factor < 1 = slower, factor > 1 = faster)
+          // To get scheduled time: Real seconds / factor = scheduled seconds
+          // Example: factor 0.84 (slower) means 60 real seconds / 0.84 = 71.4 scheduled seconds
+          // Example: factor 1.2 (faster) means 60 real seconds / 1.2 = 50 scheduled seconds
+          double secondsPerScheduledMinute = 60.0 / fermentState.fermentLastFactor;
           fermentState.accumulatedFermentMinutes += realElapsedSec / secondsPerScheduledMinute;
           
           // THEN update fermentation factor based on current temperature for NEXT interval
+          double previousFactor = fermentState.fermentLastFactor; // Store for debug message
           fermentState.fermentLastTemp = actualTemp;
           fermentState.fermentLastFactor = calculateFermentationFactor(actualTemp); // Use proper biological calculation
-          Serial.printf("[FERMENT-TIMING-UPDATE] Used previous factor %.3f for elapsed %.1fs, updated to new factor %.3f for temp %.1f°C\n", 
-                       secondsPerScheduledMinute / 60.0, realElapsedSec, fermentState.fermentLastFactor, actualTemp);
+          Serial.printf("[FERMENT-TIMING-UPDATE] Used previous factor %.3f for elapsed %.1fs (%.1f secs/sched_min), updated to new factor %.3f for temp %.1f°C\n", 
+                       previousFactor, realElapsedSec, secondsPerScheduledMinute, fermentState.fermentLastFactor, actualTemp);
           
           // Convert accumulated minutes back to scheduled seconds for comparison
           double previousScheduledSec = fermentState.scheduledElapsedSeconds;
@@ -1392,24 +1458,26 @@ void updateFermentationTiming(bool &stageJustAdvanced) {
         
         // CRITICAL FIX: Use adjusted stage duration instead of original st.min
         // Get the adjusted duration for this stage from the program state
-        double plannedStageSec = (double)st.min * 60.0; // Fallback to original
+        double finalPlannedStageSec = (double)st.min * 60.0; // Fallback to original
         if (programState.adjustedStageDurations && programState.customStageIdx < 20) {
-          // Ensure adjusted durations are calculated
-          if (programState.adjustedStageDurations[programState.customStageIdx] == 0) {
-            initializeStageArrays(); // Recalculate if missing
-          }
+          // CRITICAL FIX: DO NOT recalculate stage arrays during fermentation timing
+          // This was causing stage durations to be corrupted with extreme fermentation factors
+          // Stage arrays should only be calculated once when program starts
+          // if (programState.adjustedStageDurations[programState.customStageIdx] == 0) {
+          //   initializeStageArrays(); // Recalculate if missing
+          // }
           if (programState.adjustedStageDurations[programState.customStageIdx] > 0) {
-            plannedStageSec = programState.adjustedStageDurations[programState.customStageIdx];
+            finalPlannedStageSec = programState.adjustedStageDurations[programState.customStageIdx];
             if (debugSerial) Serial.printf("[FERMENT-FIX] Using adjusted duration %.1fs instead of original %.1fs\n", 
-                                          plannedStageSec, (double)st.min * 60.0);
+                                          finalPlannedStageSec, (double)st.min * 60.0);
           }
         }
         
         double epsilon = 0.05;
-        if (!stageJustAdvanced && (fermentState.scheduledElapsedSeconds + epsilon >= plannedStageSec)) {
+        if (!stageJustAdvanced && (fermentState.scheduledElapsedSeconds + epsilon >= finalPlannedStageSec)) {
           if (debugSerial) Serial.printf("[FERMENT] Auto-advance: Stage %d (%s) COMPLETE - scheduled %.1fs >= planned %.1fs (%.1f%% complete, real %.1fs actual, ratio %.2f)\n", 
-                                        programState.customStageIdx, st.label.c_str(), fermentState.scheduledElapsedSeconds, plannedStageSec, 
-                                        (fermentState.scheduledElapsedSeconds / plannedStageSec) * 100.0, fermentState.realElapsedSeconds,
+                                        programState.customStageIdx, st.label.c_str(), fermentState.scheduledElapsedSeconds, finalPlannedStageSec, 
+                                        (fermentState.scheduledElapsedSeconds / finalPlannedStageSec) * 100.0, fermentState.realElapsedSeconds,
                                         fermentState.realElapsedSeconds / fermentState.scheduledElapsedSeconds);
           
           // Record when the current stage ended (BEFORE advancing)
@@ -1877,9 +1945,11 @@ void handleCustomStages(bool &stageJustAdvanced) {
     // Note: Fermentation stage advancement is handled in updateFermentationTiming()
     // to prevent duplicate advancement logic and race conditions
     if (st.isFermentation) {
-      // For fermentation stages, completion is handled by updateFermentationTiming()
-      // We only set stageComplete here if stageJustAdvanced flag is set
-      stageComplete = stageJustAdvanced;
+      // CRITICAL FIX: For fermentation stages, NEVER allow advancement in handleCustomStages()
+      // Fermentation advancement is ONLY handled by updateFermentationTiming()
+      // The stageJustAdvanced flag should NEVER cause immediate advancement of fermentation stages
+      // as this creates a race condition where stages skip rapidly through multiple fermentation stages
+      stageComplete = false; // Force fermentation stages to be handled ONLY by updateFermentationTiming()
     } else {
       unsigned long elapsedMs = millis() - programState.customStageStart;
       // Prevent integer overflow: limit stage time to ~71 minutes (2^32 / 60000)
@@ -1906,23 +1976,27 @@ void handleCustomStages(bool &stageJustAdvanced) {
         stageComplete = true;
       }
     } else {
-      // Safety for fermentation stages: if real time is way beyond expected (4x), force advance
-      unsigned long elapsedMs = millis() - programState.customStageStart;
-      // Safety limit: allow up to 4x the planned stage duration
-      unsigned long maxStageMs = (unsigned long)st.min * 60000UL * 4; // 4x expected time as safety limit
-      // For very long stages, cap at 24 hours (1440 minutes) to prevent overflow
-      if (st.min > 360) { // If stage is > 6 hours, cap safety at 24 hours
-        maxStageMs = 1440UL * 60000UL; // 24 hours maximum
-        if (debugSerial) {
-          Serial.printf("[WARN] Fermentation stage %u minutes is very long, capping safety timeout at 24 hours\n", st.min);
-        }
-      }
-      if (maxStageMs > 0 && elapsedMs > maxStageMs && !stageComplete) {
-        if (debugSerial) Serial.printf("[FORCE ADVANCE] Forcing advancement of stuck fermentation stage %d after %lu minutes (4x limit reached: %lu min planned, %lu min safety limit)\n", 
-                                      (int)programState.customStageIdx, elapsedMs / 60000UL, (unsigned long)st.min, maxStageMs / 60000UL);
-        stageComplete = true;
-        // Reset fermentation tracking to prevent issues in next stage
-        resetFermentationTracking(getAveragedTemperature());
+      // CRITICAL FIX: DISABLE problematic fermentation safety mechanism
+      // This safety mechanism was causing premature stage advancement by using original st.min
+      // instead of adjusted durations, creating a race condition with updateFermentationTiming()
+      // 
+      // Fermentation stages are ONLY managed by updateFermentationTiming() which already has
+      // proper safety mechanisms and uses correct adjusted durations.
+      //
+      // Original problematic code:
+      // - Used st.min instead of adjusted duration
+      // - Triggered 4x timeout based on wrong duration
+      // - Created race condition with proper fermentation logic
+      //
+      // Safety is now handled by:
+      // 1. updateFermentationTiming() with proper duration calculations
+      // 2. Manual /advance endpoint for emergency override
+      // 3. Resume state saves to prevent data loss
+      
+      if (debugSerial && (millis() - programState.customStageStart) > (unsigned long)st.min * 60000UL * 6) {
+        // Log warning if fermentation takes very long, but don't force advance
+        Serial.printf("[FERMENT-SAFETY] Fermentation stage %d running long: %lu minutes elapsed (planned: %u minutes). Use /advance to override if needed.\n", 
+                     (int)programState.customStageIdx, (millis() - programState.customStageStart) / 60000UL, st.min);
       }
     }
     if (stageComplete) {
@@ -2075,8 +2149,8 @@ void loadSettings() {
   // outputMode removed - system is always digital
   debugSerial = doc["debugSerial"] | true;
   
-  // Load safety system settings (default to disabled for testing)
-  safetySystem.safetyEnabled = doc["safetyEnabled"] | false;
+  // Load safety system settings (default to enabled for production)
+  safetySystem.safetyEnabled = doc["safetyEnabled"] | true;
   
   // Load PID parameters - backward compatibility
   if (doc.containsKey("pidKp")) {
